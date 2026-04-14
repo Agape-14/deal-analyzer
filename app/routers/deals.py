@@ -30,6 +30,10 @@ from app.services.data_integrity import (
     mark_manual_edit,
     now_iso,
 )
+from app.services.location_intelligence import (
+    build_location_bundle,
+    geocode as geocode_address,
+)
 
 router = APIRouter()
 
@@ -816,6 +820,81 @@ async def resolve_conflict(deal_id: int, data: ConflictResolveIn, db: AsyncSessi
     deal.metrics = metrics
     await db.commit()
     return {"message": "Conflict resolved", "path": data.path}
+
+
+# ===== Location intelligence =====
+
+@router.get("/{deal_id}/location")
+async def get_deal_location(
+    deal_id: int,
+    radius_m: int = 1600,
+    refresh: bool = False,
+    db: AsyncSession = Depends(get_db),
+):
+    """Return cached or freshly-fetched location data for a deal.
+
+    Payload shape (all sources free / unauthenticated by default):
+      - lat, lng             — resolved via Nominatim or user-placed
+      - display_name         — free-form, good enough for a map attribution
+      - radius_m             — currently fetched radius
+      - categories           — {apartments|restaurants|grocery|transit|schools|
+                                healthcare|parks|employers: [POI…]}
+      - fmr                  — HUD Fair Market Rent (if HUD_API_TOKEN set)
+      - fetched_at           — unix timestamp, used for staleness UI
+
+    Results are cached in `deal.location_data` for 7 days unless
+    `refresh=true` is passed.
+    """
+    radius_m = max(500, min(8000, int(radius_m)))
+    result = await db.execute(select(Deal).where(Deal.id == deal_id))
+    deal = result.scalar_one_or_none()
+    if not deal:
+        raise HTTPException(status_code=404, detail="Deal not found")
+
+    bundle = await build_location_bundle(deal, radius_m=radius_m, force_refresh=refresh)
+
+    # Persist whatever we learned so the next page load is instant.
+    if bundle.get("lat") is not None and bundle.get("lng") is not None:
+        deal.lat = bundle["lat"]
+        deal.lng = bundle["lng"]
+    deal.location_data = bundle
+    await db.commit()
+
+    return bundle
+
+
+class LocationManualIn(BaseModel):
+    lat: float = Field(..., ge=-90, le=90)
+    lng: float = Field(..., ge=-180, le=180)
+
+
+@router.post("/{deal_id}/location/manual")
+async def set_manual_location(
+    deal_id: int,
+    data: LocationManualIn,
+    db: AsyncSession = Depends(get_db),
+):
+    """Pin the deal's map position by hand.
+
+    Geocoding can miss when the address is a new development or when the
+    city/state pair is ambiguous. This lets the user drop a marker
+    precisely on the site; subsequent GETs use these coords and re-query
+    Overpass from the new center.
+    """
+    result = await db.execute(select(Deal).where(Deal.id == deal_id))
+    deal = result.scalar_one_or_none()
+    if not deal:
+        raise HTTPException(status_code=404, detail="Deal not found")
+    deal.lat = float(data.lat)
+    deal.lng = float(data.lng)
+    # Invalidate any cached categories — they were centered on the old point.
+    ld = deal.location_data or {}
+    if isinstance(ld, dict):
+        ld.pop("categories", None)
+        ld.pop("fetched_at", None)
+        deal.location_data = ld
+    await db.commit()
+    return {"message": "Location updated", "lat": deal.lat, "lng": deal.lng}
 
 
 # ===== Market Research =====

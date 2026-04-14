@@ -1,11 +1,3 @@
-/**
- * Domain types. These mirror the FastAPI response shapes.
- *
- * Kept narrow on purpose — we only type the fields we read. When the API
- * gets a breaking change, fix types here first, then TypeScript will point
- * to every affected render site.
- */
-
 export type DealStatus = "reviewing" | "interested" | "passed" | "committed" | "closed";
 
 export interface DealSummary {
@@ -222,6 +214,8 @@ export interface DealDetail extends DealSummary {
   };
   scores: Partial<DealScores>;
   quality?: DealQualitySummary;
+  lat?: number | null;
+  lng?: number | null;
 }
 
 /* Cashflow + Waterfall */
@@ -298,4 +292,53 @@ export interface ChatMessage {
   role: "user" | "assistant";
   content: string;
   created_at: string;
+}
+
+/* ------------------------------------------------------------------ */
+/*  Location intelligence                                             */
+/* ------------------------------------------------------------------ */
+
+export type PoiCategory =
+  | "apartments"
+  | "restaurants"
+  | "grocery"
+  | "transit"
+  | "schools"
+  | "healthcare"
+  | "parks"
+  | "employers";
+
+export interface Poi {
+  id: string;
+  lat: number;
+  lng: number;
+  name: string;
+  category: PoiCategory | string;
+  tags: Record<string, string>;
+  distance_m: number;
+}
+
+export interface HudFmr {
+  zip: string;
+  year?: number | string;
+  metro?: string | null;
+  county?: string | null;
+  rents: {
+    studio?: number | null;
+    br1?: number | null;
+    br2?: number | null;
+    br3?: number | null;
+    br4?: number | null;
+  };
+}
+
+export interface LocationBundle {
+  lat: number | null;
+  lng: number | null;
+  radius_m: number;
+  categories: Partial<Record<PoiCategory | string, Poi[]>>;
+  fmr: HudFmr | null;
+  display_name: string | null;
+  fetched_at: number;
+  error?: string;
 }

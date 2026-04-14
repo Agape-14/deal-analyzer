@@ -33,6 +33,13 @@ class Deal(Base):
     metrics = Column(JSON, default=dict)
     scores = Column(JSON, default=dict)
     notes = Column(Text, default="")
+    # Location intelligence — cached so we don't re-hit Nominatim/Overpass
+    # on every page load. `lat`/`lng` are resolved once (or user-placed),
+    # `location_data` caches the last Overpass + HUD FMR bundle with a
+    # `fetched_at` timestamp for 7-day staleness checks.
+    lat = Column(Float, nullable=True)
+    lng = Column(Float, nullable=True)
+    location_data = Column(JSON, default=dict)
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
 
     developer = relationship("Developer", back_populates="deals")

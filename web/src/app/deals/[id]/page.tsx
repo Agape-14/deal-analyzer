@@ -8,6 +8,7 @@ import { MetricsTab } from "@/components/deal-detail/metrics-tab";
 import { CashflowTab } from "@/components/deal-detail/cashflow-tab";
 import { DocumentsPanel } from "@/components/deal-detail/documents-panel";
 import { ChatPanel } from "@/components/deal-detail/chat-panel";
+import { LocationTab } from "@/components/deal-detail/location-tab";
 
 export const dynamic = "force-dynamic";
 
@@ -44,6 +45,21 @@ export default async function DealDetailPage({
           overview={<OverviewTab deal={deal} />}
           metrics={<MetricsTab deal={deal} />}
           cashflow={<CashflowTab dealId={deal.id} projectedIrr={deal.target_irr} />}
+          location={
+            <LocationTab
+              dealId={deal.id}
+              initialLat={deal.lat}
+              initialLng={deal.lng}
+              proformaRent={
+                (deal.metrics?.financial_projections as Record<string, unknown>)?.avg_rent_per_unit as
+                  | number
+                  | undefined
+              }
+              unitMix={
+                (deal.metrics?.project_details as Record<string, unknown>)?.unit_mix as string | undefined
+              }
+            />
+          }
           documents={<DocumentsPanel dealId={deal.id} documents={deal.documents ?? []} />}
           chat={<ChatPanel dealId={deal.id} />}
         />

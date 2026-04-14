@@ -8,6 +8,7 @@ import {
   Gauge,
   MessageSquare,
   Waves,
+  MapPin,
 } from "lucide-react";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 
@@ -15,6 +16,7 @@ const TABS = [
   { key: "overview", label: "Overview", icon: Gauge },
   { key: "metrics", label: "Metrics", icon: Waves },
   { key: "cashflow", label: "Cashflow", icon: LineChartIcon },
+  { key: "location", label: "Location", icon: MapPin },
   { key: "documents", label: "Documents", icon: FileText },
   { key: "chat", label: "Analyst", icon: MessageSquare },
 ] as const;
@@ -30,6 +32,7 @@ export function DealTabs({
   overview,
   metrics,
   cashflow,
+  location,
   documents,
   chat,
   defaultTab = "overview",
@@ -37,6 +40,7 @@ export function DealTabs({
   overview: React.ReactNode;
   metrics: React.ReactNode;
   cashflow: React.ReactNode;
+  location: React.ReactNode;
   documents: React.ReactNode;
   chat: React.ReactNode;
   defaultTab?: DealTabKey;
@@ -74,6 +78,7 @@ export function DealTabs({
       <TabsContent value="overview">{overview}</TabsContent>
       <TabsContent value="metrics">{metrics}</TabsContent>
       <TabsContent value="cashflow">{cashflow}</TabsContent>
+      <TabsContent value="location">{location}</TabsContent>
       <TabsContent value="documents">{documents}</TabsContent>
       <TabsContent value="chat">{chat}</TabsContent>
     </Tabs>
