@@ -28,8 +28,13 @@ class DeveloperUpdate(BaseModel):
 
 
 @router.get("")
-async def list_developers(db: AsyncSession = Depends(get_db)):
-    result = await db.execute(select(Developer).order_by(Developer.name))
+async def list_developers(
+    trash: bool = False,
+    db: AsyncSession = Depends(get_db),
+):
+    q = select(Developer).order_by(Developer.name)
+    q = q.where(Developer.deleted_at.is_not(None) if trash else Developer.deleted_at.is_(None))
+    result = await db.execute(q)
     devs = result.scalars().all()
     output = []
     for dev in devs:
@@ -65,7 +70,7 @@ async def create_developer(data: DeveloperCreate, db: AsyncSession = Depends(get
 async def get_developer(dev_id: int, db: AsyncSession = Depends(get_db)):
     result = await db.execute(select(Developer).where(Developer.id == dev_id))
     dev = result.scalar_one_or_none()
-    if not dev:
+    if not dev or dev.deleted_at is not None:
         raise HTTPException(status_code=404, detail="Developer not found")
 
     # Get deals
@@ -114,10 +119,40 @@ async def update_developer(dev_id: int, data: DeveloperUpdate, db: AsyncSession 
 
 @router.delete("/{dev_id}")
 async def delete_developer(dev_id: int, db: AsyncSession = Depends(get_db)):
+    """Soft-delete. See the Deal equivalent for semantics."""
+    from datetime import datetime, timezone
+
+    result = await db.execute(select(Developer).where(Developer.id == dev_id))
+    dev = result.scalar_one_or_none()
+    if not dev or dev.deleted_at is not None:
+        raise HTTPException(status_code=404, detail="Developer not found")
+    dev.deleted_at = datetime.now(timezone.utc)
+    await db.commit()
+    return {"message": "Developer moved to trash", "id": dev_id}
+
+
+@router.post("/{dev_id}/restore")
+async def restore_developer(dev_id: int, db: AsyncSession = Depends(get_db)):
     result = await db.execute(select(Developer).where(Developer.id == dev_id))
     dev = result.scalar_one_or_none()
     if not dev:
         raise HTTPException(status_code=404, detail="Developer not found")
+    dev.deleted_at = None
+    await db.commit()
+    return {"message": "Restored", "id": dev_id}
+
+
+@router.delete("/{dev_id}/purge")
+async def purge_developer(dev_id: int, db: AsyncSession = Depends(get_db)):
+    result = await db.execute(select(Developer).where(Developer.id == dev_id))
+    dev = result.scalar_one_or_none()
+    if not dev:
+        raise HTTPException(status_code=404, detail="Developer not found")
+    if dev.deleted_at is None:
+        raise HTTPException(
+            status_code=409,
+            detail="Developer must be in the trash before it can be purged.",
+        )
     await db.delete(dev)
     await db.commit()
-    return {"message": "Developer deleted"}
+    return {"message": "Purged"}

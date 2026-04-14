@@ -8,6 +8,9 @@ class Developer(Base):
     __tablename__ = "developers"
 
     id = Column(Integer, primary_key=True, index=True)
+    # Soft-delete timestamp. When non-null the row is hidden from list/get
+    # endpoints but remains in the DB for ~30 days so users can Undo.
+    deleted_at = Column(DateTime, nullable=True)
     name = Column(String(255), nullable=False)
     contact_name = Column(String(255), default="")
     contact_email = Column(String(255), default="")
@@ -23,6 +26,7 @@ class Deal(Base):
     __tablename__ = "deals"
 
     id = Column(Integer, primary_key=True, index=True)
+    deleted_at = Column(DateTime, nullable=True)
     developer_id = Column(Integer, ForeignKey("developers.id"), nullable=True)
     project_name = Column(String(500), nullable=False)
     location = Column(String(500), default="")
@@ -82,6 +86,7 @@ class Investment(Base):
     __tablename__ = "investments"
 
     id = Column(Integer, primary_key=True, index=True)
+    deleted_at = Column(DateTime, nullable=True)
     deal_id = Column(Integer, ForeignKey("deals.id"), nullable=True)
     project_name = Column(String(500), default="")  # Can track non-deal investments too
     sponsor_name = Column(String(255), default="")

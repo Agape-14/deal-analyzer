@@ -88,13 +88,18 @@ class DistributionCreate(BaseModel):
 # ===== Investment Endpoints =====
 
 @router.get("/")
-async def list_investments(db: AsyncSession = Depends(get_db)):
+async def list_investments(
+    trash: bool = False,
+    db: AsyncSession = Depends(get_db),
+):
     """List all investments with distributions."""
-    result = await db.execute(
+    q = (
         select(Investment)
         .options(selectinload(Investment.distributions), selectinload(Investment.deal))
         .order_by(Investment.created_at.desc())
     )
+    q = q.where(Investment.deleted_at.is_not(None) if trash else Investment.deleted_at.is_(None))
+    result = await db.execute(q)
     investments = result.scalars().all()
 
     return [_serialize_investment(inv) for inv in investments]
@@ -105,6 +110,7 @@ async def portfolio_summary(db: AsyncSession = Depends(get_db)):
     """Get portfolio-level summary stats."""
     result = await db.execute(
         select(Investment)
+        .where(Investment.deleted_at.is_(None))
         .options(selectinload(Investment.distributions))
     )
     investments = result.scalars().all()
@@ -146,7 +152,9 @@ async def portfolio_summary(db: AsyncSession = Depends(get_db)):
 async def portfolio_analytics_endpoint(db: AsyncSession = Depends(get_db)):
     """Portfolio-wide analytics: IRR, multiples, timeseries, concentration."""
     result = await db.execute(
-        select(Investment).options(selectinload(Investment.distributions))
+        select(Investment)
+        .where(Investment.deleted_at.is_(None))
+        .options(selectinload(Investment.distributions))
     )
     return portfolio_analytics(result.scalars().all())
 
@@ -162,7 +170,7 @@ async def investment_performance_endpoint(
         .where(Investment.id == investment_id)
     )
     inv = result.scalar_one_or_none()
-    if not inv:
+    if not inv or inv.deleted_at is not None:
         raise HTTPException(status_code=404, detail="Investment not found")
     return investment_performance(inv)
 
@@ -216,7 +224,7 @@ async def get_investment(investment_id: int, db: AsyncSession = Depends(get_db))
         .where(Investment.id == investment_id)
     )
     inv = result.scalar_one_or_none()
-    if not inv:
+    if not inv or inv.deleted_at is not None:
         raise HTTPException(status_code=404, detail="Investment not found")
 
     return _serialize_investment(inv)
@@ -227,7 +235,7 @@ async def update_investment(investment_id: int, data: InvestmentUpdate, db: Asyn
     """Update an investment."""
     result = await db.execute(select(Investment).where(Investment.id == investment_id))
     inv = result.scalar_one_or_none()
-    if not inv:
+    if not inv or inv.deleted_at is not None:
         raise HTTPException(status_code=404, detail="Investment not found")
 
     for field, value in data.model_dump(exclude_unset=True).items():
@@ -239,15 +247,43 @@ async def update_investment(investment_id: int, data: InvestmentUpdate, db: Asyn
 
 @router.delete("/{investment_id}")
 async def delete_investment(investment_id: int, db: AsyncSession = Depends(get_db)):
-    """Delete an investment."""
+    """Soft-delete. Follow up with `/restore` or `/purge` as needed."""
+    from datetime import datetime, timezone
+
+    result = await db.execute(select(Investment).where(Investment.id == investment_id))
+    inv = result.scalar_one_or_none()
+    if not inv or inv.deleted_at is not None:
+        raise HTTPException(status_code=404, detail="Investment not found")
+    inv.deleted_at = datetime.now(timezone.utc)
+    await db.commit()
+    return {"message": "Investment moved to trash", "id": investment_id}
+
+
+@router.post("/{investment_id}/restore")
+async def restore_investment(investment_id: int, db: AsyncSession = Depends(get_db)):
     result = await db.execute(select(Investment).where(Investment.id == investment_id))
     inv = result.scalar_one_or_none()
     if not inv:
         raise HTTPException(status_code=404, detail="Investment not found")
+    inv.deleted_at = None
+    await db.commit()
+    return {"message": "Restored", "id": investment_id}
 
+
+@router.delete("/{investment_id}/purge")
+async def purge_investment(investment_id: int, db: AsyncSession = Depends(get_db)):
+    result = await db.execute(select(Investment).where(Investment.id == investment_id))
+    inv = result.scalar_one_or_none()
+    if not inv:
+        raise HTTPException(status_code=404, detail="Investment not found")
+    if inv.deleted_at is None:
+        raise HTTPException(
+            status_code=409,
+            detail="Investment must be in the trash before it can be purged.",
+        )
     await db.delete(inv)
     await db.commit()
-    return {"message": "Investment deleted"}
+    return {"message": "Purged"}
 
 
 # ===== Distribution Endpoints =====

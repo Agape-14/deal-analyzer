@@ -67,7 +67,22 @@ export function PositionCard({
     setDeleting(true);
     try {
       await api.delete(`/api/investments/${investment.id}`);
-      toast.success("Investment deleted");
+      toast.success("Moved to trash", {
+        description: investment.project_name,
+        duration: 8000,
+        action: {
+          label: "Undo",
+          onClick: async () => {
+            try {
+              await api.post(`/api/investments/${investment.id}/restore`);
+              toast.success("Restored");
+              router.refresh();
+            } catch {
+              toast.error("Restore failed");
+            }
+          },
+        },
+      });
       router.refresh();
     } catch (e) {
       toast.error("Couldn't delete", { description: (e as { detail?: string })?.detail });

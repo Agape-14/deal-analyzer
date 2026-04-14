@@ -139,10 +139,18 @@ def _deal_to_dict(deal: Deal, developer_name: str = None) -> dict:
 
 
 @router.get("")
-async def list_deals(db: AsyncSession = Depends(get_db)):
-    result = await db.execute(
-        select(Deal).options(selectinload(Deal.developer)).order_by(Deal.created_at.desc())
-    )
+async def list_deals(
+    trash: bool = False,
+    db: AsyncSession = Depends(get_db),
+):
+    """List deals. Trashed (soft-deleted) rows are excluded unless
+    `?trash=true` is passed — handy for a future 'Trash' view."""
+    q = select(Deal).options(selectinload(Deal.developer)).order_by(Deal.created_at.desc())
+    if trash:
+        q = q.where(Deal.deleted_at.is_not(None))
+    else:
+        q = q.where(Deal.deleted_at.is_(None))
+    result = await db.execute(q)
     deals = result.scalars().all()
     return [
         _deal_to_dict(d, d.developer.name if d.developer else "")
@@ -167,7 +175,8 @@ async def get_deal(deal_id: int, db: AsyncSession = Depends(get_db)):
         .where(Deal.id == deal_id)
     )
     deal = result.scalar_one_or_none()
-    if not deal:
+    # Treat soft-deleted rows as gone for GETs; restore via POST /{id}/restore.
+    if not deal or deal.deleted_at is not None:
         raise HTTPException(status_code=404, detail="Deal not found")
 
     data = _deal_to_dict(deal, deal.developer.name if deal.developer else "")
@@ -213,13 +222,47 @@ async def update_deal(deal_id: int, data: DealUpdate, db: AsyncSession = Depends
 
 @router.delete("/{deal_id}")
 async def delete_deal(deal_id: int, db: AsyncSession = Depends(get_db)):
+    """Soft-delete. The deal is hidden from list/get endpoints but
+    remains in the DB. `POST /{id}/restore` reverses within the undo
+    window; `DELETE /{id}/purge` hard-deletes immediately."""
+    from datetime import datetime, timezone
+
+    result = await db.execute(select(Deal).where(Deal.id == deal_id))
+    deal = result.scalar_one_or_none()
+    if not deal or deal.deleted_at is not None:
+        raise HTTPException(status_code=404, detail="Deal not found")
+    deal.deleted_at = datetime.now(timezone.utc)
+    await db.commit()
+    return {"message": "Deal moved to trash", "id": deal_id}
+
+
+@router.post("/{deal_id}/restore")
+async def restore_deal(deal_id: int, db: AsyncSession = Depends(get_db)):
     result = await db.execute(select(Deal).where(Deal.id == deal_id))
     deal = result.scalar_one_or_none()
     if not deal:
         raise HTTPException(status_code=404, detail="Deal not found")
+    deal.deleted_at = None
+    await db.commit()
+    return {"message": "Restored", "id": deal_id}
+
+
+@router.delete("/{deal_id}/purge")
+async def purge_deal(deal_id: int, db: AsyncSession = Depends(get_db)):
+    """Hard-delete a soft-deleted deal. Only allowed once the row is
+    already in the trash — prevents accidental irreversible removal."""
+    result = await db.execute(select(Deal).where(Deal.id == deal_id))
+    deal = result.scalar_one_or_none()
+    if not deal:
+        raise HTTPException(status_code=404, detail="Deal not found")
+    if deal.deleted_at is None:
+        raise HTTPException(
+            status_code=409,
+            detail="Deal must be in the trash before it can be purged. Call DELETE first.",
+        )
     await db.delete(deal)
     await db.commit()
-    return {"message": "Deal deleted"}
+    return {"message": "Purged"}
 
 
 # ===== Documents =====

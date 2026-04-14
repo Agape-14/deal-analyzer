@@ -41,7 +41,24 @@ export function DeveloperDetailView({
     setDeleting(true);
     try {
       await api.delete(`/api/developers/${developer.id}`);
-      toast.success("Developer deleted");
+      toast.success("Developer moved to trash", {
+        description: developer.name,
+        duration: 8000,
+        action: {
+          label: "Undo",
+          onClick: async () => {
+            try {
+              await api.post(`/api/developers/${developer.id}/restore`);
+              toast.success("Restored");
+              // Jump back onto the page. `router.back()` would work if we
+              // still have history; otherwise navigate to the detail.
+              window.location.href = `/developers/${developer.id}`;
+            } catch {
+              toast.error("Restore failed");
+            }
+          },
+        },
+      });
       router.push("/developers");
       router.refresh();
     } catch (err) {
