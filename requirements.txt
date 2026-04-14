@@ -13,3 +13,5 @@ pillow
 reportlab
 itsdangerous
 bcrypt
+pytest
+pytest-asyncio

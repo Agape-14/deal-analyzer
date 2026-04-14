@@ -132,6 +132,8 @@ def _deal_to_dict(deal: Deal, developer_name: str = None) -> dict:
         "target_equity_multiple": target_returns.get("target_equity_multiple"),
         "minimum_investment": deal_structure.get("minimum_investment"),
         "notes": deal.notes,
+        "lat": deal.lat,
+        "lng": deal.lng,
         "created_at": deal.created_at.isoformat() if deal.created_at else None,
     }
 
