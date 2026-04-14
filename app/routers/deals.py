@@ -6,7 +6,7 @@ from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from sqlalchemy.orm import selectinload
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, field_validator
 from typing import Optional
 from app.database import get_db
 from app.models import Deal, DealDocument, Developer
@@ -38,32 +38,70 @@ UPLOAD_DIR = os.path.join(BASE_DIR, "uploads")
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 
 
+# Allowed status values for a Deal — closes the "any string accepted" hole.
+# Keeps the legacy "reviewing/interested/passed/committed/closed" taxonomy.
+DEAL_STATUSES = {"reviewing", "interested", "passed", "committed", "closed"}
+PROPERTY_TYPES = {
+    "multifamily", "office", "retail", "industrial", "hospitality",
+    "mixed-use", "development", "land", "other",
+}
+
+
 class DealCreate(BaseModel):
-    developer_id: Optional[int] = None
-    project_name: str
-    location: Optional[str] = ""
-    city: Optional[str] = ""
-    state: Optional[str] = ""
+    developer_id: Optional[int] = Field(None, ge=1)
+    project_name: str = Field(..., min_length=1, max_length=255)
+    location: Optional[str] = Field("", max_length=500)
+    city: Optional[str] = Field("", max_length=120)
+    state: Optional[str] = Field("", max_length=64)
     property_type: Optional[str] = "multifamily"
     status: Optional[str] = "reviewing"
-    notes: Optional[str] = ""
+    notes: Optional[str] = Field("", max_length=10000)
+
+    @field_validator("status")
+    @classmethod
+    def _status_valid(cls, v):
+        if v is None or v == "":
+            return "reviewing"
+        if v not in DEAL_STATUSES:
+            raise ValueError(f"status must be one of {sorted(DEAL_STATUSES)}")
+        return v
+
+    @field_validator("property_type")
+    @classmethod
+    def _ptype_valid(cls, v):
+        if v is None or v == "":
+            return "multifamily"
+        # Allow unknown types but normalize to lowercase. Unknown types pass
+        # through (e.g. "self-storage") so the system stays extensible.
+        return v.strip().lower()
 
 
 class DealUpdate(BaseModel):
-    developer_id: Optional[int] = None
-    project_name: Optional[str] = None
-    location: Optional[str] = None
-    city: Optional[str] = None
-    state: Optional[str] = None
+    developer_id: Optional[int] = Field(None, ge=1)
+    project_name: Optional[str] = Field(None, min_length=1, max_length=255)
+    location: Optional[str] = Field(None, max_length=500)
+    city: Optional[str] = Field(None, max_length=120)
+    state: Optional[str] = Field(None, max_length=64)
     property_type: Optional[str] = None
     status: Optional[str] = None
     metrics: Optional[dict] = None
     scores: Optional[dict] = None
-    notes: Optional[str] = None
+    notes: Optional[str] = Field(None, max_length=10000)
+
+    @field_validator("status")
+    @classmethod
+    def _status_valid(cls, v):
+        if v is None:
+            return v
+        if v not in DEAL_STATUSES:
+            raise ValueError(f"status must be one of {sorted(DEAL_STATUSES)}")
+        return v
 
 
 class CompareRequest(BaseModel):
-    deal_ids: list[int]
+    # Bound the compare set so the UI can't force the backend to fan out
+    # to unbounded deals (and produce a 40-column Excel file).
+    deal_ids: list[int] = Field(..., min_length=1, max_length=8)
 
 
 def _deal_to_dict(deal: Deal, developer_name: str = None) -> dict:
@@ -208,6 +246,15 @@ async def list_documents(deal_id: int, db: AsyncSession = Depends(get_db)):
     return out
 
 
+# Size + type guards for uploaded documents. Anything over 50 MB is almost
+# certainly not a single OM — reject before we spend tokens on it. Any file
+# that's not a PDF won't parse with our pipeline; fail fast with a clear
+# message rather than saving garbage to disk.
+MAX_UPLOAD_BYTES = 50 * 1024 * 1024          # 50 MB
+ALLOWED_MIMETYPES = {"application/pdf", "application/x-pdf"}
+ALLOWED_EXTS = {".pdf"}
+
+
 @router.post("/{deal_id}/documents/upload")
 async def upload_document(
     deal_id: int,
@@ -221,14 +268,38 @@ async def upload_document(
     if not deal:
         raise HTTPException(status_code=404, detail="Deal not found")
 
-    # Save file
-    ext = os.path.splitext(file.filename)[1] if file.filename else ".pdf"
-    unique_name = f"{uuid.uuid4().hex}{ext}"
-    file_path = os.path.join(UPLOAD_DIR, unique_name)
+    # MIME / extension guard — we only parse PDF today.
+    ext = os.path.splitext(file.filename or "")[1].lower()
+    ctype = (file.content_type or "").lower()
+    if ext not in ALLOWED_EXTS and ctype not in ALLOWED_MIMETYPES:
+        raise HTTPException(
+            status_code=415,
+            detail=f"Only PDF uploads are supported (got {ctype or ext or 'unknown type'}).",
+        )
 
-    content = await file.read()
+    # Size guard — read in chunks so a 2GB PDF doesn't balloon memory.
+    # FastAPI's UploadFile exposes a SpooledTemporaryFile; we can stream
+    # it to disk while counting bytes.
+    unique_name = f"{uuid.uuid4().hex}{ext or '.pdf'}"
+    file_path = os.path.join(UPLOAD_DIR, unique_name)
+    total = 0
     with open(file_path, "wb") as f:
-        f.write(content)
+        while True:
+            chunk = await file.read(1 * 1024 * 1024)  # 1 MB chunks
+            if not chunk:
+                break
+            total += len(chunk)
+            if total > MAX_UPLOAD_BYTES:
+                f.close()
+                try:
+                    os.remove(file_path)
+                except OSError:
+                    pass
+                raise HTTPException(
+                    status_code=413,
+                    detail=f"File exceeds {MAX_UPLOAD_BYTES // (1024 * 1024)}MB upload limit.",
+                )
+            f.write(chunk)
 
     # Extract text (+ OCR fallback + tables + images)
     extraction: dict = {}

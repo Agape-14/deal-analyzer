@@ -51,3 +51,48 @@ def describe_models() -> dict[str, str]:
         "market_research": MODEL_MARKET,
         "chat": MODEL_CHAT,
     }
+
+
+# --------------------------- environment checks --------------------------- #
+
+def environment_status() -> dict[str, dict]:
+    """Report which optional external services are reachable based on env.
+
+    The healthz endpoint surfaces this so an operator (or the dashboard
+    itself) can warn that AI-gated features will 503 before the user
+    ever clicks the button.
+    """
+    anthropic_ok = bool(os.environ.get("ANTHROPIC_API_KEY"))
+    brave_ok = bool(os.environ.get("BRAVE_API_KEY"))
+    db_url = os.environ.get("DATABASE_URL") or ""
+    is_sqlite = (not db_url) or db_url.startswith("sqlite")
+
+    return {
+        "anthropic": {
+            "configured": anthropic_ok,
+            "affects": ["extract", "verify", "chat", "market_research"],
+            "message": (
+                None
+                if anthropic_ok
+                else "ANTHROPIC_API_KEY is not set — AI-powered extraction, verification, chat, and market research will return 503."
+            ),
+        },
+        "brave_search": {
+            "configured": brave_ok,
+            "affects": ["market_research"],
+            "message": (
+                None
+                if brave_ok
+                else "BRAVE_API_KEY is not set — market research will fall back to Claude-only synthesis without live web results."
+            ),
+        },
+        "database": {
+            "engine": "sqlite" if is_sqlite else "postgres",
+            "persistent": bool(db_url) or bool(os.environ.get("DB_DIR")),
+            "message": (
+                None
+                if (db_url or os.environ.get("DB_DIR"))
+                else "DB_DIR is not set; SQLite lives in the repo root and will be lost on redeploys. Set DB_DIR=/data with a Railway Volume."
+            ),
+        },
+    }

@@ -6,6 +6,7 @@ import { AppSidebar } from "@/components/app-sidebar";
 import { AppHeader } from "@/components/app-header";
 import { CommandPalette } from "@/components/command-palette";
 import { NewDealDrawer } from "@/components/new-deal-drawer";
+import { EnvironmentBanner } from "@/components/environment-banner";
 import { Toaster } from "sonner";
 
 const inter = Inter({
@@ -41,6 +42,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
           <AppSidebar />
           <div className="flex-1 md:ml-60 flex flex-col min-w-0">
             <AppHeader />
+            <EnvironmentBanner />
             <main className="flex-1">{children}</main>
           </div>
         </div>

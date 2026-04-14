@@ -3,7 +3,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from sqlalchemy.orm import selectinload
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, field_validator
 from typing import Optional
 from datetime import date
 from app.database import get_db
@@ -18,48 +18,71 @@ router = APIRouter()
 
 # ===== Pydantic Models =====
 
+# Bounds chosen to allow any plausible real-estate deal, while rejecting the
+# kind of off-by-3-zeros typos that silently corrupt the portfolio page.
+INVESTMENT_STATUSES = {"active", "exited", "defaulted", "pending"}
+
+
 class InvestmentCreate(BaseModel):
-    deal_id: Optional[int] = None
-    project_name: str = ""
-    sponsor_name: str = ""
+    deal_id: Optional[int] = Field(None, ge=1)
+    project_name: str = Field("", max_length=255)
+    sponsor_name: str = Field("", max_length=255)
     investment_date: Optional[date] = None
-    amount_invested: float = 0
-    shares: float = 0
-    investment_class: str = ""
-    preferred_return: Optional[float] = None
-    projected_irr: Optional[float] = None
-    projected_equity_multiple: Optional[float] = None
-    hold_period_years: Optional[float] = None
+    amount_invested: float = Field(0, ge=0, le=1_000_000_000)   # $1B cap
+    shares: float = Field(0, ge=0)
+    investment_class: str = Field("", max_length=64)
+    preferred_return: Optional[float] = Field(None, ge=0, le=100)
+    projected_irr: Optional[float] = Field(None, ge=-100, le=300)
+    projected_equity_multiple: Optional[float] = Field(None, ge=0, le=20)
+    hold_period_years: Optional[float] = Field(None, ge=0, le=50)
     status: str = "active"
     # Allow backfilling already-exited investments in a single POST
     exit_date: Optional[date] = None
-    exit_amount: Optional[float] = None
-    notes: str = ""
+    exit_amount: Optional[float] = Field(None, ge=0, le=10_000_000_000)
+    notes: str = Field("", max_length=10000)
+
+    @field_validator("status")
+    @classmethod
+    def _status_valid(cls, v):
+        if v is None or v == "":
+            return "active"
+        if v not in INVESTMENT_STATUSES:
+            raise ValueError(f"status must be one of {sorted(INVESTMENT_STATUSES)}")
+        return v
 
 
 class InvestmentUpdate(BaseModel):
-    project_name: Optional[str] = None
-    sponsor_name: Optional[str] = None
+    project_name: Optional[str] = Field(None, max_length=255)
+    sponsor_name: Optional[str] = Field(None, max_length=255)
     investment_date: Optional[date] = None
-    amount_invested: Optional[float] = None
-    shares: Optional[float] = None
-    investment_class: Optional[str] = None
-    preferred_return: Optional[float] = None
-    projected_irr: Optional[float] = None
-    projected_equity_multiple: Optional[float] = None
-    hold_period_years: Optional[float] = None
+    amount_invested: Optional[float] = Field(None, ge=0, le=1_000_000_000)
+    shares: Optional[float] = Field(None, ge=0)
+    investment_class: Optional[str] = Field(None, max_length=64)
+    preferred_return: Optional[float] = Field(None, ge=0, le=100)
+    projected_irr: Optional[float] = Field(None, ge=-100, le=300)
+    projected_equity_multiple: Optional[float] = Field(None, ge=0, le=20)
+    hold_period_years: Optional[float] = Field(None, ge=0, le=50)
     status: Optional[str] = None
     exit_date: Optional[date] = None
-    exit_amount: Optional[float] = None
-    notes: Optional[str] = None
+    exit_amount: Optional[float] = Field(None, ge=0, le=10_000_000_000)
+    notes: Optional[str] = Field(None, max_length=10000)
+
+    @field_validator("status")
+    @classmethod
+    def _status_valid(cls, v):
+        if v is None:
+            return v
+        if v not in INVESTMENT_STATUSES:
+            raise ValueError(f"status must be one of {sorted(INVESTMENT_STATUSES)}")
+        return v
 
 
 class DistributionCreate(BaseModel):
     date: date
-    amount: float
-    dist_type: str = "cash_flow"
-    period: str = ""
-    notes: str = ""
+    amount: float = Field(..., gt=0, le=1_000_000_000)   # must be positive
+    dist_type: str = Field("cash_flow", max_length=64)
+    period: str = Field("", max_length=64)
+    notes: str = Field("", max_length=2000)
 
 
 # ===== Investment Endpoints =====
