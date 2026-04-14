@@ -32,11 +32,26 @@ def xirr(flows: list[tuple[date, float]], guess: float = 0.1) -> float | None:
     def years_from_start(d: date) -> float:
         return (d - t0).days / 365.25
 
+    def safe_pow(base: float, exp: float) -> float | None:
+        # (1 + rate) ** years can overflow for large rates * long horizons.
+        # Return None to signal "too big" so callers can fall through.
+        try:
+            return base ** exp
+        except OverflowError:
+            return None
+
     def npv(rate: float) -> float:
         # Avoid division by zero / domain errors
         if rate <= -1:
             return float("inf")
-        return sum(amt / ((1 + rate) ** years_from_start(d)) for d, amt in flows)
+        total = 0.0
+        for d, amt in flows:
+            p = safe_pow(1 + rate, years_from_start(d))
+            if p is None:
+                # At very high rates, terms discount to ~0; treat as 0
+                continue
+            total += amt / p
+        return total
 
     def dnpv(rate: float) -> float:
         if rate <= -1:
@@ -46,7 +61,10 @@ def xirr(flows: list[tuple[date, float]], guess: float = 0.1) -> float | None:
             t = years_from_start(d)
             if t == 0:
                 continue
-            total -= t * amt / ((1 + rate) ** (t + 1))
+            p = safe_pow(1 + rate, t + 1)
+            if p is None:
+                continue
+            total -= t * amt / p
         return total
 
     rate = guess
@@ -58,9 +76,11 @@ def xirr(flows: list[tuple[date, float]], guess: float = 0.1) -> float | None:
         if df == 0:
             break
         new_rate = rate - f / df
-        # Guard against divergence
+        # Guard against divergence — clamp to a sane band.
         if new_rate <= -0.999:
             new_rate = (rate - 0.999) / 2
+        if new_rate > 100:
+            new_rate = min(100.0, rate + 1.0)
         if abs(new_rate - rate) < 1e-9:
             return round(new_rate, 6)
         rate = new_rate

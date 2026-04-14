@@ -37,3 +37,24 @@ export function deltaColor(val: number | null | undefined): string {
   if (val < 0) return "text-destructive";
   return "text-muted-foreground";
 }
+
+/** Format an ISO date as a readable short form ("Mar 14, 2025"). */
+export function fmtDate(val: string | null | undefined, opts: { year?: boolean } = {}): string {
+  if (!val) return "—";
+  const d = new Date(val);
+  if (Number.isNaN(d.getTime())) return val;
+  return d.toLocaleDateString(undefined, {
+    month: "short",
+    day: "numeric",
+    year: opts.year === false ? undefined : "numeric",
+  });
+}
+
+/** "Q1 2025" style period label from an ISO date. */
+export function fmtQuarter(val: string | null | undefined): string {
+  if (!val) return "—";
+  const d = new Date(val);
+  if (Number.isNaN(d.getTime())) return val;
+  const q = Math.floor(d.getMonth() / 3) + 1;
+  return `Q${q} ${d.getFullYear()}`;
+}

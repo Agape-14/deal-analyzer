@@ -104,6 +104,20 @@ export function CommandPalette() {
               <Item icon={Plus} onSelect={() => go("/?new=1")}>
                 New deal
               </Item>
+              <Item
+                icon={Plus}
+                onSelect={() => {
+                  setOpen(false);
+                  // Navigate to portfolio + open the drawer; defer the dispatch
+                  // slightly so the drawer exists in the DOM before we fire.
+                  router.push("/portfolio");
+                  setTimeout(() => {
+                    document.dispatchEvent(new CustomEvent("open-new-investment"));
+                  }, 120);
+                }}
+              >
+                New investment
+              </Item>
               <Item icon={LayoutDashboard} onSelect={() => go("/")}>
                 Go to deals
               </Item>

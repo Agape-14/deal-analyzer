@@ -31,6 +31,9 @@ class InvestmentCreate(BaseModel):
     projected_equity_multiple: Optional[float] = None
     hold_period_years: Optional[float] = None
     status: str = "active"
+    # Allow backfilling already-exited investments in a single POST
+    exit_date: Optional[date] = None
+    exit_amount: Optional[float] = None
     notes: str = ""
 
 
