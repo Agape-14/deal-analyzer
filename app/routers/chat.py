@@ -8,6 +8,7 @@ from pydantic import BaseModel
 from app.database import get_db
 from app.models import Deal, DealChat, DealDocument
 from app.config import MODEL_CHAT
+from app.rate_limit import limit
 
 router = APIRouter()
 
@@ -17,7 +18,7 @@ class ChatMessage(BaseModel):
     message: str
 
 
-@router.post("")
+@router.post("", dependencies=[Depends(limit("ai"))])
 async def chat_with_deal(data: ChatMessage, db: AsyncSession = Depends(get_db)):
     """Chat with AI about a specific deal."""
     api_key = os.environ.get("ANTHROPIC_API_KEY")

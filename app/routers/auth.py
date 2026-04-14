@@ -6,7 +6,7 @@ from __future__ import annotations
 
 import asyncio
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 
 from app.auth import (
@@ -17,6 +17,7 @@ from app.auth import (
     expected_username,
     set_session,
 )
+from app.rate_limit import limit
 
 router = APIRouter()
 
@@ -26,7 +27,7 @@ class LoginIn(BaseModel):
     password: str = Field(..., min_length=1, max_length=256)
 
 
-@router.post("/login")
+@router.post("/login", dependencies=[Depends(limit("auth"))])
 async def login(data: LoginIn, request: Request):
     """Validate credentials and start a session.
 

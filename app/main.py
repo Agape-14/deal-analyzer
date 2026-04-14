@@ -22,6 +22,7 @@ from app.auth import (
     is_public_path,
     session_secret,
 )
+from app.rate_limit import describe_policies
 
 
 # ----------------------------- logging setup ----------------------------- #
@@ -135,6 +136,7 @@ async def healthz():
         "models": describe_models(),
         "environment": env,
         "auth": auth,
+        "rate_limits": describe_policies(),
     }
 
 

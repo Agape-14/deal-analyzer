@@ -3,6 +3,7 @@ import uuid
 import io
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form
 from fastapi.responses import StreamingResponse
+from app.rate_limit import limit
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from sqlalchemy.orm import selectinload
@@ -259,7 +260,7 @@ ALLOWED_MIMETYPES = {"application/pdf", "application/x-pdf"}
 ALLOWED_EXTS = {".pdf"}
 
 
-@router.post("/{deal_id}/documents/upload")
+@router.post("/{deal_id}/documents/upload", dependencies=[Depends(limit("upload"))])
 async def upload_document(
     deal_id: int,
     file: UploadFile = File(...),
@@ -430,7 +431,7 @@ async def get_document_text(doc_id: int, db: AsyncSession = Depends(get_db)):
 
 # ===== AI Features =====
 
-@router.post("/{deal_id}/extract")
+@router.post("/{deal_id}/extract", dependencies=[Depends(limit("ai"))])
 async def extract_deal_metrics(deal_id: int, db: AsyncSession = Depends(get_db)):
     """AI-extract metrics from all uploaded documents.
 
@@ -579,7 +580,7 @@ async def extract_deal_metrics(deal_id: int, db: AsyncSession = Depends(get_db))
     }
 
 
-@router.post("/{deal_id}/score")
+@router.post("/{deal_id}/score", dependencies=[Depends(limit("write"))])
 async def score_deal_endpoint(deal_id: int, db: AsyncSession = Depends(get_db)):
     """Score the deal based on extracted metrics."""
     result = await db.execute(select(Deal).where(Deal.id == deal_id))
@@ -622,7 +623,7 @@ async def validate_deal(deal_id: int, db: AsyncSession = Depends(get_db)):
     }}
 
 
-@router.post("/{deal_id}/verify")
+@router.post("/{deal_id}/verify", dependencies=[Depends(limit("ai"))])
 async def verify_deal_endpoint(deal_id: int, auto_correct: bool = True, db: AsyncSession = Depends(get_db)):
     """Second-pass AI verification of extracted metrics against source documents.
     
@@ -899,7 +900,7 @@ async def set_manual_location(
 
 # ===== Market Research =====
 
-@router.post("/{deal_id}/market-research")
+@router.post("/{deal_id}/market-research", dependencies=[Depends(limit("ai"))])
 async def market_research(deal_id: int, db: AsyncSession = Depends(get_db)):
     """Fetch real market data for the deal's city/state via Brave Search + Claude AI."""
     result = await db.execute(select(Deal).where(Deal.id == deal_id))
