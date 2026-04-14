@@ -167,6 +167,19 @@ async def create_deal(data: DealCreate, db: AsyncSession = Depends(get_db)):
     return {"id": deal.id, "project_name": deal.project_name, "message": "Deal created"}
 
 
+@router.get("/pipeline/summary")
+async def pipeline_summary_endpoint(db: AsyncSession = Depends(get_db)):
+    """Dashboard widgets: total deals, velocity (6mo), win rate (12mo),
+    aging deals, capital deployed, average analyst score. Derived from
+    the live Deal table on every call — no materialized view yet."""
+    from app.services.pipeline_analytics import pipeline_summary
+
+    result = await db.execute(
+        select(Deal).options(selectinload(Deal.developer)).where(Deal.deleted_at.is_(None))
+    )
+    return pipeline_summary(result.scalars().all())
+
+
 @router.get("/{deal_id}")
 async def get_deal(deal_id: int, db: AsyncSession = Depends(get_db)):
     result = await db.execute(

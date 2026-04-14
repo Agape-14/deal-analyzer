@@ -5,6 +5,7 @@ import { StatCard } from "@/components/stat-card";
 import { FadeIn } from "@/components/motion";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
+import { PipelineWidgets, type PipelineSummary } from "@/components/pipeline-widgets";
 import { fmtMoney } from "@/lib/utils";
 import Link from "next/link";
 import { LayoutDashboard, Sparkles } from "lucide-react";
@@ -13,19 +14,17 @@ export const dynamic = "force-dynamic";
 
 export default async function Home() {
   let deals: DealSummary[] = [];
+  let pipeline: PipelineSummary | null = null;
   let error: string | null = null;
   try {
-    deals = await api.get<DealSummary[]>("/api/deals");
+    [deals, pipeline] = await Promise.all([
+      api.get<DealSummary[]>("/api/deals"),
+      api.get<PipelineSummary>("/api/deals/pipeline/summary").catch(() => null),
+    ]);
   } catch (e) {
     error = (e as { detail?: string }).detail ?? "Failed to load deals";
   }
 
-  const scored = deals.filter((d) => d.overall_score != null);
-  const avgScore = scored.length
-    ? scored.reduce((a, d) => a + (d.overall_score ?? 0), 0) / scored.length
-    : 0;
-  const reviewing = deals.filter((d) => d.status === "reviewing").length;
-  const committed = deals.filter((d) => d.status === "committed").length;
   const totalValue = deals.reduce((a, d) => a + (d.minimum_investment ?? 0), 0);
 
   return (
@@ -47,18 +46,17 @@ export default async function Home() {
         </div>
       </FadeIn>
 
-      {/* Stats */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-3 md:gap-4 mb-10">
-        <StatCard label="Total Deals" value={deals.length} />
-        <StatCard
-          label="Avg Score"
-          value={avgScore}
-          format="score"
-          accent={avgScore >= 7 ? "success" : undefined}
-        />
-        <StatCard label="Reviewing" value={reviewing} />
-        <StatCard label="Committed" value={committed} accent="primary" />
-      </div>
+      {/* Pipeline widgets: velocity, win rate, capital, aging */}
+      {pipeline ? (
+        <PipelineWidgets summary={pipeline} />
+      ) : (
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-3 md:gap-4 mb-10">
+          <StatCard label="Total Deals" value={deals.length} />
+          <StatCard label="Reviewing" value={deals.filter((d) => d.status === "reviewing").length} />
+          <StatCard label="Committed" value={deals.filter((d) => d.status === "committed").length} accent="primary" />
+          <StatCard label="Avg Score" value={0} format="score" />
+        </div>
+      )}
 
       {/* Deals */}
       {error ? (
