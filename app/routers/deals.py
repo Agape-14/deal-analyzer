@@ -431,6 +431,34 @@ async def get_document_text(doc_id: int, db: AsyncSession = Depends(get_db)):
     return {"id": doc.id, "filename": doc.filename, "text": doc.extracted_text}
 
 
+@router.get("/documents/{doc_id}/file")
+async def get_document_file(doc_id: int, db: AsyncSession = Depends(get_db)):
+    """Stream the original uploaded PDF so the frontend can render it
+    inline via the browser's native viewer. Served with the original
+    filename as a Content-Disposition suggestion for saves."""
+    from fastapi.responses import FileResponse
+
+    result = await db.execute(select(DealDocument).where(DealDocument.id == doc_id))
+    doc = result.scalar_one_or_none()
+    if not doc:
+        raise HTTPException(status_code=404, detail="Document not found")
+    if not doc.file_path or not os.path.exists(doc.file_path):
+        raise HTTPException(
+            status_code=410,
+            detail="Original file is no longer available on disk.",
+        )
+    return FileResponse(
+        doc.file_path,
+        media_type="application/pdf",
+        # `inline` (not attachment) so the browser renders it; safer for
+        # our same-origin UI than forcing a download.
+        headers={
+            "Content-Disposition": f'inline; filename="{doc.filename or "document.pdf"}"',
+            "Cache-Control": "private, max-age=60",
+        },
+    )
+
+
 # ===== AI Features =====
 
 @router.post("/{deal_id}/extract", dependencies=[Depends(limit("ai"))])

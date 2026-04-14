@@ -3,6 +3,7 @@
 import * as React from "react";
 import { useRouter } from "next/navigation";
 import { motion, AnimatePresence } from "framer-motion";
+import { PdfPreviewDialog, PreviewButton } from "@/components/deal-detail/pdf-preview";
 import {
   Upload,
   FileText,
@@ -49,6 +50,7 @@ export function DocumentsPanel({
   const [dragActive, setDragActive] = React.useState(false);
   const [docType, setDocType] = React.useState<string>("offering_memo");
   const [uploads, setUploads] = React.useState<Upload[]>([]);
+  const [previewDoc, setPreviewDoc] = React.useState<DealDocument | null>(null);
   const inputRef = React.useRef<HTMLInputElement>(null);
 
   async function handleFiles(files: FileList | File[]) {
@@ -125,7 +127,13 @@ export function DocumentsPanel({
                   <FileText className="h-4 w-4 text-muted-foreground" />
                 </div>
                 <div className="min-w-0 flex-1">
-                  <div className="text-sm font-medium truncate">{d.filename}</div>
+                  <button
+                    onClick={() => setPreviewDoc(d)}
+                    className="text-sm font-medium truncate text-left hover:text-primary transition-colors"
+                    title="Preview PDF"
+                  >
+                    {d.filename}
+                  </button>
                   <div className="text-[11px] text-muted-foreground mt-0.5 flex items-center gap-2 flex-wrap">
                     <span className="uppercase tracking-wider">{d.doc_type.replace(/_/g, " ")}</span>
                     <span className="opacity-40">·</span>
@@ -163,13 +171,16 @@ export function DocumentsPanel({
                     )}
                   </div>
                 </div>
-                <button
-                  onClick={() => deleteDoc(d.id, d.filename)}
-                  className="opacity-0 group-hover:opacity-100 transition-opacity p-1.5 rounded-md hover:bg-destructive/10 text-muted-foreground hover:text-destructive"
-                  aria-label="Delete document"
-                >
-                  <Trash2 className="h-4 w-4" />
-                </button>
+                <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 focus-within:opacity-100 transition-opacity">
+                  <PreviewButton doc={d} onOpen={(doc) => setPreviewDoc(doc)} />
+                  <button
+                    onClick={() => deleteDoc(d.id, d.filename)}
+                    className="p-1.5 rounded-md hover:bg-destructive/10 text-muted-foreground hover:text-destructive"
+                    aria-label="Delete document"
+                  >
+                    <Trash2 className="h-4 w-4" />
+                  </button>
+                </div>
               </li>
             ))}
           </ul>
@@ -270,6 +281,12 @@ export function DocumentsPanel({
           </Button>
         </label>
       </Card>
+
+      <PdfPreviewDialog
+        doc={previewDoc}
+        open={previewDoc !== null}
+        onOpenChange={(o) => !o && setPreviewDoc(null)}
+      />
     </div>
   );
 }
