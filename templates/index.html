@@ -1,0 +1,507 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Kenyon Investment Dashboard</title>
+  <link rel="stylesheet" href="/static/css/style.css">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📊</text></svg>">
+</head>
+<body>
+  <div class="mobile-menu-btn" onclick="toggleMobileSidebar()">☰</div>
+  <div class="mobile-overlay" id="mobile-overlay" onclick="toggleMobileSidebar()"></div>
+  <div class="app-container">
+    <!-- Sidebar -->
+    <aside class="sidebar">
+      <div class="sidebar-header">
+        <div class="sidebar-logo">
+          <div class="logo-icon">K</div>
+          <div>
+            <h1>Kenyon</h1>
+            <span>Investment Dashboard</span>
+          </div>
+        </div>
+      </div>
+      <nav class="sidebar-nav">
+        <div class="nav-section">
+          <div class="nav-section-title">Main</div>
+          <div class="nav-item active" data-page="dashboard">
+            <span class="nav-icon">📋</span>
+            <span>Deals</span>
+            <span class="badge" id="deal-count">0</span>
+          </div>
+          <div class="nav-item" data-page="compare">
+            <span class="nav-icon">📊</span>
+            <span>Compare</span>
+          </div>
+          <div class="nav-item" data-page="developers">
+            <span class="nav-icon">🏗️</span>
+            <span>Developers</span>
+          </div>
+          <div class="nav-item" data-page="portfolio">
+            <span class="nav-icon">💰</span>
+            <span>Portfolio</span>
+          </div>
+        </div>
+      </nav>
+      <div class="sidebar-footer">v1.0 · Kenyon Investment Dashboard</div>
+    </aside>
+
+    <!-- Main Content -->
+    <main class="main-content">
+
+      <!-- ===== DASHBOARD PAGE ===== -->
+      <div class="view-page active" id="page-dashboard">
+        <div class="content-header">
+          <h2>Deal Pipeline</h2>
+          <div class="content-header-actions">
+            <button class="btn btn-primary" onclick="openAddDealModal()">+ New Deal</button>
+          </div>
+        </div>
+        <div class="content-body">
+          <!-- Stats -->
+          <div class="stats-grid" id="dashboard-stats"></div>
+
+          <!-- Toolbar -->
+          <div class="toolbar">
+            <input type="text" class="form-input search-input" id="deal-search" placeholder="Search deals..." oninput="filterDeals()">
+            <select class="form-input" id="filter-type" onchange="filterDeals()">
+              <option value="">All Types</option>
+              <option value="multifamily">Multifamily</option>
+              <option value="mixed-use">Mixed-Use</option>
+              <option value="retail">Retail</option>
+              <option value="industrial">Industrial</option>
+              <option value="office">Office</option>
+              <option value="land">Land</option>
+              <option value="hotel">Hotel</option>
+            </select>
+            <select class="form-input" id="filter-status" onchange="filterDeals()">
+              <option value="">All Status</option>
+              <option value="reviewing">Reviewing</option>
+              <option value="interested">Interested</option>
+              <option value="passed">Passed</option>
+              <option value="committed">Committed</option>
+              <option value="closed">Closed</option>
+            </select>
+            <select class="form-input" id="sort-by" onchange="sortDeals()">
+              <option value="date">Newest First</option>
+              <option value="score">Highest Score</option>
+              <option value="irr">Highest IRR</option>
+              <option value="name">Name A-Z</option>
+            </select>
+          </div>
+
+          <!-- Deals Grid -->
+          <div class="deals-grid" id="deals-grid"></div>
+          <div class="empty-state" id="deals-empty" style="display:none;">
+            <div class="empty-icon">📋</div>
+            <h3>No deals yet</h3>
+            <p>Upload your first offering memorandum to get started.</p>
+          </div>
+        </div>
+      </div>
+
+      <!-- ===== DEAL DETAIL PAGE ===== -->
+      <div class="view-page" id="page-deal-detail">
+        <div class="content-header">
+          <div class="flex-center gap-2">
+            <button class="btn-icon" onclick="showPage('dashboard')" title="Back">←</button>
+            <h2 id="detail-title">Deal Detail</h2>
+          </div>
+          <div class="content-header-actions">
+            <select class="form-input" id="detail-status" onchange="updateDealStatus()" style="width:140px;">
+              <option value="reviewing">Reviewing</option>
+              <option value="interested">Interested</option>
+              <option value="passed">Passed</option>
+              <option value="committed">Committed</option>
+              <option value="closed">Closed</option>
+            </select>
+            <button class="btn btn-danger btn-sm" onclick="deleteDeal()">Delete</button>
+          </div>
+        </div>
+        <div class="content-body">
+          <div class="deal-detail-header">
+            <div>
+              <div class="deal-detail-title" id="detail-project-name"></div>
+              <div class="deal-detail-subtitle" id="detail-subtitle"></div>
+            </div>
+            <div id="detail-score-badge"></div>
+          </div>
+
+          <!-- Tabs -->
+          <div class="tabs">
+            <div class="tab active" data-tab="overview">Overview</div>
+            <div class="tab" data-tab="financials">Financials</div>
+            <div class="tab" data-tab="market">Market</div>
+            <div class="tab" data-tab="cashflow">Cash Flow</div>
+            <div class="tab" data-tab="risk">Risk</div>
+            <div class="tab" data-tab="waterfall">Waterfall</div>
+            <div class="tab" data-tab="diligence">Due Diligence</div>
+            <div class="tab" data-tab="sponsor">Sponsor</div>
+            <div class="tab" data-tab="documents">Documents</div>
+            <div class="tab" data-tab="chat">Chat</div>
+          </div>
+
+          <!-- Tab Contents -->
+          <div class="tab-content active" id="tab-overview"></div>
+          <div class="tab-content" id="tab-financials"></div>
+          <div class="tab-content" id="tab-market"></div>
+          <div class="tab-content" id="tab-cashflow"></div>
+          <div class="tab-content" id="tab-risk"></div>
+          <div class="tab-content" id="tab-waterfall"></div>
+          <div class="tab-content" id="tab-diligence"></div>
+          <div class="tab-content" id="tab-sponsor"></div>
+          <div class="tab-content" id="tab-documents"></div>
+          <div class="tab-content" id="tab-chat">
+            <div class="chat-container">
+              <div class="chat-messages" id="chat-messages"></div>
+              <div class="chat-input-area">
+                <input type="text" class="form-input" id="chat-input" placeholder="Ask about this deal..." onkeydown="if(event.key==='Enter')sendChat()">
+                <button class="btn btn-primary" onclick="sendChat()">Send</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ===== COMPARE PAGE ===== -->
+      <div class="view-page" id="page-compare">
+        <div class="content-header">
+          <h2>Compare Deals</h2>
+          <div class="content-header-actions">
+            <button class="btn btn-primary btn-sm" onclick="runComparison()" id="btn-compare" disabled>Compare Selected</button>
+            <button class="btn btn-secondary btn-sm" onclick="exportComparison()" id="btn-export" style="display:none;">Export Excel</button>
+          </div>
+        </div>
+        <div class="content-body">
+          <div class="compare-layout">
+            <div class="compare-sidebar card">
+              <div class="card-header">
+                <h3>Select Deals</h3>
+              </div>
+              <div class="card-body" id="compare-deals-list"></div>
+            </div>
+            <div class="compare-main card" id="compare-table-container">
+              <div class="empty-state">
+                <div class="empty-icon">📊</div>
+                <h3>Select deals to compare</h3>
+                <p>Check 2 or more deals from the left panel, then click Compare.</p>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ===== DEVELOPERS PAGE ===== -->
+      <div class="view-page" id="page-developers">
+        <div class="content-header">
+          <h2>Developers</h2>
+          <div class="content-header-actions">
+            <button class="btn btn-primary" onclick="openAddDevModal()">+ Add Developer</button>
+          </div>
+        </div>
+        <div class="content-body">
+          <div class="dev-grid" id="dev-grid"></div>
+          <div class="empty-state" id="dev-empty" style="display:none;">
+            <div class="empty-icon">🏗️</div>
+            <h3>No developers yet</h3>
+            <p>Add your first developer to start tracking deals by sponsor.</p>
+          </div>
+        </div>
+      </div>
+
+      <!-- ===== PORTFOLIO PAGE ===== -->
+      <div class="view-page" id="page-portfolio">
+        <div class="content-header">
+          <h2>Portfolio</h2>
+          <div class="content-header-actions">
+            <button class="btn btn-primary" onclick="openAddInvestmentModal()">+ New Investment</button>
+          </div>
+        </div>
+        <div class="content-body">
+          <!-- Portfolio Summary Cards -->
+          <div class="portfolio-summary" id="portfolio-summary"></div>
+
+          <!-- Investments List -->
+          <div id="investments-list"></div>
+          <div class="empty-state" id="investments-empty" style="display:none;">
+            <div class="empty-icon">💰</div>
+            <h3>No investments tracked yet</h3>
+            <p>Add your first investment to start tracking your portfolio performance.</p>
+          </div>
+        </div>
+      </div>
+
+      <!-- ===== INVESTMENT DETAIL PAGE ===== -->
+      <div class="view-page" id="page-investment-detail">
+        <div class="content-header">
+          <div class="flex-center gap-2">
+            <button class="btn-icon" onclick="showPage('portfolio')" title="Back">←</button>
+            <h2 id="inv-detail-title">Investment Detail</h2>
+          </div>
+          <div class="content-header-actions">
+            <select class="form-input" id="inv-status" onchange="updateInvestmentStatus()" style="width:140px;">
+              <option value="pending">Pending</option>
+              <option value="active">Active</option>
+              <option value="exited">Exited</option>
+              <option value="defaulted">Defaulted</option>
+            </select>
+            <button class="btn btn-danger btn-sm" onclick="deleteInvestment()">Delete</button>
+          </div>
+        </div>
+        <div class="content-body">
+          <div id="inv-detail-content"></div>
+        </div>
+      </div>
+
+    </main>
+  </div>
+
+  <!-- ===== ADD INVESTMENT MODAL ===== -->
+  <div class="modal-overlay" id="modal-add-investment">
+    <div class="modal">
+      <div class="modal-header">
+        <h3>New Investment</h3>
+        <button class="modal-close" onclick="closeModal('modal-add-investment')">×</button>
+      </div>
+      <div class="modal-body">
+        <div class="form-group">
+          <label>Link to Deal (optional)</label>
+          <select class="form-input" id="inv-deal-id">
+            <option value="">— None (standalone) —</option>
+          </select>
+        </div>
+        <div class="form-row">
+          <div class="form-group">
+            <label>Project Name *</label>
+            <input class="form-input" id="inv-project-name" placeholder="e.g. Caserra Apartments">
+          </div>
+          <div class="form-group">
+            <label>Sponsor</label>
+            <input class="form-input" id="inv-sponsor" placeholder="e.g. Ambient Communities">
+          </div>
+        </div>
+        <div class="form-row">
+          <div class="form-group">
+            <label>Amount Invested ($)</label>
+            <input class="form-input" id="inv-amount" type="number" step="0.01" placeholder="250000">
+          </div>
+          <div class="form-group">
+            <label>Shares/Units</label>
+            <input class="form-input" id="inv-shares" type="number" step="0.01" placeholder="1">
+          </div>
+        </div>
+        <div class="form-row">
+          <div class="form-group">
+            <label>Investment Date</label>
+            <input class="form-input" id="inv-date" type="date">
+          </div>
+          <div class="form-group">
+            <label>Investment Class</label>
+            <input class="form-input" id="inv-class" placeholder="e.g. Class B LP">
+          </div>
+        </div>
+        <div class="form-row">
+          <div class="form-group">
+            <label>Preferred Return (%)</label>
+            <input class="form-input" id="inv-pref" type="number" step="0.1" placeholder="8.0">
+          </div>
+          <div class="form-group">
+            <label>Projected IRR (%)</label>
+            <input class="form-input" id="inv-irr" type="number" step="0.1" placeholder="15.0">
+          </div>
+        </div>
+        <div class="form-row">
+          <div class="form-group">
+            <label>Projected Equity Multiple</label>
+            <input class="form-input" id="inv-em" type="number" step="0.01" placeholder="2.0">
+          </div>
+          <div class="form-group">
+            <label>Hold Period (years)</label>
+            <input class="form-input" id="inv-hold" type="number" step="0.5" placeholder="5">
+          </div>
+        </div>
+        <div class="form-group">
+          <label>Notes</label>
+          <textarea class="form-input" id="inv-notes" rows="2" placeholder="Any notes..."></textarea>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-secondary" onclick="closeModal('modal-add-investment')">Cancel</button>
+        <button class="btn btn-primary" onclick="createInvestment()">Add Investment</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===== ADD DISTRIBUTION MODAL ===== -->
+  <div class="modal-overlay" id="modal-add-distribution">
+    <div class="modal">
+      <div class="modal-header">
+        <h3>Record Distribution</h3>
+        <button class="modal-close" onclick="closeModal('modal-add-distribution')">×</button>
+      </div>
+      <div class="modal-body">
+        <div class="form-row">
+          <div class="form-group">
+            <label>Date *</label>
+            <input class="form-input" id="dist-date" type="date">
+          </div>
+          <div class="form-group">
+            <label>Amount ($) *</label>
+            <input class="form-input" id="dist-amount" type="number" step="0.01" placeholder="5000">
+          </div>
+        </div>
+        <div class="form-row">
+          <div class="form-group">
+            <label>Type</label>
+            <select class="form-input" id="dist-type">
+              <option value="cash_flow">Cash Flow</option>
+              <option value="return_of_capital">Return of Capital</option>
+              <option value="sale_proceeds">Sale Proceeds</option>
+              <option value="refinance">Refinance</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label>Period</label>
+            <input class="form-input" id="dist-period" placeholder="e.g. Q1 2026">
+          </div>
+        </div>
+        <div class="form-group">
+          <label>Notes</label>
+          <textarea class="form-input" id="dist-notes" rows="2" placeholder="Distribution notes..."></textarea>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-secondary" onclick="closeModal('modal-add-distribution')">Cancel</button>
+        <button class="btn btn-primary" onclick="addDistribution()">Add Distribution</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===== ADD DEAL MODAL ===== -->
+  <div class="modal-overlay" id="modal-add-deal">
+    <div class="modal">
+      <div class="modal-header">
+        <h3>New Deal</h3>
+        <button class="modal-close" onclick="closeModal('modal-add-deal')">×</button>
+      </div>
+      <div class="modal-body">
+        <div class="form-group">
+          <label>Project Name *</label>
+          <input type="text" class="form-input" id="new-deal-name" placeholder="e.g. The Residences at Downtown">
+        </div>
+        <div class="form-row">
+          <div class="form-group">
+            <label>Developer</label>
+            <div style="display:flex;gap:6px">
+              <select class="form-input" id="new-deal-developer" style="flex:1">
+                <option value="">— Select —</option>
+              </select>
+              <button class="btn btn-secondary" type="button" onclick="toggleQuickAddDev()" style="white-space:nowrap;padding:6px 10px;font-size:12px">+ New</button>
+            </div>
+            <div id="quick-add-dev-row" style="display:none;margin-top:6px">
+              <div style="display:flex;gap:6px">
+                <input class="form-input" id="quick-dev-name" placeholder="Developer name" style="flex:1">
+                <button class="btn btn-primary" type="button" onclick="quickAddDeveloper()" style="padding:6px 12px;font-size:12px">Add</button>
+              </div>
+            </div>
+          </div>
+          <div class="form-group">
+            <label>Property Type</label>
+            <select class="form-input" id="new-deal-type">
+              <option value="multifamily">Multifamily</option>
+              <option value="mixed-use">Mixed-Use</option>
+              <option value="retail">Retail</option>
+              <option value="industrial">Industrial</option>
+              <option value="office">Office</option>
+              <option value="land">Land</option>
+              <option value="hotel">Hotel</option>
+            </select>
+          </div>
+        </div>
+        <div class="form-group">
+          <label>Location</label>
+          <input type="text" class="form-input" id="new-deal-location" placeholder="Address or area">
+        </div>
+        <div class="form-row">
+          <div class="form-group">
+            <label>City</label>
+            <input type="text" class="form-input" id="new-deal-city">
+          </div>
+          <div class="form-group">
+            <label>State</label>
+            <input type="text" class="form-input" id="new-deal-state" placeholder="CA">
+          </div>
+        </div>
+        <div class="form-group">
+          <label>Notes</label>
+          <textarea class="form-input" id="new-deal-notes" placeholder="Initial thoughts..."></textarea>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-secondary" onclick="closeModal('modal-add-deal')">Cancel</button>
+        <button class="btn btn-primary" onclick="createDeal()">Create Deal</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===== ADD DEVELOPER MODAL ===== -->
+  <div class="modal-overlay" id="modal-add-dev">
+    <div class="modal">
+      <div class="modal-header">
+        <h3>Add Developer</h3>
+        <button class="modal-close" onclick="closeModal('modal-add-dev')">×</button>
+      </div>
+      <div class="modal-body">
+        <div class="form-group">
+          <label>Company Name *</label>
+          <input type="text" class="form-input" id="new-dev-name" placeholder="e.g. Greystar Development">
+        </div>
+        <div class="form-row">
+          <div class="form-group">
+            <label>Contact Name</label>
+            <input type="text" class="form-input" id="new-dev-contact">
+          </div>
+          <div class="form-group">
+            <label>Phone</label>
+            <input type="text" class="form-input" id="new-dev-phone">
+          </div>
+        </div>
+        <div class="form-group">
+          <label>Email</label>
+          <input type="text" class="form-input" id="new-dev-email">
+        </div>
+        <div class="form-group">
+          <label>Track Record</label>
+          <textarea class="form-input" id="new-dev-track" placeholder="Previous projects, AUM, years in business..."></textarea>
+        </div>
+        <div class="form-group">
+          <label>Notes</label>
+          <textarea class="form-input" id="new-dev-notes"></textarea>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-secondary" onclick="closeModal('modal-add-dev')">Cancel</button>
+        <button class="btn btn-primary" onclick="createDeveloper()">Add Developer</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Toast container -->
+  <div class="toast-container" id="toast-container"></div>
+
+  <!-- Analysis Loading Overlay -->
+  <div id="analysis-overlay" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.75);z-index:9999;display:none;align-items:center;justify-content:center;">
+    <div style="background:var(--card-bg);border-radius:12px;padding:32px 48px;text-align:center;max-width:400px;box-shadow:0 8px 32px rgba(0,0,0,0.4);">
+      <div class="spinner" style="width:40px;height:40px;border-width:4px;margin:0 auto 16px;"></div>
+      <div id="analysis-step" style="font-size:16px;font-weight:600;color:var(--text);margin-bottom:8px;">Uploading documents...</div>
+      <div id="analysis-detail" style="font-size:13px;color:var(--muted);">This may take 30-60 seconds</div>
+      <div style="margin-top:16px;background:var(--bg);border-radius:8px;overflow:hidden;height:6px;">
+        <div id="analysis-progress" style="height:100%;background:var(--accent);border-radius:8px;transition:width 0.5s ease;width:5%;"></div>
+      </div>
+    </div>
+  </div>
+
+  <script src="/static/js/app.js"></script>
+</body>
+</html>

@@ -1,0 +1,9 @@
+fastapi
+uvicorn
+sqlalchemy[asyncio]
+aiosqlite
+pymupdf
+anthropic
+openpyxl
+python-multipart
+jinja2
