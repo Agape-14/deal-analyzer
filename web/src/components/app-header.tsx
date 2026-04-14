@@ -4,6 +4,7 @@ import * as React from "react";
 import { Search, Plus, Command } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { MobileNav } from "@/components/app-sidebar";
+import { ThemeToggle } from "@/components/theme-toggle";
 
 /**
  * Minimal header. Search placeholder triggers command palette (⌘K).
@@ -26,6 +27,7 @@ export function AppHeader() {
           </kbd>
         </button>
         <div className="hidden md:block flex-1" />
+        <ThemeToggle />
         <Button
           variant="default"
           size="sm"

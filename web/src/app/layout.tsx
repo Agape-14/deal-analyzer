@@ -5,6 +5,7 @@ import { Suspense } from "react";
 import { AppShell } from "@/components/app-shell";
 import { CommandPalette } from "@/components/command-palette";
 import { NewDealDrawer } from "@/components/new-deal-drawer";
+import { ThemeProvider, ThemeScript } from "@/components/theme-provider";
 import { Toaster } from "sonner";
 
 const inter = Inter({
@@ -25,33 +26,43 @@ export const metadata: Metadata = {
 };
 
 export const viewport: Viewport = {
-  themeColor: "#0a0b10",
+  themeColor: [
+    { media: "(prefers-color-scheme: dark)", color: "#0a0b10" },
+    { media: "(prefers-color-scheme: light)", color: "#f7fafc" },
+  ],
   width: "device-width",
   initialScale: 1,
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="en" className={`${inter.variable} ${mono.variable} dark`} suppressHydrationWarning>
+    <html lang="en" className={`${inter.variable} ${mono.variable}`} suppressHydrationWarning>
+      <head>
+        {/* ThemeScript runs before React to set the class on <html> and
+            prevent a flash of the wrong theme. Must be in <head>. */}
+        <ThemeScript />
+      </head>
       <body className="min-h-screen bg-background">
-        {/* Subtle radial highlight behind the main content */}
-        <div aria-hidden className="pointer-events-none fixed inset-0 bg-radial-fade" />
-        <AppShell>{children}</AppShell>
-        <CommandPalette />
-        <Suspense fallback={null}>
-          <NewDealDrawer />
-        </Suspense>
-        <Toaster
-          position="bottom-right"
-          theme="dark"
-          toastOptions={{
-            style: {
-              background: "hsl(var(--card))",
-              border: "1px solid hsl(var(--border))",
-              color: "hsl(var(--foreground))",
-            },
-          }}
-        />
+        <ThemeProvider>
+          {/* Subtle radial highlight behind the main content */}
+          <div aria-hidden className="pointer-events-none fixed inset-0 bg-radial-fade" />
+          <AppShell>{children}</AppShell>
+          <CommandPalette />
+          <Suspense fallback={null}>
+            <NewDealDrawer />
+          </Suspense>
+          <Toaster
+            position="bottom-right"
+            theme="system"
+            toastOptions={{
+              style: {
+                background: "hsl(var(--card))",
+                border: "1px solid hsl(var(--border))",
+                color: "hsl(var(--foreground))",
+              },
+            }}
+          />
+        </ThemeProvider>
       </body>
     </html>
   );
