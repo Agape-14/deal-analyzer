@@ -18,8 +18,6 @@ export interface DealSummary {
   state: string;
   property_type: string;
   status: DealStatus;
-  metrics: Record<string, unknown>;
-  scores: Record<string, unknown>;
   overall_score: number | null;
   target_irr: number | null;
   target_equity_multiple: number | null;
@@ -120,4 +118,137 @@ export interface PortfolioAnalytics {
   timeseries: Array<{ date: string; cumulative_invested: number; cumulative_returned: number; net_position: number; multiple: number }>;
   top_performers: InvestmentPerformance[];
   bottom_performers: InvestmentPerformance[];
+}
+
+/* ------------------------------------------------------------------ */
+/*  Deal detail                                                       */
+/* ------------------------------------------------------------------ */
+
+export interface DealDocument {
+  id: number;
+  filename: string;
+  doc_type: "offering_memo" | "proforma" | "market_study" | "other" | string;
+  page_count: number;
+  upload_date: string;
+  has_text: boolean;
+}
+
+export interface ValidationFlag {
+  severity: "red" | "yellow" | "green" | string;
+  category: string;
+  message: string;
+}
+
+export interface ScoreCategory {
+  score: number;
+  weight: number;
+  notes: string;
+}
+
+export interface DealScores {
+  overall: number;
+  returns: ScoreCategory;
+  market: ScoreCategory;
+  structure: ScoreCategory;
+  risk: ScoreCategory;
+  financials: ScoreCategory;
+  underwriting: ScoreCategory;
+  sponsor: ScoreCategory;
+}
+
+/** The full metrics blob. All fields optional — the backend fills them
+ * progressively via AI extraction. Kept as nullable to match reality. */
+export interface DealMetrics {
+  deal_structure?: Record<string, unknown>;
+  target_returns?: Record<string, unknown>;
+  project_details?: Record<string, unknown>;
+  financial_projections?: Record<string, unknown>;
+  market_location?: Record<string, unknown>;
+  risk_assessment?: Record<string, unknown>;
+  underwriting_checks?: Record<string, unknown>;
+  sponsor_evaluation?: Record<string, unknown>;
+  market_research?: Record<string, unknown>;
+  validation_flags?: ValidationFlag[];
+}
+
+export interface DealDetail extends DealSummary {
+  documents: DealDocument[];
+  metrics: DealMetrics;
+  scores: Partial<DealScores>;
+}
+
+/* Cashflow + Waterfall */
+
+export interface CashflowYear {
+  year: number;
+  gross_revenue: number;
+  expenses: number;
+  noi: number;
+  debt_service: number;
+  cash_flow: number;
+}
+
+export interface LpCashflowRow {
+  year: number;
+  type: "investment" | "distribution" | "sale_proceeds" | string;
+  amount: number;
+  cumulative: number;
+}
+
+export interface CashflowResponse {
+  project_level: CashflowYear[];
+  lp_level: LpCashflowRow[];
+  summary: {
+    total_operating_cashflow: number;
+    exit_value: number;
+    exit_equity: number;
+    total_return_to_equity: number;
+    equity_multiple: number;
+    years_modeled: number;
+  };
+  assumptions?: Record<string, unknown>;
+}
+
+/** Per the real backend, a waterfall tier uses `lp_amount` / `gp_amount` and
+ * a `total`. `your_amount` is non-null when the user passes `?investment=`. */
+export interface WaterfallTier {
+  name: string;
+  total: number;
+  lp_amount: number;
+  gp_amount: number;
+  lp_pct: number;
+  gp_pct: number;
+  your_amount: number | null;
+}
+
+export interface WaterfallResponse {
+  tiers: WaterfallTier[];
+  totals: {
+    total_distributed: number;
+    lp_total: number;
+    gp_total: number;
+    lp_pct: number;
+    gp_pct: number;
+    your_total?: number | null;
+  };
+}
+
+export interface MathCheck {
+  name: string;
+  status: "pass" | "fail" | "warn" | "info" | string;
+  actual?: number | string | null;
+  expected?: number | string | null;
+  message: string;
+}
+
+export interface MathCheckResponse {
+  checks: MathCheck[];
+  summary: { pass: number; fail: number; warn: number; info: number; total: number };
+}
+
+export interface ChatMessage {
+  id: number;
+  role: "user" | "assistant";
+  content: string;
+  created_at: string;
 }
