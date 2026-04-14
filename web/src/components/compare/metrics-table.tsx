@@ -73,7 +73,7 @@ export function MetricsTable({
             </div>
           </div>
 
-          <div className="rounded-xl border border-border/80 bg-card overflow-hidden">
+          <div className="rounded-xl border border-border/80 bg-card overflow-x-auto">
             {groupRows.map((row, ri) => (
               <RowLine
                 key={row.key}
@@ -124,7 +124,7 @@ function RowLine({
       animate={{ opacity: 1, y: 0 }}
       transition={{ duration: 0.22, delay: Math.min(delayStep, 0.2) }}
       className="grid gap-3 items-center border-b last:border-0 border-border/50 px-4 py-2.5"
-      style={{ gridTemplateColumns: `220px repeat(${cols}, minmax(0, 1fr))` }}
+      style={{ gridTemplateColumns: `clamp(140px, 22vw, 220px) repeat(${cols}, minmax(160px, 1fr))` }}
     >
       <div className="min-w-0">
         <div className="text-sm font-medium flex items-center gap-1.5 min-w-0">

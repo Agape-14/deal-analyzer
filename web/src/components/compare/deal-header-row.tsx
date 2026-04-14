@@ -33,11 +33,11 @@ export function DealHeaderRow({
 
   return (
     <div
-      className="sticky top-16 z-20 bg-background/85 backdrop-blur-md border-b border-border/60 -mx-6 md:-mx-10 px-6 md:px-10 py-3"
+      className="sticky top-16 z-20 bg-background/85 backdrop-blur-md border-b border-border/60 -mx-6 md:-mx-10 px-6 md:px-10 py-3 overflow-x-auto"
     >
       <div
         className="grid gap-3"
-        style={{ gridTemplateColumns: `220px repeat(${cols}, minmax(0, 1fr))` }}
+        style={{ gridTemplateColumns: `clamp(140px, 22vw, 220px) repeat(${cols}, minmax(160px, 1fr))` }}
       >
         {/* Row label column spacer */}
         <div className="text-[11px] uppercase tracking-[0.12em] text-muted-foreground self-end pl-1 pb-1">

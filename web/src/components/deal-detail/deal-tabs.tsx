@@ -67,11 +67,16 @@ export function DealTabs({
 
   return (
     <Tabs value={active} onValueChange={onValueChange} className="w-full">
-      <TabsList>
+      <TabsList className="overflow-x-auto w-full">
         {TABS.map((t) => (
-          <TabsTrigger key={t.key} value={t.key} indicatorId="deal-tabs-underline">
+          <TabsTrigger
+            key={t.key}
+            value={t.key}
+            indicatorId="deal-tabs-underline"
+            className="shrink-0"
+          >
             <t.icon className="h-3.5 w-3.5" />
-            {t.label}
+            <span className="hidden sm:inline">{t.label}</span>
           </TabsTrigger>
         ))}
       </TabsList>

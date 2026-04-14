@@ -77,7 +77,13 @@ export function DealHero({ deal }: { deal: DealDetail }) {
 
           {/* Score + actions */}
           <div className="flex flex-col items-center lg:items-end gap-4">
-            <BigScoreRing value={deal.overall_score} size={128} />
+            {/* 96px ring on phones, 128px on tablet+ */}
+            <div className="sm:hidden">
+              <BigScoreRing value={deal.overall_score} size={96} />
+            </div>
+            <div className="hidden sm:block">
+              <BigScoreRing value={deal.overall_score} size={128} />
+            </div>
             <div className="flex items-center gap-2">
               <Button size="sm" variant="secondary">
                 <Sparkles className="h-4 w-4" />

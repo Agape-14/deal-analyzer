@@ -28,6 +28,10 @@ import {
   Satellite,
   Map as MapIcon,
   Moon,
+  Crosshair,
+  Maximize2,
+  Check,
+  X as CloseIcon,
 } from "lucide-react";
 import { toast } from "sonner";
 import { motion, AnimatePresence } from "framer-motion";
@@ -159,6 +163,10 @@ export function LocationTab({
     new Set(["apartments", "transit", "grocery"]),
   );
   const [selected, setSelected] = React.useState<Poi | null>(null);
+  // Click-to-pin mode: when true, the next map click becomes the new
+  // property location (via POST /location/manual). Used when Nominatim
+  // doesn't nail the exact parcel.
+  const [pinMode, setPinMode] = React.useState(false);
 
   // Initial fetch
   React.useEffect(() => {
@@ -220,17 +228,80 @@ export function LocationTab({
     });
   }
 
+  /**
+   * Handle a map click while in pin-drop mode: POST the new coords,
+   * exit pin mode, and re-query POIs centered on the new point.
+   */
+  async function handlePinDrop(e: { lngLat: { lng: number; lat: number } }) {
+    if (!pinMode) return;
+    const { lat: newLat, lng: newLng } = e.lngLat;
+    setPinMode(false);
+    try {
+      await api.post(`/api/deals/${dealId}/location/manual`, {
+        lat: newLat,
+        lng: newLng,
+      });
+      toast.success("Location updated", {
+        description: `Pinned at ${newLat.toFixed(5)}, ${newLng.toFixed(5)}.`,
+      });
+      await refetch(true);
+    } catch (err) {
+      toast.error("Couldn't save location", {
+        description: (err as { detail?: string })?.detail,
+      });
+    }
+  }
+
+  /**
+   * Fit the map viewport to include the primary marker + every visible
+   * POI. Falls back to a reasonable zoom if there's nothing to fit to.
+   */
+  function fitToMarkers() {
+    const map = mapRef.current;
+    if (!map || !hasCoords) return;
+
+    const pts: Array<[number, number]> = [[lng, lat]];
+    for (const c of enabled) {
+      for (const p of bundle?.categories?.[c] ?? []) {
+        pts.push([p.lng, p.lat]);
+      }
+    }
+    if (pts.length < 2) {
+      map.easeTo({ center: [lng, lat], zoom: 14, duration: 600 });
+      return;
+    }
+
+    const lons = pts.map((p) => p[0]);
+    const lats = pts.map((p) => p[1]);
+    map.fitBounds(
+      [
+        [Math.min(...lons), Math.min(...lats)],
+        [Math.max(...lons), Math.max(...lats)],
+      ],
+      { padding: { top: 80, bottom: 40, left: 40, right: 40 }, duration: 700, maxZoom: 16 },
+    );
+  }
+
+  // If the bundle changes and we still have no POIs in any category, auto-widen
+  // the radius once on behalf of the user. Saves the "why is this map empty?"
+  // moment on suburban deals.
+  const autoWidenedRef = React.useRef(false);
+  React.useEffect(() => {
+    if (!bundle || autoWidenedRef.current) return;
+    const anyPois = Object.values(bundle.categories ?? {}).some((v) => (v?.length ?? 0) > 0);
+    if (!anyPois && radiusM < 3219 && hasCoords) {
+      autoWidenedRef.current = true;
+      toast.message("No POIs at 1mi — widening to 2mi.");
+      setRadiusM(3219);
+    }
+  }, [bundle, radiusM, hasCoords]);
+
   return (
-    <div className="grid grid-cols-1 lg:grid-cols-[1fr_320px] gap-4 h-[calc(100vh-280px)] min-h-[600px]">
+    <div className="grid grid-cols-1 lg:grid-cols-[1fr_320px] gap-4 lg:h-[calc(100vh-280px)] lg:min-h-[600px]">
       {/* ============== MAP ============== */}
-      <Card elevated className="p-0 overflow-hidden relative">
+      <Card elevated className="p-0 overflow-hidden relative h-[60vh] lg:h-auto min-h-[400px]">
         {loading && !bundle ? (
-          <div className="h-full grid place-items-center text-sm text-muted-foreground">
-            <div className="flex items-center gap-2">
-              <Loader2 className="h-4 w-4 animate-spin" />
-              Loading map data…
-            </div>
-          </div>
+          <LoadingProgress />
         ) : !hasCoords ? (
           <GeocodeFailure bundle={bundle} onManual={() => toast.info("Open the side panel to manually set coordinates")} />
         ) : (
@@ -241,6 +312,8 @@ export function LocationTab({
               mapStyle={STYLES[styleKey].spec}
               attributionControl={true}
               style={{ width: "100%", height: "100%" }}
+              cursor={pinMode ? "crosshair" : undefined}
+              onClick={pinMode ? handlePinDrop : undefined}
             >
               <NavigationControl position="top-right" showCompass={false} />
 
@@ -354,13 +427,42 @@ export function LocationTab({
               </div>
             </div>
 
-            {/* Refresh pill top-right */}
-            <div className="absolute top-3 right-14">
+            {/* Map action pills, top-right */}
+            <div className="absolute top-3 right-14 flex items-center gap-2">
+              <Button size="sm" variant="secondary" onClick={fitToMarkers} title="Fit view to all visible markers">
+                <Maximize2 className="h-3.5 w-3.5" />
+                <span className="hidden sm:inline">Fit view</span>
+              </Button>
+              <Button
+                size="sm"
+                variant={pinMode ? "default" : "secondary"}
+                onClick={() => setPinMode((p) => !p)}
+                title={pinMode ? "Cancel pin mode" : "Click anywhere on the map to re-place the property"}
+              >
+                {pinMode ? <CloseIcon className="h-3.5 w-3.5" /> : <Crosshair className="h-3.5 w-3.5" />}
+                <span className="hidden sm:inline">{pinMode ? "Cancel" : "Re-pin"}</span>
+              </Button>
               <Button size="sm" variant="secondary" onClick={() => refetch(true)} disabled={refreshing}>
                 {refreshing ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />}
-                Refresh
+                <span className="hidden sm:inline">Refresh</span>
               </Button>
             </div>
+
+            {/* Pin-mode coach banner */}
+            {pinMode && (
+              <div className="absolute top-[68px] left-1/2 -translate-x-1/2 px-3 py-1.5 rounded-full bg-primary text-primary-foreground text-xs font-medium shadow-lg flex items-center gap-2 z-10">
+                <Crosshair className="h-3.5 w-3.5" />
+                Click on the map to pin this deal&apos;s exact location
+              </div>
+            )}
+
+            {/* Refresh overlay (shows while Overpass is fetching) */}
+            {refreshing && !pinMode && (
+              <div className="absolute bottom-3 left-3 px-3 py-1.5 rounded-full bg-background/90 backdrop-blur-md border border-border/80 text-xs flex items-center gap-2 shadow-lg">
+                <Loader2 className="h-3.5 w-3.5 animate-spin text-primary" />
+                Fetching nearby POIs from OpenStreetMap…
+              </div>
+            )}
           </>
         )}
       </Card>
@@ -601,6 +703,39 @@ function FmrRow({ label, value, highlight }: { label: string; value?: number | n
   );
 }
 
+function LoadingProgress() {
+  // Overpass queries can take 10-30s on cold cache. Show something
+  // informative (what we're fetching, which sources) instead of a bare spinner.
+  const [elapsed, setElapsed] = React.useState(0);
+  React.useEffect(() => {
+    const t = window.setInterval(() => setElapsed((x) => x + 1), 1000);
+    return () => window.clearInterval(t);
+  }, []);
+
+  const steps = [
+    { at: 0,  label: "Geocoding address…" },
+    { at: 3,  label: "Querying OpenStreetMap for nearby POIs…" },
+    { at: 15, label: "Checking HUD for rent context…" },
+    { at: 25, label: "Still working — Overpass can be slow on cold cache." },
+  ];
+  const active = [...steps].reverse().find((s) => elapsed >= s.at) ?? steps[0];
+
+  return (
+    <div className="h-full grid place-items-center">
+      <div className="text-center max-w-xs">
+        <div className="mx-auto mb-4 h-10 w-10 rounded-full bg-primary/10 ring-1 ring-primary/30 grid place-items-center">
+          <Loader2 className="h-5 w-5 animate-spin text-primary" />
+        </div>
+        <div className="text-sm font-medium mb-1">Loading location data</div>
+        <div className="text-xs text-muted-foreground leading-relaxed">{active.label}</div>
+        <div className="text-[10px] text-muted-foreground/70 mt-2 tabular-nums">
+          {elapsed}s · cached for 7 days after
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function GeocodeFailure({
   bundle,
   onManual,
@@ -619,17 +754,11 @@ function GeocodeFailure({
           {bundle?.error ||
             "Add a street address, city, and state to the deal — geocoding happens automatically."}
         </p>
-        <AnimatePresence>
-          <motion.div
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            className="text-[11px] text-muted-foreground mt-5"
-          >
-            Tip: Once you find the exact property on the map, use the &ldquo;Manual
-            place&rdquo; picker to pin it. Future refreshes will re-query from that
-            point.
-          </motion.div>
-        </AnimatePresence>
+        <div className="text-[11px] text-muted-foreground mt-5 leading-relaxed">
+          Once the map appears, click <strong>Re-pin</strong> in the top-right to
+          click-place the exact property location. Future refreshes will re-query
+          from that point.
+        </div>
       </div>
     </div>
   );
