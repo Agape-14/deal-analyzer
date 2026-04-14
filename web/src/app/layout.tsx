@@ -6,6 +6,7 @@ import { AppShell } from "@/components/app-shell";
 import { CommandPalette } from "@/components/command-palette";
 import { NewDealDrawer } from "@/components/new-deal-drawer";
 import { ThemeProvider, ThemeScript } from "@/components/theme-provider";
+import { HelpHotkey, FirstRunWelcome } from "@/components/help-overlay";
 import { Toaster } from "sonner";
 
 const inter = Inter({
@@ -48,6 +49,8 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
           <div aria-hidden className="pointer-events-none fixed inset-0 bg-radial-fade" />
           <AppShell>{children}</AppShell>
           <CommandPalette />
+          <HelpHotkey />
+          <FirstRunWelcome />
           <Suspense fallback={null}>
             <NewDealDrawer />
           </Suspense>
