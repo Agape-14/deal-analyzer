@@ -7,3 +7,4 @@ anthropic
 openpyxl
 python-multipart
 jinja2
+httpx

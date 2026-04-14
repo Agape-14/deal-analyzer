@@ -6,18 +6,20 @@ import httpx
 from datetime import date
 from anthropic import Anthropic
 
-BRAVE_API_KEY = "BSAcbrLXkJ1m6XeZSHufp4KvcbZZzMs"
 BRAVE_SEARCH_URL = "https://api.search.brave.com/res/v1/web/search"
-ANTHROPIC_MODEL = "claude-sonnet-4-20250514"
+ANTHROPIC_MODEL = "claude-sonnet-4-5"
 
 
 async def brave_search(query: str, count: int = 10) -> list[dict]:
     """Search Brave and return web results."""
+    brave_key = os.environ.get("BRAVE_API_KEY")
+    if not brave_key:
+        raise RuntimeError("BRAVE_API_KEY environment variable is not set")
     async with httpx.AsyncClient(timeout=15) as client:
         resp = await client.get(
             BRAVE_SEARCH_URL,
             params={"q": query, "count": count},
-            headers={"X-Subscription-Token": BRAVE_API_KEY, "Accept": "application/json"},
+            headers={"X-Subscription-Token": brave_key, "Accept": "application/json"},
         )
         resp.raise_for_status()
         data = resp.json()

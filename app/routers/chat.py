@@ -87,7 +87,7 @@ Answer questions about this deal accurately based on the documents and extracted
     try:
         client = anthropic.Anthropic(api_key=api_key)
         response = client.messages.create(
-            model="claude-sonnet-4-20250514",
+            model="claude-sonnet-4-5",
             max_tokens=2048,
             system=system_prompt,
             messages=messages,

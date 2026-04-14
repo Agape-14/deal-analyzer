@@ -278,7 +278,7 @@ async def extract_metrics_from_docs(doc_texts: list[dict], doc_paths: list[str] 
 
     client = anthropic.Anthropic(api_key=api_key)
     message = client.messages.create(
-        model="claude-sonnet-4-20250514",
+        model="claude-sonnet-4-5",
         max_tokens=8192,
         messages=[{"role": "user", "content": content_blocks}]
     )
