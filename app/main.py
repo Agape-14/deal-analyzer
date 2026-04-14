@@ -31,6 +31,17 @@ app.include_router(investments.router, prefix="/api/investments", tags=["investm
 app.include_router(reports.router, prefix="/api/reports", tags=["reports"])
 
 
+from fastapi.responses import RedirectResponse
+
+
 @app.get("/")
-async def index(request: Request):
+async def root_redirect():
+    """FastAPI now serves the legacy UI at /legacy. The new Next.js app (at
+    web/) is expected to sit in front in production. During local FastAPI-only
+    runs we redirect / → /legacy so the legacy UI is still reachable."""
+    return RedirectResponse(url="/legacy")
+
+
+@app.get("/legacy")
+async def legacy_index(request: Request):
     return templates.TemplateResponse(request, "index.html")

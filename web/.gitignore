@@ -1,0 +1,26 @@
+# Dependencies
+node_modules/
+/.pnp
+.pnp.*
+
+# Build output
+.next/
+out/
+build/
+dist/
+
+# Misc
+.DS_Store
+*.pem
+.vscode/
+
+# Env
+.env*.local
+.env
+
+# Generated
+src/lib/api-types.ts
+
+# TypeScript
+*.tsbuildinfo
+next-env.d.ts

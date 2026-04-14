@@ -1,0 +1,33 @@
+"use client";
+
+import * as React from "react";
+import { Search, Plus, Command } from "lucide-react";
+import { Button } from "@/components/ui/button";
+
+/**
+ * Minimal header. Search placeholder triggers command palette (⌘K).
+ * Using the native keyboard shortcut indicator keeps it feeling native.
+ */
+export function AppHeader() {
+  return (
+    <header className="sticky top-0 z-30 h-16 border-b border-border/60 bg-background/80 backdrop-blur-md">
+      <div className="h-full flex items-center gap-3 px-6">
+        <button
+          className="group flex items-center gap-2 h-9 px-3 rounded-md border border-border/80 bg-secondary/40 text-sm text-muted-foreground hover:text-foreground hover:bg-secondary/70 transition-colors w-72 md:w-80"
+          onClick={() => document.dispatchEvent(new CustomEvent("open-command-palette"))}
+        >
+          <Search className="h-4 w-4" />
+          <span className="flex-1 text-left">Search deals, developers…</span>
+          <kbd className="hidden sm:inline-flex items-center gap-0.5 text-[10px] font-mono text-muted-foreground border border-border/80 rounded px-1.5 py-0.5 bg-background/40">
+            <Command className="h-2.5 w-2.5" />K
+          </kbd>
+        </button>
+        <div className="flex-1" />
+        <Button variant="default" size="sm">
+          <Plus className="h-4 w-4" />
+          New Deal
+        </Button>
+      </div>
+    </header>
+  );
+}
