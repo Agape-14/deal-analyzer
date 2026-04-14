@@ -20,6 +20,15 @@ needs a public domain.
    - Variables to set:
      - `ANTHROPIC_API_KEY` — for AI scoring / chat.
      - `DB_DIR=/data` — where SQLite lives; see volume step.
+     - **Auth** (required for real deploy — without these the app is public):
+       - `AUTH_USERNAME=admin` (pick your login name)
+       - `AUTH_PASSWORD_HASH=<bcrypt>` — generate with
+         `python -m app.auth hash <your-password>` and paste the output.
+         Don't put the plain password in env — only the hash.
+       - `AUTH_SECRET=<random>` — `python -c 'import secrets; print(secrets.token_urlsafe(48))'`
+         Signs the session cookie. Must be 16+ chars. A restart with a
+         different secret logs everyone out.
+       - `AUTH_DISABLED=1` — set ONLY for local dev to turn auth off.
      - **(optional)** Model overrides — defaults are optimized for accuracy.
        Only set these if you want to tune cost / latency:
        - `MODEL_EXTRACT` (default `claude-opus-4-6`) — metric extraction

@@ -2,11 +2,9 @@ import type { Metadata, Viewport } from "next";
 import { Inter, JetBrains_Mono } from "next/font/google";
 import "./globals.css";
 import { Suspense } from "react";
-import { AppSidebar } from "@/components/app-sidebar";
-import { AppHeader } from "@/components/app-header";
+import { AppShell } from "@/components/app-shell";
 import { CommandPalette } from "@/components/command-palette";
 import { NewDealDrawer } from "@/components/new-deal-drawer";
-import { EnvironmentBanner } from "@/components/environment-banner";
 import { Toaster } from "sonner";
 
 const inter = Inter({
@@ -38,14 +36,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
       <body className="min-h-screen bg-background">
         {/* Subtle radial highlight behind the main content */}
         <div aria-hidden className="pointer-events-none fixed inset-0 bg-radial-fade" />
-        <div className="relative flex min-h-screen">
-          <AppSidebar />
-          <div className="flex-1 md:ml-60 flex flex-col min-w-0">
-            <AppHeader />
-            <EnvironmentBanner />
-            <main className="flex-1">{children}</main>
-          </div>
-        </div>
+        <AppShell>{children}</AppShell>
         <CommandPalette />
         <Suspense fallback={null}>
           <NewDealDrawer />

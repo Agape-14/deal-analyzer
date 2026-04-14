@@ -11,3 +11,5 @@ httpx
 pytesseract
 pillow
 reportlab
+itsdangerous
+bcrypt

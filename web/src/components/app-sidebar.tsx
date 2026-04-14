@@ -91,6 +91,42 @@ function LegacyLink({ onPick }: { onPick?: () => void }) {
   );
 }
 
+function UserMenu({ onPick }: { onPick?: () => void }) {
+  const [user, setUser] = React.useState<{ username?: string; authenticated: boolean } | null>(null);
+  React.useEffect(() => {
+    fetch("/api/auth/me")
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => setUser(d))
+      .catch(() => setUser(null));
+  }, []);
+
+  if (!user?.authenticated) return null;
+
+  async function signOut() {
+    try {
+      await fetch("/api/auth/logout", { method: "POST", credentials: "include" });
+    } catch {
+      /* ignore */
+    }
+    onPick?.();
+    window.location.href = "/login";
+  }
+
+  return (
+    <div className="flex items-center justify-between gap-2">
+      <div className="text-[11px] text-muted-foreground truncate">
+        Signed in as <span className="text-foreground font-medium">{user.username || "user"}</span>
+      </div>
+      <button
+        onClick={signOut}
+        className="text-[11px] text-muted-foreground hover:text-destructive transition-colors"
+      >
+        Sign out
+      </button>
+    </div>
+  );
+}
+
 /** Desktop sidebar (md+). */
 export function AppSidebar() {
   return (
@@ -99,7 +135,8 @@ export function AppSidebar() {
       <nav className="flex-1 p-3">
         <NavList />
       </nav>
-      <div className="px-5 py-4 border-t border-border/60">
+      <div className="px-5 py-3 border-t border-border/60 space-y-2">
+        <UserMenu />
         <LegacyLink />
       </div>
     </aside>
@@ -174,7 +211,8 @@ export function MobileNav() {
               <nav className="flex-1 p-3">
                 <NavList onPick={() => setOpen(false)} />
               </nav>
-              <div className="px-5 py-4 border-t border-border/60">
+              <div className="px-5 py-3 border-t border-border/60 space-y-2">
+                <UserMenu onPick={() => setOpen(false)} />
                 <LegacyLink onPick={() => setOpen(false)} />
               </div>
             </motion.aside>
