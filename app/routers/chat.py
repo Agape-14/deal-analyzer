@@ -21,7 +21,10 @@ async def chat_with_deal(data: ChatMessage, db: AsyncSession = Depends(get_db)):
     """Chat with AI about a specific deal."""
     api_key = os.environ.get("ANTHROPIC_API_KEY")
     if not api_key:
-        raise HTTPException(status_code=500, detail="ANTHROPIC_API_KEY not set")
+        raise HTTPException(
+            status_code=503,
+            detail="AI chat is unavailable: ANTHROPIC_API_KEY is not configured on the server.",
+        )
 
     # Get deal with docs
     result = await db.execute(

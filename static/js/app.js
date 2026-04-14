@@ -12,6 +12,7 @@ let allDevelopers = [];
 let allInvestments = [];
 let currentDealId = null;
 let currentInvestmentId = null;
+let currentDeveloperId = null;
 let selectedCompareIds = new Set();
 
 // ===== Init =====
@@ -1943,21 +1944,154 @@ async function createDeveloper() {
 }
 
 async function viewDeveloper(id) {
-  // For now, just show an alert with developer info
-  // TODO: Full developer detail page
+  currentDeveloperId = id;
   try {
     const dev = await api(`${API.developers}/${id}`);
-    let msg = `${dev.name}\n`;
-    if (dev.contact_name) msg += `Contact: ${dev.contact_name}\n`;
-    if (dev.contact_email) msg += `Email: ${dev.contact_email}\n`;
-    if (dev.phone) msg += `Phone: ${dev.phone}\n`;
-    if (dev.track_record) msg += `\nTrack Record:\n${dev.track_record}\n`;
-    if (dev.deals?.length) {
-      msg += `\nDeals (${dev.deals.length}):\n`;
-      dev.deals.forEach(d => { msg += `  • ${d.project_name} (${d.status})\n`; });
-    }
-    alert(msg);
+    document.getElementById('dev-detail-title').textContent = dev.name || 'Developer';
+    renderDeveloperDetail(dev);
+    showPage('developer-detail');
   } catch (e) { console.error(e); }
+}
+
+function renderDeveloperDetail(dev) {
+  const el = document.getElementById('dev-detail-content');
+  const deals = dev.deals || [];
+  const joined = dev.created_at ? new Date(dev.created_at).toLocaleDateString() : '—';
+
+  function row(label, val) {
+    return `<div class="metric-row"><span class="metric-label">${label}</span><span class="metric-value">${val}</span></div>`;
+  }
+
+  // Summary stats
+  const scored = deals.filter(d => (d.scores || {}).overall != null);
+  const avgScore = scored.length
+    ? (scored.reduce((a, d) => a + d.scores.overall, 0) / scored.length).toFixed(1)
+    : '—';
+  const reviewing = deals.filter(d => d.status === 'reviewing').length;
+  const committed = deals.filter(d => d.status === 'committed' || d.status === 'closed').length;
+
+  // Contact card
+  const contactCard = `
+    <div class="metrics-section">
+      <div class="metrics-section-title">Contact</div>
+      <div class="metrics-grid">
+        ${row('Contact Name', esc(dev.contact_name || '—'))}
+        ${row('Email', dev.contact_email ? `<a href="mailto:${esc(dev.contact_email)}">${esc(dev.contact_email)}</a>` : '—')}
+        ${row('Phone', dev.phone ? `<a href="tel:${esc(dev.phone)}">${esc(dev.phone)}</a>` : '—')}
+        ${row('Joined', joined)}
+      </div>
+    </div>
+  `;
+
+  // Summary stats cards
+  const statsCard = `
+    <div class="stats-grid mb-3">
+      <div class="stat-card"><div class="stat-label">Total Deals</div><div class="stat-value">${deals.length}</div></div>
+      <div class="stat-card"><div class="stat-label">Avg Score</div><div class="stat-value">${avgScore}</div></div>
+      <div class="stat-card"><div class="stat-label">Reviewing</div><div class="stat-value">${reviewing}</div></div>
+      <div class="stat-card"><div class="stat-label">Committed / Closed</div><div class="stat-value">${committed}</div></div>
+    </div>
+  `;
+
+  // Track record
+  const trackCard = dev.track_record ? `
+    <div class="metrics-section">
+      <div class="metrics-section-title">Track Record</div>
+      <p style="padding:8px 12px;font-size:13px;white-space:pre-wrap;line-height:1.5;">${esc(dev.track_record)}</p>
+    </div>
+  ` : '';
+
+  // Notes
+  const notesCard = dev.notes ? `
+    <div class="metrics-section">
+      <div class="metrics-section-title">Notes</div>
+      <p style="padding:8px 12px;font-size:13px;white-space:pre-wrap;line-height:1.5;">${esc(dev.notes)}</p>
+    </div>
+  ` : '';
+
+  // Deals table
+  const dealsCard = `
+    <div class="metrics-section">
+      <div class="metrics-section-title">Deals (${deals.length})</div>
+      ${deals.length ? `
+        <table class="dist-table">
+          <thead><tr><th>Project</th><th>Type</th><th>Status</th><th>Score</th><th></th></tr></thead>
+          <tbody>
+            ${deals.map(d => {
+              const score = (d.scores || {}).overall;
+              const scoreDisplay = score != null
+                ? `<span style="color:${scoreColor(score)};font-weight:600;">${score.toFixed(1)}</span>`
+                : '—';
+              return `
+                <tr style="cursor:pointer;" onclick="openDeal(${d.id})">
+                  <td><strong>${esc(d.project_name)}</strong></td>
+                  <td>${esc(d.property_type || '—')}</td>
+                  <td><span class="${statusClass(d.status)}">${esc(d.status || 'reviewing')}</span></td>
+                  <td>${scoreDisplay}</td>
+                  <td><button class="btn btn-secondary btn-sm" onclick="event.stopPropagation();openDeal(${d.id})">Open</button></td>
+                </tr>
+              `;
+            }).join('')}
+          </tbody>
+        </table>
+      ` : '<p style="padding:12px;color:var(--text-muted);font-size:13px;">No deals tracked for this developer yet.</p>'}
+    </div>
+  `;
+
+  el.innerHTML = statsCard + contactCard + trackCard + notesCard + dealsCard;
+}
+
+function openEditDevModal() {
+  if (!currentDeveloperId) return;
+  const dev = allDevelopers.find(d => d.id === currentDeveloperId) || {};
+  document.getElementById('edit-dev-name').value = dev.name || '';
+  document.getElementById('edit-dev-contact').value = dev.contact_name || '';
+  document.getElementById('edit-dev-email').value = dev.contact_email || '';
+  document.getElementById('edit-dev-phone').value = dev.phone || '';
+  document.getElementById('edit-dev-track').value = dev.track_record || '';
+  document.getElementById('edit-dev-notes').value = dev.notes || '';
+  openModal('modal-edit-dev');
+}
+
+async function saveDeveloperEdit() {
+  if (!currentDeveloperId) return;
+  const name = document.getElementById('edit-dev-name').value.trim();
+  if (!name) { toast('Company name required', 'error'); return; }
+
+  const data = {
+    name,
+    contact_name: document.getElementById('edit-dev-contact').value,
+    contact_email: document.getElementById('edit-dev-email').value,
+    phone: document.getElementById('edit-dev-phone').value,
+    track_record: document.getElementById('edit-dev-track').value,
+    notes: document.getElementById('edit-dev-notes').value,
+  };
+
+  try {
+    await api(`${API.developers}/${currentDeveloperId}`, 'PUT', data);
+    closeModal('modal-edit-dev');
+    toast('Developer updated', 'success');
+    // Refresh cached list and detail view
+    allDevelopers = await api(API.developers);
+    viewDeveloper(currentDeveloperId);
+  } catch (e) { toast('Error: ' + e.message, 'error'); }
+}
+
+async function deleteDeveloper() {
+  if (!currentDeveloperId) return;
+  const dev = allDevelopers.find(d => d.id === currentDeveloperId) || {};
+  const dealCount = dev.deal_count || 0;
+  const msg = dealCount > 0
+    ? `Delete "${dev.name}"? This will also delete ${dealCount} associated deal${dealCount > 1 ? 's' : ''} and cannot be undone.`
+    : `Delete "${dev.name}"? This cannot be undone.`;
+  if (!confirm(msg)) return;
+
+  try {
+    await api(`${API.developers}/${currentDeveloperId}`, 'DELETE');
+    toast('Developer deleted', 'info');
+    currentDeveloperId = null;
+    showPage('developers');
+  } catch (e) { toast('Error: ' + e.message, 'error'); }
 }
 
 // Mobile sidebar toggle

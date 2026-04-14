@@ -291,7 +291,9 @@ async def extract_deal_metrics(deal_id: int, db: AsyncSession = Depends(get_db))
     try:
         metrics = await extract_metrics_from_docs(doc_texts, doc_paths=doc_paths)
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"AI extraction failed: {str(e)}")
+        msg = str(e)
+        status = 503 if "ANTHROPIC_API_KEY" in msg else 500
+        raise HTTPException(status_code=status, detail=f"AI extraction failed: {msg}")
 
     # Run validation checks
     validation_flags = validate_deal_metrics(metrics)
@@ -376,7 +378,9 @@ async def verify_deal_endpoint(deal_id: int, auto_correct: bool = True, db: Asyn
     try:
         verification = await verify_deal_metrics(deal, db)
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Verification failed: {str(e)}")
+        msg = str(e)
+        status = 503 if "ANTHROPIC_API_KEY" in msg else 500
+        raise HTTPException(status_code=status, detail=f"Verification failed: {msg}")
 
     changes = []
     if auto_correct:
@@ -456,7 +460,9 @@ async def market_research(deal_id: int, db: AsyncSession = Depends(get_db)):
     try:
         market_data = await fetch_market_data(city, state)
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Market research failed: {str(e)}")
+        msg = str(e)
+        status = 503 if ("ANTHROPIC_API_KEY" in msg or "BRAVE_API_KEY" in msg) else 500
+        raise HTTPException(status_code=status, detail=f"Market research failed: {msg}")
 
     # Save to deal metrics
     metrics = deal.metrics.copy() if deal.metrics else {}

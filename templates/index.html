@@ -210,6 +210,23 @@
         </div>
       </div>
 
+      <!-- ===== DEVELOPER DETAIL PAGE ===== -->
+      <div class="view-page" id="page-developer-detail">
+        <div class="content-header">
+          <div class="flex-center gap-2">
+            <button class="btn-icon" onclick="showPage('developers')" title="Back">←</button>
+            <h2 id="dev-detail-title">Developer</h2>
+          </div>
+          <div class="content-header-actions">
+            <button class="btn btn-secondary btn-sm" onclick="openEditDevModal()">Edit</button>
+            <button class="btn btn-danger btn-sm" onclick="deleteDeveloper()">Delete</button>
+          </div>
+        </div>
+        <div class="content-body">
+          <div id="dev-detail-content"></div>
+        </div>
+      </div>
+
       <!-- ===== PORTFOLIO PAGE ===== -->
       <div class="view-page" id="page-portfolio">
         <div class="content-header">
@@ -483,6 +500,48 @@
       <div class="modal-footer">
         <button class="btn btn-secondary" onclick="closeModal('modal-add-dev')">Cancel</button>
         <button class="btn btn-primary" onclick="createDeveloper()">Add Developer</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ===== EDIT DEVELOPER MODAL ===== -->
+  <div class="modal-overlay" id="modal-edit-dev">
+    <div class="modal">
+      <div class="modal-header">
+        <h3>Edit Developer</h3>
+        <button class="modal-close" onclick="closeModal('modal-edit-dev')">×</button>
+      </div>
+      <div class="modal-body">
+        <div class="form-group">
+          <label>Company Name *</label>
+          <input type="text" class="form-input" id="edit-dev-name">
+        </div>
+        <div class="form-row">
+          <div class="form-group">
+            <label>Contact Name</label>
+            <input type="text" class="form-input" id="edit-dev-contact">
+          </div>
+          <div class="form-group">
+            <label>Phone</label>
+            <input type="text" class="form-input" id="edit-dev-phone">
+          </div>
+        </div>
+        <div class="form-group">
+          <label>Email</label>
+          <input type="text" class="form-input" id="edit-dev-email">
+        </div>
+        <div class="form-group">
+          <label>Track Record</label>
+          <textarea class="form-input" id="edit-dev-track" placeholder="Previous projects, AUM, years in business..."></textarea>
+        </div>
+        <div class="form-group">
+          <label>Notes</label>
+          <textarea class="form-input" id="edit-dev-notes"></textarea>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-secondary" onclick="closeModal('modal-edit-dev')">Cancel</button>
+        <button class="btn btn-primary" onclick="saveDeveloperEdit()">Save Changes</button>
       </div>
     </div>
   </div>
