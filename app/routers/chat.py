@@ -7,6 +7,7 @@ from sqlalchemy.orm import selectinload
 from pydantic import BaseModel
 from app.database import get_db
 from app.models import Deal, DealChat, DealDocument
+from app.config import MODEL_CHAT
 
 router = APIRouter()
 
@@ -90,7 +91,7 @@ Answer questions about this deal accurately based on the documents and extracted
     try:
         client = anthropic.Anthropic(api_key=api_key)
         response = client.messages.create(
-            model="claude-sonnet-4-5",
+            model=MODEL_CHAT,
             max_tokens=2048,
             system=system_prompt,
             messages=messages,

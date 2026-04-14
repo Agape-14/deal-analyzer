@@ -4,6 +4,8 @@ import json
 import base64
 import anthropic
 
+from app.config import MODEL_EXTRACT
+
 EXTRACTION_PROMPT = """You are a real estate investment analyst specializing in LP due diligence for syndications. Extract ALL available metrics from the following deal documents.
 
 IMPORTANT: Brian Burke's "The Hands-Off Investor" emphasizes that LPs must distinguish between GROSS returns (project-level, before fees) and NET returns (to investor, after all fees and promote). Always try to identify BOTH. If only one is stated, note which one it is.
@@ -278,7 +280,7 @@ async def extract_metrics_from_docs(doc_texts: list[dict], doc_paths: list[str] 
 
     client = anthropic.Anthropic(api_key=api_key)
     message = client.messages.create(
-        model="claude-sonnet-4-5",
+        model=MODEL_EXTRACT,
         max_tokens=8192,
         messages=[{"role": "user", "content": content_blocks}]
     )

@@ -15,6 +15,8 @@ import base64
 import anthropic
 import fitz  # PyMuPDF
 
+from app.config import MODEL_VERIFY
+
 
 VERIFY_PROMPT = """You are a forensic real estate investment auditor. Your job is to VERIFY extracted data against source documents.
 
@@ -172,7 +174,7 @@ async def verify_deal_metrics(deal, db) -> dict:
     
     client = anthropic.Anthropic(api_key=api_key)
     message = client.messages.create(
-        model="claude-sonnet-4-5",
+        model=MODEL_VERIFY,
         max_tokens=8192,
         messages=[{"role": "user", "content": content_blocks}]
     )

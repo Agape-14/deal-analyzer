@@ -6,8 +6,10 @@ import httpx
 from datetime import date
 from anthropic import Anthropic
 
+from app.config import MODEL_MARKET
+
 BRAVE_SEARCH_URL = "https://api.search.brave.com/res/v1/web/search"
-ANTHROPIC_MODEL = "claude-sonnet-4-5"
+ANTHROPIC_MODEL = MODEL_MARKET
 
 
 async def brave_search(query: str, count: int = 10) -> list[dict]:

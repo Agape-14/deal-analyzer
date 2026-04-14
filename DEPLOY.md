@@ -20,6 +20,14 @@ needs a public domain.
    - Variables to set:
      - `ANTHROPIC_API_KEY` — for AI scoring / chat.
      - `DB_DIR=/data` — where SQLite lives; see volume step.
+     - **(optional)** Model overrides — defaults are optimized for accuracy.
+       Only set these if you want to tune cost / latency:
+       - `MODEL_EXTRACT` (default `claude-opus-4-6`) — metric extraction
+       - `MODEL_VERIFY` (default `claude-opus-4-6`) — forensic verification
+       - `MODEL_MARKET` (default `claude-sonnet-4-6`) — market research synthesis
+       - `MODEL_CHAT` (default `claude-sonnet-4-6`) — analyst chat panel
+       - For a cheap / fast chat, set `MODEL_CHAT=claude-haiku-4-5-20251001`.
+       `GET /api/healthz` returns the live assignment so you can confirm.
    - Volumes: attach a Railway Volume at mount path **`/data`** so the
      SQLite file survives redeploys. (When you later move to Postgres,
      set `DATABASE_URL` and the volume becomes unused.)

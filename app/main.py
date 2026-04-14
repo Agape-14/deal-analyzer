@@ -10,6 +10,7 @@ from fastapi.requests import Request
 from contextlib import asynccontextmanager
 from app.database import init_db
 from app.routers import developers, deals, chat, investments, reports
+from app.config import describe_models
 
 
 @asynccontextmanager
@@ -33,8 +34,13 @@ app.include_router(reports.router, prefix="/api/reports", tags=["reports"])
 
 @app.get("/api/healthz")
 async def healthz():
-    """Liveness probe for Railway + load balancers."""
-    return {"status": "ok"}
+    """Liveness probe for Railway + load balancers.
+
+    Also reports the active Anthropic model for each feature so an operator
+    can confirm at a glance which models are actually wired up in prod
+    (helpful after env-var overrides or dependency swaps).
+    """
+    return {"status": "ok", "models": describe_models()}
 
 
 from fastapi.responses import RedirectResponse
