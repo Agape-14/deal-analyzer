@@ -1652,6 +1652,39 @@ select.form-input {
   margin-top: 4px;
 }
 
+/* ===== Portfolio analytics (charts) ===== */
+.analytics-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  gap: 14px;
+  margin-bottom: 20px;
+}
+.analytics-card {
+  background: var(--card-bg, #fff);
+  border: 1px solid var(--border, #e2e8f0);
+  border-radius: var(--radius, 6px);
+  padding: 14px 16px;
+  min-width: 0; /* allow flex children to shrink so canvases resize correctly */
+}
+.analytics-card-title {
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-muted, #94a3b8);
+  margin-bottom: 10px;
+}
+.chart-container {
+  position: relative;
+  height: 220px;
+  width: 100%;
+}
+@media (max-width: 600px) {
+  .analytics-grid { grid-template-columns: 1fr; }
+  .chart-container { height: 200px; }
+}
+
+
 /* Investment cards */
 .investments-grid {
   display: grid;

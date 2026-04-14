@@ -6,6 +6,7 @@
   <title>Kenyon Investment Dashboard</title>
   <link rel="stylesheet" href="/static/css/style.css">
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📊</text></svg>">
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
 </head>
 <body>
   <div class="mobile-menu-btn" onclick="toggleMobileSidebar()">☰</div>
@@ -116,6 +117,7 @@
               <option value="committed">Committed</option>
               <option value="closed">Closed</option>
             </select>
+            <button class="btn btn-secondary btn-sm" onclick="exportDealPdf()" title="Download deal summary PDF">⬇️ PDF</button>
             <button class="btn btn-danger btn-sm" onclick="deleteDeal()">Delete</button>
           </div>
         </div>
@@ -232,12 +234,18 @@
         <div class="content-header">
           <h2>Portfolio</h2>
           <div class="content-header-actions">
+            <button class="btn btn-secondary btn-sm" onclick="exportPortfolioExcel()" title="Export all investments & distributions to Excel">⬇️ Excel</button>
+            <button class="btn btn-secondary btn-sm" onclick="exportQuarterlyPdf()" title="Quarterly performance PDF report">⬇️ Quarterly PDF</button>
+            <button class="btn btn-secondary btn-sm" onclick="exportBulkData('json')" title="Bulk JSON export of everything">⬇️ JSON</button>
             <button class="btn btn-primary" onclick="openAddInvestmentModal()">+ New Investment</button>
           </div>
         </div>
         <div class="content-body">
           <!-- Portfolio Summary Cards -->
           <div class="portfolio-summary" id="portfolio-summary"></div>
+
+          <!-- Analytics -->
+          <div id="portfolio-analytics"></div>
 
           <!-- Investments List -->
           <div id="investments-list"></div>

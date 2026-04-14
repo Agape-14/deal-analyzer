@@ -8,6 +8,10 @@ from typing import Optional
 from datetime import date
 from app.database import get_db
 from app.models import Investment, Distribution, Deal
+from app.services.portfolio_analytics import (
+    investment_performance,
+    portfolio_analytics,
+)
 
 router = APIRouter()
 
@@ -110,6 +114,31 @@ async def portfolio_summary(db: AsyncSession = Depends(get_db)):
         "exited_investments": exited_count,
         "total_investments": len(investments),
     }
+
+
+@router.get("/portfolio/analytics")
+async def portfolio_analytics_endpoint(db: AsyncSession = Depends(get_db)):
+    """Portfolio-wide analytics: IRR, multiples, timeseries, concentration."""
+    result = await db.execute(
+        select(Investment).options(selectinload(Investment.distributions))
+    )
+    return portfolio_analytics(result.scalars().all())
+
+
+@router.get("/{investment_id}/performance")
+async def investment_performance_endpoint(
+    investment_id: int, db: AsyncSession = Depends(get_db)
+):
+    """Performance metrics & cashflow timeseries for a single investment."""
+    result = await db.execute(
+        select(Investment)
+        .options(selectinload(Investment.distributions))
+        .where(Investment.id == investment_id)
+    )
+    inv = result.scalar_one_or_none()
+    if not inv:
+        raise HTTPException(status_code=404, detail="Investment not found")
+    return investment_performance(inv)
 
 
 @router.post("/")

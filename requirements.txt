@@ -8,3 +8,6 @@ openpyxl
 python-multipart
 jinja2
 httpx
+pytesseract
+pillow
+reportlab

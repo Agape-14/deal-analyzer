@@ -1485,11 +1485,12 @@ function renderDocumentsTab(deal) {
           <span class="doc-item-icon">📄</span>
           <div class="doc-item-info">
             <div class="doc-item-name">${esc(d.filename)}</div>
-            <div class="doc-item-meta">${d.doc_type} · ${d.page_count} pages · ${d.has_text ? '✓ Text extracted' : 'No text'}</div>
+            <div class="doc-item-meta">${d.doc_type} · ${d.page_count} pages · ${d.has_text ? '✓ Text extracted' : '⚠️ No text'}</div>
           </div>
           <div class="doc-item-actions">
-            <button class="btn btn-ghost btn-sm" onclick="viewDocText(${d.id})">View</button>
-            <button class="btn btn-ghost btn-sm" onclick="deleteDoc(${d.id})" style="color:var(--red);">×</button>
+            <button class="btn btn-ghost btn-sm" onclick="viewDocText(${d.id})" title="View extracted text">View</button>
+            <button class="btn btn-ghost btn-sm" onclick="reprocessDoc(${d.id})" title="Re-run text extraction (OCR + tables)">↻</button>
+            <button class="btn btn-ghost btn-sm" onclick="deleteDoc(${d.id})" style="color:var(--red);" title="Delete document">×</button>
           </div>
         </div>
       `).join('') : '<p class="text-muted text-sm" style="padding:8px;">No documents uploaded yet</p>'}
@@ -1534,19 +1535,31 @@ async function uploadMultipleFiles(files) {
 
   showAnalysisOverlay(`Uploading ${files.length} document${files.length > 1 ? 's' : ''}...`, 'Preparing files...', 5);
   try {
+    const extractionStats = { pages: 0, ocr: 0, tables: 0, images: 0 };
     for (let i = 0; i < files.length; i++) {
       showAnalysisOverlay(`Uploading ${i + 1} of ${files.length}...`, files[i].name, 5 + (i / files.length) * 15);
       const formData = new FormData();
       formData.append('file', files[i]);
       formData.append('doc_type', docType);
-      await fetch(`${API.deals}/${currentDealId}/documents/upload`, {
+      const result = await fetch(`${API.deals}/${currentDealId}/documents/upload`, {
         method: 'POST',
         body: formData,
       }).then(r => {
         if (!r.ok) throw new Error(`Upload failed: ${files[i].name}`);
         return r.json();
       });
+      extractionStats.pages += result.page_count || 0;
+      extractionStats.ocr += result.extraction?.ocr_pages || 0;
+      extractionStats.tables += result.extraction?.tables || 0;
+      extractionStats.images += result.extraction?.images || 0;
     }
+
+    // Summarize extraction for the user
+    const parts = [`${extractionStats.pages} pages`];
+    if (extractionStats.ocr) parts.push(`${extractionStats.ocr} OCR'd`);
+    if (extractionStats.tables) parts.push(`${extractionStats.tables} tables`);
+    if (extractionStats.images) parts.push(`${extractionStats.images} images`);
+    toast('Extracted: ' + parts.join(' · '), 'info');
 
     // Auto-run full pipeline: Extract → Verify → Score
     try {
@@ -1579,6 +1592,19 @@ async function deleteDoc(docId) {
   await api(`${API.deals}/documents/${docId}`, { method: 'DELETE' });
   toast('Document deleted', 'success');
   openDeal(currentDealId);
+}
+
+async function reprocessDoc(docId) {
+  try {
+    const result = await api(`${API.deals}/documents/${docId}/reprocess`, 'POST');
+    const delta = result.delta || 0;
+    const parts = [`${result.page_count} pages`];
+    if (result.ocr_pages) parts.push(`${result.ocr_pages} OCR'd`);
+    if (result.tables) parts.push(`${result.tables} tables`);
+    const sign = delta >= 0 ? '+' : '';
+    toast(`Reprocessed: ${parts.join(', ')} (${sign}${delta.toLocaleString()} chars)`, 'success');
+    openDeal(currentDealId);
+  } catch (e) { toast('Reprocess failed: ' + (e.message || e), 'error'); }
 }
 
 async function viewDocText(docId) {
@@ -1867,17 +1893,66 @@ async function exportComparison() {
       body: JSON.stringify({ deal_ids: ids }),
     });
     if (!res.ok) throw new Error('Export failed');
-    const blob = await res.blob();
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = 'deal_comparison.xlsx';
-    a.click();
-    URL.revokeObjectURL(url);
+    await _downloadResponse(res, 'deal_comparison.xlsx');
     toast('Excel exported', 'success');
   } catch (e) {
     toast('Export failed', 'error');
   }
+}
+
+// ===== Reports =====
+async function _downloadResponse(res, defaultName) {
+  if (!res.ok) {
+    let detail = res.statusText;
+    try { const j = await res.json(); detail = j.detail || detail; } catch (e) {}
+    throw new Error(detail);
+  }
+  // Prefer filename from Content-Disposition when present.
+  let filename = defaultName;
+  const cd = res.headers.get('Content-Disposition') || '';
+  const m = cd.match(/filename="?([^"]+)"?/i);
+  if (m) filename = m[1];
+  const blob = await res.blob();
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+async function exportDealPdf() {
+  if (!currentDealId) return;
+  try {
+    const res = await fetch(`/api/reports/deal/${currentDealId}/pdf`);
+    await _downloadResponse(res, `deal_${currentDealId}.pdf`);
+    toast('Deal PDF exported', 'success');
+  } catch (e) { toast('Export failed: ' + e.message, 'error'); }
+}
+
+async function exportPortfolioExcel() {
+  try {
+    const res = await fetch('/api/reports/portfolio/excel');
+    await _downloadResponse(res, 'portfolio.xlsx');
+    toast('Portfolio Excel exported', 'success');
+  } catch (e) { toast('Export failed: ' + e.message, 'error'); }
+}
+
+async function exportQuarterlyPdf() {
+  try {
+    const res = await fetch('/api/reports/portfolio/quarterly/pdf');
+    await _downloadResponse(res, 'quarterly.pdf');
+    toast('Quarterly PDF exported', 'success');
+  } catch (e) { toast('Export failed: ' + e.message, 'error'); }
+}
+
+async function exportBulkData(format) {
+  const fmt = format === 'csv' ? 'csv' : 'json';
+  try {
+    const res = await fetch(`/api/reports/export/${fmt}`);
+    await _downloadResponse(res, `export.${fmt === 'csv' ? 'zip' : 'json'}`);
+    toast(`${fmt.toUpperCase()} export downloaded`, 'success');
+  } catch (e) { toast('Export failed: ' + e.message, 'error'); }
 }
 
 // ===== Developers =====
@@ -2109,22 +2184,31 @@ document.querySelectorAll('.nav-item').forEach(el => {
 
 // ===== Portfolio / Investments =====
 
+// Track active Chart.js instances so we can destroy them on re-render.
+let _portfolioCharts = [];
+
 async function loadPortfolio() {
   try {
-    const [investments, summary, deals] = await Promise.all([
+    const [investments, summary, analytics, deals] = await Promise.all([
       api(`${API.investments}/`),
       api(`${API.investments}/portfolio`),
+      api(`${API.investments}/portfolio/analytics`),
       api(API.deals),
     ]);
     allInvestments = investments;
     allDeals = deals;
-    renderPortfolioSummary(summary);
-    renderInvestmentsList(investments);
+    renderPortfolioSummary(summary, analytics);
+    renderPortfolioAnalytics(analytics);
+    renderInvestmentsList(investments, analytics);
   } catch (e) { console.error(e); }
 }
 
-function renderPortfolioSummary(s) {
+function renderPortfolioSummary(s, analytics) {
   const el = document.getElementById('portfolio-summary');
+  const irr = analytics?.summary?.overall_irr_pct;
+  const irrDisplay = irr != null ? irr.toFixed(1) + '%' : '—';
+  const irrColor = irr == null ? 'inherit' : irr >= 10 ? 'var(--green)' : irr >= 0 ? 'var(--yellow)' : 'var(--red)';
+
   el.innerHTML = `
     <div class="portfolio-cards">
       <div class="portfolio-card">
@@ -2144,6 +2228,10 @@ function renderPortfolioSummary(s) {
         <div class="portfolio-card-label">Multiple</div>
       </div>
       <div class="portfolio-card">
+        <div class="portfolio-card-value" style="color:${irrColor};">${irrDisplay}</div>
+        <div class="portfolio-card-label">Portfolio IRR</div>
+      </div>
+      <div class="portfolio-card">
         <div class="portfolio-card-value">${s.active_investments}</div>
         <div class="portfolio-card-label">Active</div>
       </div>
@@ -2155,7 +2243,113 @@ function renderPortfolioSummary(s) {
   `;
 }
 
-function renderInvestmentsList(investments) {
+function _destroyPortfolioCharts() {
+  _portfolioCharts.forEach(c => { try { c.destroy(); } catch (e) {} });
+  _portfolioCharts = [];
+}
+
+function renderPortfolioAnalytics(a) {
+  _destroyPortfolioCharts();
+  const el = document.getElementById('portfolio-analytics');
+  if (!a || !a.summary || a.summary.investment_count === 0) { el.innerHTML = ''; return; }
+
+  // Best / worst
+  const topRows = (a.top_performers || []).slice(0, 3).map(p => {
+    const inv = allInvestments.find(i => i.id === p.investment_id);
+    const name = inv ? inv.project_name : `#${p.investment_id}`;
+    return `<tr><td>${esc(name)}</td><td style="color:var(--green);text-align:right;">${p.irr.toFixed(1)}%</td><td style="text-align:right;">${p.multiple}x</td></tr>`;
+  }).join('');
+  const botRows = (a.bottom_performers || []).slice(0, 3).map(p => {
+    const inv = allInvestments.find(i => i.id === p.investment_id);
+    const name = inv ? inv.project_name : `#${p.investment_id}`;
+    const color = p.irr >= 0 ? 'var(--yellow)' : 'var(--red)';
+    return `<tr><td>${esc(name)}</td><td style="color:${color};text-align:right;">${p.irr.toFixed(1)}%</td><td style="text-align:right;">${p.multiple}x</td></tr>`;
+  }).join('');
+
+  el.innerHTML = `
+    <div class="analytics-grid">
+      <div class="analytics-card">
+        <div class="analytics-card-title">Cumulative Invested vs Returned</div>
+        <div class="chart-container"><canvas id="chart-cumulative"></canvas></div>
+      </div>
+      <div class="analytics-card">
+        <div class="analytics-card-title">Allocation by Sponsor</div>
+        <div class="chart-container"><canvas id="chart-sponsor"></canvas></div>
+      </div>
+      <div class="analytics-card">
+        <div class="analytics-card-title">Status Breakdown</div>
+        <div class="chart-container"><canvas id="chart-status"></canvas></div>
+      </div>
+      <div class="analytics-card">
+        <div class="analytics-card-title">Top 3 Performers (IRR)</div>
+        ${topRows ? `<table class="dist-table"><thead><tr><th>Investment</th><th style="text-align:right;">IRR</th><th style="text-align:right;">Multiple</th></tr></thead><tbody>${topRows}</tbody></table>` : '<p class="text-muted text-sm" style="padding:12px;">Need distributions or exits to compute IRR.</p>'}
+        ${botRows && a.top_performers.length >= 2 ? `<div class="analytics-card-title" style="margin-top:12px;">Bottom 3</div><table class="dist-table"><thead><tr><th>Investment</th><th style="text-align:right;">IRR</th><th style="text-align:right;">Multiple</th></tr></thead><tbody>${botRows}</tbody></table>` : ''}
+      </div>
+    </div>
+  `;
+
+  // Build charts
+  const gridColor = 'rgba(148, 163, 184, 0.18)';
+  const textColor = getComputedStyle(document.body).getPropertyValue('--text-muted').trim() || '#94a3b8';
+  const baseOpts = {
+    maintainAspectRatio: false,
+    plugins: { legend: { labels: { color: textColor, font: { size: 11 } } } },
+    scales: {
+      x: { grid: { color: gridColor }, ticks: { color: textColor, font: { size: 10 } } },
+      y: { grid: { color: gridColor }, ticks: { color: textColor, font: { size: 10 } } },
+    },
+  };
+
+  // Cumulative line chart
+  const ts = a.timeseries || [];
+  if (ts.length) {
+    const ctx = document.getElementById('chart-cumulative').getContext('2d');
+    _portfolioCharts.push(new Chart(ctx, {
+      type: 'line',
+      data: {
+        labels: ts.map(p => p.date),
+        datasets: [
+          { label: 'Invested', data: ts.map(p => p.cumulative_invested), borderColor: '#f59e0b', backgroundColor: 'rgba(245,158,11,0.12)', tension: 0.25, fill: true, pointRadius: 2 },
+          { label: 'Returned', data: ts.map(p => p.cumulative_returned), borderColor: '#16a34a', backgroundColor: 'rgba(22,163,74,0.12)', tension: 0.25, fill: true, pointRadius: 2 },
+        ],
+      },
+      options: { ...baseOpts, scales: { ...baseOpts.scales, y: { ...baseOpts.scales.y, ticks: { ...baseOpts.scales.y.ticks, callback: v => '$' + (v >= 1e6 ? (v/1e6).toFixed(1) + 'M' : (v/1e3).toFixed(0) + 'K') } } } },
+    }));
+  }
+
+  // Sponsor allocation donut
+  const spRows = (a.by_sponsor || []).slice(0, 8);
+  if (spRows.length) {
+    const ctx = document.getElementById('chart-sponsor').getContext('2d');
+    _portfolioCharts.push(new Chart(ctx, {
+      type: 'doughnut',
+      data: {
+        labels: spRows.map(r => r.name),
+        datasets: [{ data: spRows.map(r => r.invested), backgroundColor: ['#4361ee','#16a34a','#f59e0b','#8b5cf6','#06b6d4','#f43f5e','#eab308','#10b981'] }],
+      },
+      options: { maintainAspectRatio: false, plugins: { legend: { position: 'right', labels: { color: textColor, font: { size: 11 }, boxWidth: 12 } } } },
+    }));
+  }
+
+  // Status bar
+  const stRows = (a.by_status || []);
+  if (stRows.length) {
+    const ctx = document.getElementById('chart-status').getContext('2d');
+    _portfolioCharts.push(new Chart(ctx, {
+      type: 'bar',
+      data: {
+        labels: stRows.map(r => r.name),
+        datasets: [
+          { label: 'Invested', data: stRows.map(r => r.invested), backgroundColor: '#4361ee' },
+          { label: 'Returned', data: stRows.map(r => r.returned), backgroundColor: '#16a34a' },
+        ],
+      },
+      options: { ...baseOpts, scales: { ...baseOpts.scales, y: { ...baseOpts.scales.y, ticks: { ...baseOpts.scales.y.ticks, callback: v => '$' + (v >= 1e6 ? (v/1e6).toFixed(1) + 'M' : (v/1e3).toFixed(0) + 'K') } } } },
+    }));
+  }
+}
+
+function renderInvestmentsList(investments, analytics) {
   const el = document.getElementById('investments-list');
   const empty = document.getElementById('investments-empty');
 
@@ -2170,8 +2364,15 @@ function renderInvestmentsList(investments) {
     active: 'var(--green)', exited: 'var(--accent)', pending: 'var(--yellow)', defaulted: 'var(--red)'
   };
 
+  // Build an IRR lookup from analytics
+  const irrById = {};
+  (analytics?.per_investment || []).forEach(p => { irrById[p.investment_id] = p.irr; });
+
   el.innerHTML = `<div class="investments-grid">${investments.map(inv => {
     const sc = statusColors[inv.status] || 'var(--text-muted)';
+    const irr = irrById[inv.id];
+    const irrDisplay = irr != null ? irr.toFixed(1) + '%' : '—';
+    const irrColor = irr == null ? 'inherit' : irr >= 10 ? 'var(--green)' : irr >= 0 ? 'var(--yellow)' : 'var(--red)';
     return `
       <div class="investment-card" onclick="openInvestment(${inv.id})">
         <div class="inv-card-header">
@@ -2193,8 +2394,8 @@ function renderInvestmentsList(investments) {
             <span class="inv-metric-lbl">Multiple</span>
           </div>
           <div class="inv-metric">
-            <span class="inv-metric-val">${inv.actual_coc ? inv.actual_coc + '%' : '—'}</span>
-            <span class="inv-metric-lbl">CoC</span>
+            <span class="inv-metric-val" style="color:${irrColor};">${irrDisplay}</span>
+            <span class="inv-metric-lbl">IRR</span>
           </div>
         </div>
       </div>
@@ -2202,24 +2403,41 @@ function renderInvestmentsList(investments) {
   }).join('')}</div>`;
 }
 
+let _invDetailChart = null;
+
 async function openInvestment(id) {
   currentInvestmentId = id;
   try {
-    const inv = await api(`${API.investments}/${id}`);
+    const [inv, perf] = await Promise.all([
+      api(`${API.investments}/${id}`),
+      api(`${API.investments}/${id}/performance`),
+    ]);
     document.getElementById('inv-detail-title').textContent = inv.project_name || 'Investment Detail';
     document.getElementById('inv-status').value = inv.status;
-    renderInvestmentDetail(inv);
+    renderInvestmentDetail(inv, perf);
     showPage('investment-detail');
   } catch (e) { console.error(e); }
 }
 
-function renderInvestmentDetail(inv) {
+function renderInvestmentDetail(inv, perf) {
   const el = document.getElementById('inv-detail-content');
   const dists = inv.distributions || [];
 
   function row(label, val) {
     return `<div class="metric-row"><span class="metric-label">${label}</span><span class="metric-value">${val}</span></div>`;
   }
+
+  // Destroy prior chart to avoid canvas reuse issues
+  if (_invDetailChart) { try { _invDetailChart.destroy(); } catch (e) {} _invDetailChart = null; }
+
+  const irr = perf?.irr;
+  const irrColor = irr == null ? 'inherit' : irr >= 10 ? 'var(--green)' : irr >= 0 ? 'var(--yellow)' : 'var(--red)';
+  const projIrr = perf?.projected_irr;
+  const irrDelta = perf?.irr_vs_projected;
+  const deltaDisplay = irrDelta != null
+    ? ` <span style="font-size:11px;color:${irrDelta >= 0 ? 'var(--green)' : 'var(--red)'};">(${irrDelta >= 0 ? '+' : ''}${irrDelta.toFixed(1)}pp vs ${projIrr}% proj)</span>`
+    : '';
+  const hasTimeseries = (perf?.cumulative_timeseries || []).length > 0;
 
   el.innerHTML = `
     <div class="metrics-section">
@@ -2245,11 +2463,20 @@ function renderInvestmentDetail(inv) {
         ${row('Total Returned', fmt$(inv.total_returned))}
         ${row('Net Profit', `<span style="color:${inv.net_profit >= 0 ? 'var(--green)' : 'var(--red)'};">${fmt$(inv.net_profit)}</span>`)}
         ${row('Actual Multiple', inv.actual_multiple + 'x')}
+        ${row('DPI (realized / invested)', perf?.dpi != null ? perf.dpi + 'x' : '—')}
+        ${row('Actual IRR', irr != null ? `<span style="color:${irrColor};font-weight:600;">${irr.toFixed(1)}%</span>${deltaDisplay}` : '— (need 2+ dated cash flows)')}
+        ${row('Years Held', perf?.years_held != null ? perf.years_held : '—')}
         ${row('Actual Cash-on-Cash', inv.actual_coc ? inv.actual_coc + '%' : '—')}
         ${inv.exit_date ? row('Exit Date', inv.exit_date) : ''}
         ${inv.exit_amount ? row('Exit Amount', fmt$(inv.exit_amount)) : ''}
       </div>
     </div>
+
+    ${hasTimeseries ? `
+    <div class="metrics-section">
+      <div class="metrics-section-title">Cumulative Distributions Over Time</div>
+      <div class="chart-container" style="height:240px;"><canvas id="inv-detail-chart"></canvas></div>
+    </div>` : ''}
 
     <div class="metrics-section">
       <div class="metrics-section-title" style="display:flex;justify-content:space-between;align-items:center;">
@@ -2278,6 +2505,56 @@ function renderInvestmentDetail(inv) {
 
     ${inv.deal_id ? `<div style="margin-top:12px;"><button class="btn btn-secondary btn-sm" onclick="openDeal(${inv.deal_id})">📋 View Deal Analysis</button></div>` : ''}
   `;
+
+  // Build cumulative distribution chart if we have data.
+  if (hasTimeseries) {
+    const canvas = document.getElementById('inv-detail-chart');
+    if (canvas && window.Chart) {
+      const ts = perf.cumulative_timeseries;
+      const textColor = getComputedStyle(document.body).getPropertyValue('--text-muted').trim() || '#94a3b8';
+      const gridColor = 'rgba(148,163,184,0.18)';
+      _invDetailChart = new Chart(canvas.getContext('2d'), {
+        type: 'line',
+        data: {
+          labels: ts.map(p => p.date),
+          datasets: [
+            {
+              label: 'Cumulative Distributions',
+              data: ts.map(p => p.cumulative_distributions),
+              borderColor: '#16a34a',
+              backgroundColor: 'rgba(22,163,74,0.15)',
+              tension: 0.25,
+              fill: true,
+              pointRadius: ts.map(p => p.is_exit ? 6 : 3),
+              pointBackgroundColor: ts.map(p => p.is_exit ? '#4361ee' : '#16a34a'),
+            },
+          ],
+        },
+        options: {
+          maintainAspectRatio: false,
+          plugins: {
+            legend: { labels: { color: textColor, font: { size: 11 } } },
+            tooltip: {
+              callbacks: {
+                afterLabel: (ctx) => ts[ctx.dataIndex].is_exit ? 'Exit event' : '',
+              },
+            },
+          },
+          scales: {
+            x: { grid: { color: gridColor }, ticks: { color: textColor, font: { size: 10 } } },
+            y: {
+              grid: { color: gridColor },
+              ticks: {
+                color: textColor,
+                font: { size: 10 },
+                callback: v => '$' + (v >= 1e6 ? (v/1e6).toFixed(1) + 'M' : (v/1e3).toFixed(0) + 'K'),
+              },
+            },
+          },
+        },
+      });
+    }
+  }
 }
 
 function openAddInvestmentModal() {

@@ -9,7 +9,7 @@ from fastapi.templating import Jinja2Templates
 from fastapi.requests import Request
 from contextlib import asynccontextmanager
 from app.database import init_db
-from app.routers import developers, deals, chat, investments
+from app.routers import developers, deals, chat, investments, reports
 
 
 @asynccontextmanager
@@ -28,6 +28,7 @@ app.include_router(developers.router, prefix="/api/developers", tags=["developer
 app.include_router(deals.router, prefix="/api/deals", tags=["deals"])
 app.include_router(chat.router, prefix="/api/chat", tags=["chat"])
 app.include_router(investments.router, prefix="/api/investments", tags=["investments"])
+app.include_router(reports.router, prefix="/api/reports", tags=["reports"])
 
 
 @app.get("/")

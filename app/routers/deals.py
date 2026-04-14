@@ -10,7 +10,7 @@ from pydantic import BaseModel
 from typing import Optional
 from app.database import get_db
 from app.models import Deal, DealDocument, Developer
-from app.services.pdf_extractor import extract_text_from_pdf
+from app.services.pdf_extractor import extract_text_from_pdf, extract_pdf
 from app.services.deal_extractor import extract_metrics_from_docs
 from app.services.deal_scorer import score_deal
 from app.services.deal_validator import validate_deal_metrics
@@ -199,12 +199,21 @@ async def upload_document(
     with open(file_path, "wb") as f:
         f.write(content)
 
-    # Extract text
+    # Extract text (+ OCR fallback + tables + images)
+    extraction: dict = {}
     try:
-        extracted_text, page_count = extract_text_from_pdf(file_path)
+        result_x = extract_pdf(file_path)
+        extracted_text = result_x.text
+        page_count = result_x.page_count
+        extraction = {
+            "ocr_pages": result_x.ocr_page_count,
+            "tables": len(result_x.tables),
+            "images": len(result_x.images),
+        }
     except Exception as e:
         extracted_text = f"Error extracting text: {str(e)}"
         page_count = 0
+        extraction = {"ocr_pages": 0, "tables": 0, "images": 0, "error": str(e)}
 
     doc = DealDocument(
         deal_id=deal_id,
@@ -224,7 +233,49 @@ async def upload_document(
         "doc_type": doc.doc_type,
         "page_count": page_count,
         "text_length": len(extracted_text),
+        "extraction": extraction,
         "message": "Document uploaded and text extracted",
+    }
+
+
+@router.post("/documents/{doc_id}/reprocess")
+async def reprocess_document(doc_id: int, db: AsyncSession = Depends(get_db)):
+    """Re-run text extraction on an existing document.
+
+    Useful when the initial extraction produced poor results (e.g. scanned PDF
+    that needed OCR but OCR wasn't installed yet) or when the extractor has
+    been improved."""
+    result = await db.execute(select(DealDocument).where(DealDocument.id == doc_id))
+    doc = result.scalar_one_or_none()
+    if not doc:
+        raise HTTPException(status_code=404, detail="Document not found")
+    if not doc.file_path or not os.path.exists(doc.file_path):
+        raise HTTPException(
+            status_code=410,
+            detail="Original file is no longer available on disk",
+        )
+
+    try:
+        r = extract_pdf(doc.file_path)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Reprocess failed: {e}")
+
+    old_len = len(doc.extracted_text or "")
+    doc.extracted_text = r.text
+    doc.page_count = r.page_count
+    await db.commit()
+
+    return {
+        "id": doc.id,
+        "filename": doc.filename,
+        "page_count": r.page_count,
+        "ocr_pages": r.ocr_page_count,
+        "tables": len(r.tables),
+        "images": len(r.images),
+        "text_length_before": old_len,
+        "text_length_after": len(r.text),
+        "delta": len(r.text) - old_len,
+        "message": "Document reprocessed",
     }
 
 
