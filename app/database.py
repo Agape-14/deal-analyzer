@@ -31,22 +31,31 @@ async def get_db():
 
 
 async def init_db():
-    """Create tables and apply simple idempotent ALTER TABLE patches.
+    """Create tables and apply schema patches.
 
-    `create_all` only creates missing tables — it won't add columns to an
-    existing table. Until we adopt Alembic for real migrations, this
-    lightweight "add column if missing" pass keeps the schema in sync
-    with the models across code deploys so SQLite doesn't 500 on a
-    redeploy that added a column.
+    When an `alembic_version` table exists the database is under real
+    migration control — we leave it alone and `alembic upgrade head` is
+    expected to have already run (or will be run out-of-band). The
+    legacy `create_all` + ALTER-if-missing path remains as a fallback
+    for developers running against a blank SQLite file without invoking
+    Alembic.
     """
-    # Make sure the mapped classes are registered on Base.metadata before we
-    # inspect for missing columns — otherwise Base.metadata.sorted_tables is
-    # empty and the patch loop is a no-op.
+    # Make sure the mapped classes are registered on Base.metadata.
     import app.models  # noqa: F401
 
     async with engine.begin() as conn:
+        # If alembic_version exists, trust Alembic to manage schema.
+        alembic_managed = await conn.run_sync(_is_alembic_managed)
+        if alembic_managed:
+            return
         await conn.run_sync(Base.metadata.create_all)
         await conn.run_sync(_apply_schema_patches)
+
+
+def _is_alembic_managed(sync_conn) -> bool:
+    from sqlalchemy import inspect
+
+    return inspect(sync_conn).has_table("alembic_version")
 
 
 def _apply_schema_patches(sync_conn) -> None:
