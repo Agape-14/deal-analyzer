@@ -1,8 +1,11 @@
 import type { Metadata, Viewport } from "next";
 import { Inter, JetBrains_Mono } from "next/font/google";
 import "./globals.css";
+import { Suspense } from "react";
 import { AppSidebar } from "@/components/app-sidebar";
 import { AppHeader } from "@/components/app-header";
+import { CommandPalette } from "@/components/command-palette";
+import { NewDealDrawer } from "@/components/new-deal-drawer";
 import { Toaster } from "sonner";
 
 const inter = Inter({
@@ -41,6 +44,10 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
             <main className="flex-1">{children}</main>
           </div>
         </div>
+        <CommandPalette />
+        <Suspense fallback={null}>
+          <NewDealDrawer />
+        </Suspense>
         <Toaster
           position="bottom-right"
           theme="dark"

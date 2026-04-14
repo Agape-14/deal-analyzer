@@ -23,7 +23,11 @@ export function AppHeader() {
           </kbd>
         </button>
         <div className="flex-1" />
-        <Button variant="default" size="sm">
+        <Button
+          variant="default"
+          size="sm"
+          onClick={() => document.dispatchEvent(new CustomEvent("open-new-deal"))}
+        >
           <Plus className="h-4 w-4" />
           New Deal
         </Button>

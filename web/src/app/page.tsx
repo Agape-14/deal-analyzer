@@ -1,8 +1,8 @@
 import { api } from "@/lib/api";
 import type { DealSummary } from "@/lib/types";
-import { DealCard } from "@/components/deal-card";
+import { DealGrid } from "@/components/deal-grid";
 import { StatCard } from "@/components/stat-card";
-import { Stagger, StaggerItem, FadeIn } from "@/components/motion";
+import { FadeIn } from "@/components/motion";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { fmtMoney } from "@/lib/utils";
@@ -72,13 +72,7 @@ export default async function Home() {
       ) : deals.length === 0 ? (
         <EmptyState />
       ) : (
-        <Stagger className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
-          {deals.map((deal) => (
-            <StaggerItem key={deal.id}>
-              <DealCard deal={deal} />
-            </StaggerItem>
-          ))}
-        </Stagger>
+        <DealGrid deals={deals} />
       )}
 
       <FadeIn delay={0.3}>
@@ -105,7 +99,9 @@ function EmptyState() {
           Create a deal and upload offering memorandums to get automated scoring, validation, and risk analysis.
         </p>
         <Button asChild className="mt-6">
-          <Link href="/deals/new">Create your first deal</Link>
+          <Link href="/?new=1" scroll={false}>
+            Create your first deal
+          </Link>
         </Button>
       </div>
     </Card>

@@ -31,6 +31,12 @@ app.include_router(investments.router, prefix="/api/investments", tags=["investm
 app.include_router(reports.router, prefix="/api/reports", tags=["reports"])
 
 
+@app.get("/api/healthz")
+async def healthz():
+    """Liveness probe for Railway + load balancers."""
+    return {"status": "ok"}
+
+
 from fastapi.responses import RedirectResponse
 
 
