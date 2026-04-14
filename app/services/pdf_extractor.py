@@ -36,6 +36,14 @@ class PdfExtractionResult:
     ocr_page_count: int = 0
     tables: list[dict] = field(default_factory=list)
     images: list[dict] = field(default_factory=list)
+    # Per-page extraction diagnostics so the UI can surface "page 3 had
+    # no usable text" instead of silently dropping that page's data.
+    #   source: "text" | "ocr" | "empty"
+    #   chars:  non-whitespace character count
+    page_diagnostics: list[dict] = field(default_factory=list)
+    # Aggregate quality score 0..100 based on page coverage. 100 = every
+    # page yielded reasonable text; 0 = all pages empty.
+    quality_score: int = 100
 
     def to_dict(self) -> dict:
         return {
@@ -44,6 +52,8 @@ class PdfExtractionResult:
             "ocr_page_count": self.ocr_page_count,
             "tables": self.tables,
             "images": self.images,
+            "page_diagnostics": self.page_diagnostics,
+            "quality_score": self.quality_score,
         }
 
 
@@ -179,6 +189,7 @@ def extract_pdf(file_path: str) -> PdfExtractionResult:
     text_parts: list[str] = []
     for page_num, page in enumerate(doc, 1):
         page_text = (page.get_text() or "").strip()
+        source = "text" if len(page_text) >= MIN_TEXT_CHARS else "empty"
 
         # OCR fallback for pages with no / near-no text layer.
         if len(page_text) < MIN_TEXT_CHARS:
@@ -186,9 +197,16 @@ def extract_pdf(file_path: str) -> PdfExtractionResult:
             if len(ocr_text) > len(page_text):
                 page_text = ocr_text
                 result.ocr_page_count += 1
+                source = "ocr" if len(ocr_text) >= MIN_TEXT_CHARS else "ocr_weak"
 
         if page_text:
             text_parts.append(f"--- Page {page_num} ---\n{page_text}")
+        else:
+            source = "empty"
+
+        result.page_diagnostics.append(
+            {"page": page_num, "source": source, "chars": len(page_text)}
+        )
 
         # Best-effort tables and images. Failures are silently skipped.
         result.tables.extend(_extract_tables(page, page_num))
@@ -196,6 +214,18 @@ def extract_pdf(file_path: str) -> PdfExtractionResult:
 
     doc.close()
     result.text = "\n\n".join(text_parts)
+
+    # Quality score: fraction of pages that produced >= MIN_TEXT_CHARS.
+    # Weight early pages (1..5) more heavily — OMs put deal terms up front.
+    if result.page_count > 0:
+        good = 0.0
+        total = 0.0
+        for d in result.page_diagnostics:
+            w = 2.0 if d["page"] <= 5 else 1.0
+            total += w
+            if d["chars"] >= MIN_TEXT_CHARS:
+                good += w
+        result.quality_score = int(round((good / total) * 100)) if total else 0
     return result
 
 

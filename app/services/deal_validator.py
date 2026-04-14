@@ -1,12 +1,56 @@
 """Burke-inspired deal validation checks for LP due diligence."""
 
 
-def validate_deal_metrics(metrics: dict) -> list[dict]:
+# Asset-class-aware thresholds. Stabilized income properties accept lower
+# IRR and higher occupancy; development/value-add deals justifiably show
+# higher IRR and wider underwriting bands. Defaults match stabilized
+# multifamily, which was the original hardcoded baseline.
+DEFAULT_PROFILE = {
+    "irr_aggressive": 25,        # yellow flag above this %
+    "rent_growth_red": 4,        # red flag above this %
+    "opex_low": 35,              # yellow flag below this %
+    "occ_red": 97,               # red flag above this %
+    "occ_yellow": 95,            # yellow flag above this %
+    "dscr_red": 1.2,             # red flag below this
+    "dscr_green": 1.5,           # green flag at/above this
+    "ltv_red": 75,               # red flag above this %
+    "ltv_yellow": 65,            # yellow flag above this %
+    "beo_red": 85,               # red flag above this %
+    "beo_yellow": 80,            # yellow flag above this %
+}
+
+ASSET_CLASS_PROFILES: dict[str, dict] = {
+    # Stabilized income, relatively tight band
+    "multifamily":  {**DEFAULT_PROFILE},
+    "office":       {**DEFAULT_PROFILE, "opex_low": 30, "occ_red": 93, "occ_yellow": 88, "dscr_green": 1.4},
+    "retail":       {**DEFAULT_PROFILE, "opex_low": 25, "occ_red": 95, "occ_yellow": 92},
+    "industrial":   {**DEFAULT_PROFILE, "opex_low": 20, "occ_red": 98, "occ_yellow": 95},
+    "hospitality":  {**DEFAULT_PROFILE, "irr_aggressive": 30, "occ_red": 85, "occ_yellow": 80},
+    # Higher risk / reward
+    "development":  {**DEFAULT_PROFILE, "irr_aggressive": 35, "ltv_yellow": 70, "ltv_red": 80, "beo_yellow": 82, "beo_red": 88},
+    "land":         {**DEFAULT_PROFILE, "irr_aggressive": 40, "dscr_red": 1.0, "dscr_green": 1.3},
+    "mixed-use":    {**DEFAULT_PROFILE, "irr_aggressive": 28, "opex_low": 30},
+    "other":        {**DEFAULT_PROFILE},
+}
+
+
+def _profile_for(property_type: str | None) -> dict:
+    key = (property_type or "").strip().lower()
+    return ASSET_CLASS_PROFILES.get(key, DEFAULT_PROFILE)
+
+
+def validate_deal_metrics(metrics: dict, property_type: str | None = None) -> list[dict]:
     """
     Run Burke-inspired validation checks on extracted metrics.
     Returns list of {severity: 'red'|'yellow'|'green', category: str, message: str}
+
+    ``property_type`` adjusts the thresholds that vary by asset class
+    (IRR aggressive cutoff, expense ratio floor, occupancy cap, DSCR band,
+    LTV band, BEO band). When not provided, defaults to stabilized
+    multifamily — which matches the original hardcoded behavior.
     """
     flags = []
+    profile = _profile_for(property_type)
 
     ds = metrics.get('deal_structure', {}) or {}
     tr = metrics.get('target_returns', {}) or {}
@@ -28,11 +72,12 @@ def validate_deal_metrics(metrics: dict) -> list[dict]:
         flags.append({'severity': 'yellow', 'category': 'Returns',
                       'message': 'Cannot determine if quoted IRR is gross or net. Always ask for NET (to investor) returns.'})
 
-    # IRR reasonableness
+    # IRR reasonableness (threshold varies by asset class)
     irr = net_irr or target_irr
-    if irr and irr > 25:
+    irr_cap = profile["irr_aggressive"]
+    if irr and irr > irr_cap:
         flags.append({'severity': 'yellow', 'category': 'Returns',
-                      'message': f'Target IRR of {irr}% is very aggressive. Few deals actually achieve >25%.'})
+                      'message': f'Target IRR of {irr}% is very aggressive for this asset class (typical cap {irr_cap}%).'})
 
     # Equity multiple check
     em = _num(tr.get('net_equity_multiple') or tr.get('target_equity_multiple'))
@@ -71,21 +116,21 @@ def validate_deal_metrics(metrics: dict) -> list[dict]:
         flags.append({'severity': 'yellow', 'category': 'Fees',
                       'message': f'Asset management fee of {am_fee}% is above market (1-1.5% typical).'})
 
-    # LTV check
+    # LTV check (asset-class aware)
     ltv = _num(ds.get('ltv'))
-    if ltv and ltv > 75:
+    if ltv and ltv > profile["ltv_red"]:
         flags.append({'severity': 'red', 'category': 'Leverage',
-                      'message': f'LTV of {ltv}% is high. Increases risk significantly. Prefer <70%.'})
-    elif ltv and ltv > 65:
+                      'message': f'LTV of {ltv}% is high for this asset class (threshold {profile["ltv_red"]}%). Increases risk significantly.'})
+    elif ltv and ltv > profile["ltv_yellow"]:
         flags.append({'severity': 'yellow', 'category': 'Leverage',
-                      'message': f'LTV of {ltv}% is moderate. Not alarming but watch debt service.'})
+                      'message': f'LTV of {ltv}% is moderate for this asset class. Watch debt service.'})
 
     # === UNDERWRITING CHECKS ===
     beo = _num(uc.get('break_even_occupancy'))
-    if beo and beo > 85:
+    if beo and beo > profile["beo_red"]:
         flags.append({'severity': 'red', 'category': 'Underwriting',
-                      'message': f'Break-even occupancy of {beo}% is dangerously tight. One bad quarter could mean cash calls.'})
-    elif beo and beo > 80:
+                      'message': f'Break-even occupancy of {beo}% is dangerously tight for this asset class (threshold {profile["beo_red"]}%). One bad quarter could mean cash calls.'})
+    elif beo and beo > profile["beo_yellow"]:
         flags.append({'severity': 'yellow', 'category': 'Underwriting',
                       'message': f'Break-even occupancy of {beo}% is acceptable but leaves thin margin.'})
     elif beo and beo <= 75:
@@ -97,10 +142,10 @@ def validate_deal_metrics(metrics: dict) -> list[dict]:
     if dscr and dscr < 1.2:
         flags.append({'severity': 'red', 'category': 'Underwriting',
                       'message': f'DSCR of {dscr}x is too thin. Minimum should be 1.25x.'})
-    elif dscr and dscr < 1.35:
+    elif dscr and dscr < profile["dscr_green"] - 0.1:
         flags.append({'severity': 'yellow', 'category': 'Underwriting',
-                      'message': f'DSCR of {dscr}x is adequate but not comfortable. Prefer >1.4x.'})
-    elif dscr and dscr >= 1.5:
+                      'message': f'DSCR of {dscr}x is adequate but not comfortable. Prefer ≥{profile["dscr_green"]}x for this asset class.'})
+    elif dscr and dscr >= profile["dscr_green"]:
         flags.append({'severity': 'green', 'category': 'Underwriting',
                       'message': f'DSCR of {dscr}x is strong. Good debt service coverage.'})
 
@@ -129,20 +174,20 @@ def validate_deal_metrics(metrics: dict) -> list[dict]:
             flags.append({'severity': 'green', 'category': 'Underwriting',
                           'message': f'Exit cap ({exit_cap}%) is {spread * 100:.0f}bps above entry ({entry_cap}%). Conservative underwriting.'})
 
-    # Expense ratio
+    # Expense ratio (asset-class aware)
     exp_ratio = _num(fp.get('operating_expense_ratio'))
-    if exp_ratio and exp_ratio < 35:
+    if exp_ratio and exp_ratio < profile["opex_low"]:
         flags.append({'severity': 'yellow', 'category': 'Underwriting',
-                      'message': f'Expense ratio of {exp_ratio}% seems low. Typical multifamily is 40-50%. Expenses may be understated.'})
+                      'message': f'Expense ratio of {exp_ratio}% is below the typical floor for this asset class (~{profile["opex_low"]}%). Expenses may be understated.'})
 
-    # Occupancy assumption
+    # Occupancy assumption (asset-class aware)
     occ = _num(fp.get('occupancy_assumption'))
-    if occ and occ > 97:
+    if occ and occ > profile["occ_red"]:
         flags.append({'severity': 'red', 'category': 'Underwriting',
-                      'message': f'Occupancy assumption of {occ}% is unrealistic. 93-95% is more achievable.'})
-    elif occ and occ > 95:
+                      'message': f'Occupancy assumption of {occ}% is unrealistic for this asset class (cap {profile["occ_red"]}%).'})
+    elif occ and occ > profile["occ_yellow"]:
         flags.append({'severity': 'yellow', 'category': 'Underwriting',
-                      'message': f'Occupancy assumption of {occ}% is optimistic. Budget for some vacancy.'})
+                      'message': f'Occupancy assumption of {occ}% is optimistic for this asset class. Budget for some vacancy.'})
 
     # Yield on cost
     yoc = _num(uc.get('yield_on_cost'))

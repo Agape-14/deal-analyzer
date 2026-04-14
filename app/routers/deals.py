@@ -19,6 +19,17 @@ from app.services.math_checker import run_math_checks
 from app.services.market_data import fetch_market_data
 from app.services.cashflow_projector import project_cash_flows
 from app.services.waterfall_calculator import waterfall_from_deal
+from app.services.data_integrity import (
+    smart_merge,
+    detect_conflicts,
+    conflicts_to_flags,
+    staleness_flags,
+    quality_summary,
+    stamp_verification,
+    set_lock,
+    mark_manual_edit,
+    now_iso,
+)
 
 router = APIRouter()
 
@@ -123,9 +134,19 @@ async def get_deal(deal_id: int, db: AsyncSession = Depends(get_db)):
             "page_count": doc.page_count,
             "upload_date": doc.upload_date.isoformat() if doc.upload_date else None,
             "has_text": bool(doc.extracted_text),
+            "extraction_quality": {
+                "quality_score": (doc.extraction_quality or {}).get("quality_score"),
+                "ocr_pages": (doc.extraction_quality or {}).get("ocr_pages", 0),
+                "empty_pages": (doc.extraction_quality or {}).get("empty_pages", []),
+            }
+            if doc.extraction_quality
+            else None,
         }
         for doc in deal.documents
     ]
+    # Quality summary of the metrics (counts of verified / extracted / conflicting / locked)
+    if deal.metrics:
+        data["quality"] = quality_summary(deal.metrics)
     return data
 
 
@@ -164,17 +185,27 @@ async def list_documents(deal_id: int, db: AsyncSession = Depends(get_db)):
         select(DealDocument).where(DealDocument.deal_id == deal_id).order_by(DealDocument.upload_date.desc())
     )
     docs = result.scalars().all()
-    return [
-        {
-            "id": doc.id,
-            "filename": doc.filename,
-            "doc_type": doc.doc_type,
-            "page_count": doc.page_count,
-            "upload_date": doc.upload_date.isoformat() if doc.upload_date else None,
-            "has_text": bool(doc.extracted_text),
-        }
-        for doc in docs
-    ]
+    out = []
+    for doc in docs:
+        q = doc.extraction_quality or {}
+        out.append(
+            {
+                "id": doc.id,
+                "filename": doc.filename,
+                "doc_type": doc.doc_type,
+                "page_count": doc.page_count,
+                "upload_date": doc.upload_date.isoformat() if doc.upload_date else None,
+                "has_text": bool(doc.extracted_text),
+                "extraction_quality": {
+                    "quality_score": q.get("quality_score"),
+                    "ocr_pages": q.get("ocr_pages", 0),
+                    "empty_pages": q.get("empty_pages", []),
+                }
+                if q
+                else None,
+            }
+        )
+    return out
 
 
 @router.post("/{deal_id}/documents/upload")
@@ -201,19 +232,30 @@ async def upload_document(
 
     # Extract text (+ OCR fallback + tables + images)
     extraction: dict = {}
+    quality: dict = {}
     try:
         result_x = extract_pdf(file_path)
         extracted_text = result_x.text
         page_count = result_x.page_count
+        empty_pages = [d["page"] for d in result_x.page_diagnostics if d["source"] == "empty"]
         extraction = {
             "ocr_pages": result_x.ocr_page_count,
             "tables": len(result_x.tables),
             "images": len(result_x.images),
+            "quality_score": result_x.quality_score,
+            "empty_pages": empty_pages,
+        }
+        quality = {
+            "quality_score": result_x.quality_score,
+            "ocr_pages": result_x.ocr_page_count,
+            "empty_pages": empty_pages,
+            "page_diagnostics": result_x.page_diagnostics,
         }
     except Exception as e:
         extracted_text = f"Error extracting text: {str(e)}"
         page_count = 0
         extraction = {"ocr_pages": 0, "tables": 0, "images": 0, "error": str(e)}
+        quality = {"error": str(e)}
 
     doc = DealDocument(
         deal_id=deal_id,
@@ -222,6 +264,7 @@ async def upload_document(
         doc_type=doc_type,
         extracted_text=extracted_text,
         page_count=page_count,
+        extraction_quality=quality,
     )
     db.add(doc)
     await db.commit()
@@ -263,6 +306,12 @@ async def reprocess_document(doc_id: int, db: AsyncSession = Depends(get_db)):
     old_len = len(doc.extracted_text or "")
     doc.extracted_text = r.text
     doc.page_count = r.page_count
+    doc.extraction_quality = {
+        "quality_score": r.quality_score,
+        "ocr_pages": r.ocr_page_count,
+        "empty_pages": [d["page"] for d in r.page_diagnostics if d["source"] == "empty"],
+        "page_diagnostics": r.page_diagnostics,
+    }
     await db.commit()
 
     return {
@@ -308,7 +357,19 @@ async def get_document_text(doc_id: int, db: AsyncSession = Depends(get_db)):
 
 @router.post("/{deal_id}/extract")
 async def extract_deal_metrics(deal_id: int, db: AsyncSession = Depends(get_db)):
-    """AI-extract metrics from all uploaded documents."""
+    """AI-extract metrics from all uploaded documents.
+
+    Data-integrity guarantees (see app/services/data_integrity.py):
+      1. Smart-merge — a new extraction never overwrites an existing value
+         with null. Re-running extraction is always safe.
+      2. Provenance — every field records which document it came from,
+         when, with what status.
+      3. Conflict detection — when multiple docs are uploaded, we run
+         extraction per-doc first, compare values, and emit red flags for
+         every field where two docs disagree.
+      4. Locks — fields the user has manually edited are never overwritten
+         by re-extraction.
+    """
     result = await db.execute(
         select(Deal).options(selectinload(Deal.documents)).where(Deal.id == deal_id)
     )
@@ -319,48 +380,128 @@ async def extract_deal_metrics(deal_id: int, db: AsyncSession = Depends(get_db))
     if not deal.documents:
         raise HTTPException(status_code=400, detail="No documents uploaded yet")
 
-    doc_texts = [
-        {
-            "filename": doc.filename,
-            "doc_type": doc.doc_type,
-            "text": doc.extracted_text or "",
-        }
-        for doc in deal.documents
-        if doc.extracted_text
+    usable_docs = [d for d in deal.documents if (d.extracted_text or "")]
+    usable_pdfs = [
+        d for d in deal.documents if d.file_path and d.file_path.endswith(".pdf")
     ]
+    if not usable_docs and not usable_pdfs:
+        raise HTTPException(
+            status_code=400, detail="No extracted text or PDF files available"
+        )
 
-    # Collect PDF file paths for vision-based extraction
-    doc_paths = [
-        doc.file_path
-        for doc in deal.documents
-        if doc.file_path and doc.file_path.endswith(".pdf")
-    ]
-
-    if not doc_texts and not doc_paths:
-        raise HTTPException(status_code=400, detail="No extracted text or PDF files available")
-
+    # Per-document extraction — enables conflict detection. We still do a
+    # whole-set extraction (the union) so rows that only appear in one doc
+    # don't get lost when there are more than 2 docs.
+    per_doc_results: list[tuple[int, str, dict]] = []
     try:
-        metrics = await extract_metrics_from_docs(doc_texts, doc_paths=doc_paths)
+        if len(deal.documents) > 1:
+            for doc in deal.documents:
+                text = doc.extracted_text or ""
+                path = (
+                    doc.file_path
+                    if doc.file_path and doc.file_path.endswith(".pdf")
+                    else None
+                )
+                if not text and not path:
+                    continue
+                one_doc_text = (
+                    [
+                        {
+                            "filename": doc.filename,
+                            "doc_type": doc.doc_type,
+                            "text": text,
+                        }
+                    ]
+                    if text
+                    else []
+                )
+                one_doc_path = [path] if path else []
+                try:
+                    mx = await extract_metrics_from_docs(
+                        one_doc_text, doc_paths=one_doc_path
+                    )
+                    per_doc_results.append((doc.id, doc.filename, mx))
+                except Exception:
+                    # A single doc failing shouldn't block the batch; it
+                    # just won't participate in conflict detection.
+                    pass
+
+        # Union extraction over all docs at once — this is what we
+        # actually merge into deal.metrics. The per-doc pass above is
+        # only used to compute the conflict map.
+        doc_texts = [
+            {
+                "filename": d.filename,
+                "doc_type": d.doc_type,
+                "text": d.extracted_text or "",
+            }
+            for d in usable_docs
+        ]
+        doc_paths = [d.file_path for d in usable_pdfs]
+        incoming_metrics = await extract_metrics_from_docs(doc_texts, doc_paths=doc_paths)
     except Exception as e:
         msg = str(e)
         status = 503 if "ANTHROPIC_API_KEY" in msg else 500
         raise HTTPException(status_code=status, detail=f"AI extraction failed: {msg}")
 
-    # Run validation checks
-    validation_flags = validate_deal_metrics(metrics)
-    metrics["validation_flags"] = validation_flags
+    # Smart-merge into existing metrics (preserves non-null prior values,
+    # honors locks, records provenance on every updated field).
+    primary_doc = usable_docs[0] if len(usable_docs) == 1 else None
+    merged, changes = smart_merge(
+        deal.metrics,
+        incoming_metrics,
+        source_doc_id=primary_doc.id if primary_doc else None,
+        source_doc_name=primary_doc.filename if primary_doc else "multiple documents",
+    )
 
-    deal.metrics = metrics
+    # Conflict detection across documents
+    conflicts = detect_conflicts(per_doc_results) if len(per_doc_results) >= 2 else {}
+    if conflicts:
+        # Annotate provenance with the conflict so the UI can render an
+        # inline picker next to each conflicting metric.
+        prov = dict(merged.get("_provenance") or {})
+        for path, entries in conflicts.items():
+            existing_prov = prov.get(path, {})
+            existing_prov["conflict"] = entries
+            prov[path] = existing_prov
+        merged["_provenance"] = prov
+
+    # Keep a short extraction-history breadcrumb trail
+    history = list(merged.get("_extraction_history") or [])
+    history.append(
+        {
+            "at": now_iso(),
+            "changes": changes[:50],  # cap
+            "doc_count": len(deal.documents),
+            "conflicts": list(conflicts.keys()),
+        }
+    )
+    merged["_extraction_history"] = history[-20:]  # keep last 20
+
+    # Run validation (includes existing rules + our new conflict + stale flags)
+    validation_flags = validate_deal_metrics(merged, deal.property_type)
+    validation_flags.extend(conflicts_to_flags(conflicts))
+    validation_flags.extend(staleness_flags(merged, deal.documents))
+    merged["validation_flags"] = validation_flags
+
+    deal.metrics = merged
 
     # Auto-populate city/state from extracted data if empty
-    ml = metrics.get("market_location", {}) or {}
+    ml = merged.get("market_location", {}) or {}
     if not deal.city and ml.get("city"):
         deal.city = ml["city"]
     if not deal.state and ml.get("state"):
         deal.state = ml["state"]
 
     await db.commit()
-    return {"message": "Metrics extracted", "metrics": metrics, "validation_flags": validation_flags}
+    return {
+        "message": "Metrics extracted",
+        "metrics": merged,
+        "validation_flags": validation_flags,
+        "changes": changes,
+        "conflicts": conflicts,
+        "quality": quality_summary(merged),
+    }
 
 
 @router.post("/{deal_id}/score")
@@ -391,7 +532,7 @@ async def validate_deal(deal_id: int, db: AsyncSession = Depends(get_db)):
     if not deal.metrics:
         raise HTTPException(status_code=400, detail="No metrics extracted yet. Run extraction first.")
 
-    flags = validate_deal_metrics(deal.metrics)
+    flags = validate_deal_metrics(deal.metrics, deal.property_type)
 
     # Also update stored flags
     metrics = deal.metrics.copy()
@@ -433,18 +574,24 @@ async def verify_deal_endpoint(deal_id: int, auto_correct: bool = True, db: Asyn
         status = 503 if "ANTHROPIC_API_KEY" in msg else 500
         raise HTTPException(status_code=status, detail=f"Verification failed: {msg}")
 
-    changes = []
+    # Always stamp the verification result into provenance, even when
+    # auto_correct=False. This gives the UI per-field "confirmed / wrong /
+    # unverifiable" badges without touching the underlying values.
+    metrics = deal.metrics.copy() if deal.metrics else {}
+    changes: list[str] = []
     if auto_correct:
-        metrics = deal.metrics.copy() if deal.metrics else {}
         metrics, changes = apply_corrections(metrics, verification)
-        
-        # Re-run validation after corrections
-        from app.services.deal_validator import validate_deal_metrics as validate
-        flags = validate(metrics)
-        metrics["validation_flags"] = flags
-        
-        deal.metrics = metrics
-        await db.commit()
+
+    metrics = stamp_verification(metrics, verification)
+
+    # Re-run validation (+ conflict / staleness flags) on the post-verify
+    # metrics so the dashboard reflects the newest state.
+    flags = validate_deal_metrics(metrics, deal.property_type)
+    flags.extend(staleness_flags(metrics, deal.documents))
+    metrics["validation_flags"] = flags
+
+    deal.metrics = metrics
+    await db.commit()
 
     # Run math checks on the (possibly corrected) metrics
     math_results = run_math_checks(deal.metrics or {})
@@ -490,6 +637,114 @@ async def math_check_deal(deal_id: int, db: AsyncSession = Depends(get_db)):
     }
 
     return {"checks": checks, "summary": summary}
+
+
+# ===== Data Integrity =====
+
+@router.get("/{deal_id}/quality")
+async def deal_quality(deal_id: int, db: AsyncSession = Depends(get_db)):
+    """Data-quality summary: counts of verified / extracted / calculated /
+    conflicting / locked fields, plus staleness timestamps.
+
+    This is the single endpoint the dashboard calls to render the
+    data-integrity panel.
+    """
+    result = await db.execute(select(Deal).options(selectinload(Deal.documents)).where(Deal.id == deal_id))
+    deal = result.scalar_one_or_none()
+    if not deal:
+        raise HTTPException(status_code=404, detail="Deal not found")
+    metrics = deal.metrics or {}
+    summary = quality_summary(metrics)
+    # Add live staleness flags so the UI can show a "data may be outdated" banner
+    stale = staleness_flags(metrics, deal.documents or [])
+    return {"summary": summary, "stale_flags": stale}
+
+
+class FieldEditIn(BaseModel):
+    path: str          # dotted, e.g. "deal_structure.ltv"
+    value: Optional[float | str | int | bool] = None
+    lock: Optional[bool] = True
+
+
+@router.post("/{deal_id}/fields/edit")
+async def edit_field(deal_id: int, data: FieldEditIn, db: AsyncSession = Depends(get_db)):
+    """Apply a manual edit to a single metric field and lock it against
+    future automatic overwrites.
+
+    Locking is the mechanism that prevents a subsequent `/extract` call
+    from clobbering a user correction. Sending `lock=false` just records
+    the edit without protecting it.
+    """
+    result = await db.execute(select(Deal).where(Deal.id == deal_id))
+    deal = result.scalar_one_or_none()
+    if not deal:
+        raise HTTPException(status_code=404, detail="Deal not found")
+
+    metrics = deal.metrics or {}
+    metrics = mark_manual_edit(metrics, data.path, data.value, lock=bool(data.lock))
+    # Re-validate + re-score so downstream views stay consistent
+    flags = validate_deal_metrics(metrics, deal.property_type)
+    metrics["validation_flags"] = flags
+    deal.metrics = metrics
+    await db.commit()
+    return {"message": "Field updated", "path": data.path, "locked": bool(data.lock)}
+
+
+class FieldLockIn(BaseModel):
+    path: str
+    locked: bool
+
+
+@router.post("/{deal_id}/fields/lock")
+async def lock_field(deal_id: int, data: FieldLockIn, db: AsyncSession = Depends(get_db)):
+    """Toggle the lock on a field without changing its value."""
+    result = await db.execute(select(Deal).where(Deal.id == deal_id))
+    deal = result.scalar_one_or_none()
+    if not deal:
+        raise HTTPException(status_code=404, detail="Deal not found")
+
+    metrics = deal.metrics or {}
+    metrics = set_lock(metrics, data.path, bool(data.locked))
+    deal.metrics = metrics
+    await db.commit()
+    return {"message": "Lock updated", "path": data.path, "locked": bool(data.locked)}
+
+
+class ConflictResolveIn(BaseModel):
+    path: str           # dotted
+    value: Optional[float | str | int | bool] = None  # the chosen value
+
+
+@router.post("/{deal_id}/fields/resolve-conflict")
+async def resolve_conflict(deal_id: int, data: ConflictResolveIn, db: AsyncSession = Depends(get_db)):
+    """Pick one value from a conflict set. Clears the conflict flag on
+    the field, locks it, and removes the corresponding `Data conflict`
+    validation flag.
+    """
+    result = await db.execute(select(Deal).where(Deal.id == deal_id))
+    deal = result.scalar_one_or_none()
+    if not deal:
+        raise HTTPException(status_code=404, detail="Deal not found")
+
+    metrics = deal.metrics.copy() if deal.metrics else {}
+    metrics = mark_manual_edit(metrics, data.path, data.value, lock=True)
+
+    # Clear the conflict on the provenance entry
+    prov = dict(metrics.get("_provenance") or {})
+    if data.path in prov and isinstance(prov[data.path], dict):
+        prov[data.path].pop("conflict", None)
+        metrics["_provenance"] = prov
+
+    # Remove the matching "Data conflict" flag
+    flags = [
+        f for f in (metrics.get("validation_flags") or [])
+        if not (f.get("category") == "Data conflict" and data.path in (f.get("message") or ""))
+    ]
+    metrics["validation_flags"] = flags
+
+    deal.metrics = metrics
+    await db.commit()
+    return {"message": "Conflict resolved", "path": data.path}
 
 
 # ===== Market Research =====

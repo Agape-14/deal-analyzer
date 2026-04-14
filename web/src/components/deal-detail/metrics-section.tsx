@@ -1,26 +1,37 @@
 "use client";
 
+import * as React from "react";
 import { Card } from "@/components/ui/card";
+import { IntegrityBadge } from "@/components/deal-detail/integrity-badge";
+import { ConflictPicker } from "@/components/deal-detail/conflict-picker";
 import { cn, fmtMoney, fmtPct } from "@/lib/utils";
+import type { FieldProvenance } from "@/lib/types";
 
 /**
  * Render a metrics section as a definition-list of key/value pairs with
  * smart formatting. Currency/percentage/multiple/integer fields are
  * detected heuristically by name; strings just render as-is.
  *
- * This keeps the UI resilient to the backend adding new fields — they'll
- * just appear. Unknown fields get basic formatting.
+ * The optional `provenance` prop maps a dotted `section.field` key to a
+ * FieldProvenance record — when provided, each row shows an integrity badge
+ * and any cross-document conflict gets an inline resolve button.
  */
 export function MetricsSection({
   title,
   description,
+  sectionKey,
   data,
   keysOrder,
+  provenance,
+  dealId,
 }: {
   title: string;
   description?: string;
+  sectionKey?: string;
   data: Record<string, unknown> | undefined;
   keysOrder?: readonly string[];
+  provenance?: Record<string, FieldProvenance>;
+  dealId?: number;
 }) {
   if (!data || typeof data !== "object" || Object.keys(data).length === 0) {
     return (
@@ -49,32 +60,64 @@ export function MetricsSection({
       <h3 className="text-sm font-semibold tracking-tight">{title}</h3>
       {description && <p className="text-xs text-muted-foreground mt-0.5">{description}</p>}
       <dl className="mt-4 grid grid-cols-1 sm:grid-cols-2 gap-x-8 gap-y-3">
-        {entries.map(([k, v]) => (
-          <MetricRow key={k} name={k} value={v} />
-        ))}
+        {entries.map(([k, v]) => {
+          const path = sectionKey ? `${sectionKey}.${k}` : undefined;
+          const prov = path ? provenance?.[path] : undefined;
+          return <MetricRow key={k} name={k} value={v} provenance={prov} path={path} dealId={dealId} />;
+        })}
       </dl>
     </Card>
   );
 }
 
-function MetricRow({ name, value }: { name: string; value: unknown }) {
+function MetricRow({
+  name,
+  value,
+  provenance,
+  path,
+  dealId,
+}: {
+  name: string;
+  value: unknown;
+  provenance?: FieldProvenance;
+  path?: string;
+  dealId?: number;
+}) {
   const label = humanize(name);
   const formatted = formatValue(name, value);
   const isLong = typeof value === "string" && value.length > 80;
+  const hasConflict =
+    Array.isArray(provenance?.conflict) && (provenance!.conflict as unknown[]).length > 1;
 
   if (isLong) {
     return (
       <div className="sm:col-span-2 py-1.5">
-        <dt className="text-[10px] uppercase tracking-[0.1em] text-muted-foreground mb-1">{label}</dt>
+        <dt className="text-[10px] uppercase tracking-[0.1em] text-muted-foreground mb-1 flex items-center gap-1.5">
+          {label}
+          <IntegrityBadge provenance={provenance} compact />
+        </dt>
         <dd className="text-sm leading-relaxed text-foreground/90">{formatted}</dd>
       </div>
     );
   }
 
   return (
-    <div className="flex justify-between gap-4 border-b border-border/50 last:border-0 py-1.5">
-      <dt className="text-xs text-muted-foreground truncate">{label}</dt>
-      <dd className={cn("text-sm text-right font-medium tabular-nums shrink-0")}>{formatted}</dd>
+    <div
+      className={cn(
+        "flex justify-between items-center gap-4 border-b border-border/50 last:border-0 py-1.5",
+        hasConflict && "bg-destructive/5 -mx-2 px-2 rounded-md",
+      )}
+    >
+      <dt className="text-xs text-muted-foreground truncate flex items-center gap-1.5">
+        <span className="truncate">{label}</span>
+        <IntegrityBadge provenance={provenance} compact />
+      </dt>
+      <dd className="flex items-center gap-2 shrink-0">
+        <span className="text-sm text-right font-medium tabular-nums">{formatted}</span>
+        {hasConflict && path && dealId && provenance?.conflict && (
+          <ConflictPicker dealId={dealId} path={path} conflict={provenance.conflict} currentValue={value} />
+        )}
+      </dd>
     </div>
   );
 }

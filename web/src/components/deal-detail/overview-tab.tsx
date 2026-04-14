@@ -4,6 +4,7 @@ import { Card } from "@/components/ui/card";
 import { ScoreBreakdown } from "@/components/deal-detail/score-breakdown";
 import { ValidationFlagsPanel } from "@/components/deal-detail/validation-flags";
 import { MetricsSection } from "@/components/deal-detail/metrics-section";
+import { QualityPanel } from "@/components/deal-detail/quality-panel";
 import type { DealDetail } from "@/lib/types";
 import { fmtMoney, fmtMultiple, fmtPct } from "@/lib/utils";
 
@@ -31,8 +32,12 @@ export function OverviewTab({ deal }: { deal: DealDetail }) {
     { key: "total_equity_required", label: "Equity Required", value: fmtMoney(asNum(ds.total_equity_required)) },
   ];
 
+  const provenance = deal.metrics?._provenance;
+
   return (
     <div className="space-y-6">
+      <QualityPanel dealId={deal.id} quality={deal.quality} documents={deal.documents ?? []} />
+
       {/* 2-column: snapshot + scores */}
       <div className="grid grid-cols-1 lg:grid-cols-[1.2fr_1fr] gap-6">
         <Card elevated className="p-6">
@@ -58,13 +63,19 @@ export function OverviewTab({ deal }: { deal: DealDetail }) {
         <MetricsSection
           title="Deal structure"
           description="Capital stack, pref, fees, waterfall."
+          sectionKey="deal_structure"
           data={deal.metrics?.deal_structure}
           keysOrder={HERO_KEYS}
+          provenance={provenance}
+          dealId={deal.id}
         />
         <MetricsSection
           title="Returns target"
           description="IRR, multiple, cash-on-cash."
+          sectionKey="target_returns"
           data={deal.metrics?.target_returns}
+          provenance={provenance}
+          dealId={deal.id}
         />
       </div>
     </div>

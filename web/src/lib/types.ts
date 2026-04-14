@@ -131,6 +131,43 @@ export interface DealDocument {
   page_count: number;
   upload_date: string;
   has_text: boolean;
+  extraction_quality?: {
+    quality_score: number | null;
+    ocr_pages: number;
+    empty_pages: number[];
+  } | null;
+}
+
+/* --- Data integrity primitives (mirror app/services/data_integrity.py) --- */
+
+export interface FieldProvenance {
+  source?: "extraction" | "verification" | "manual" | "calculated" | string;
+  source_doc_id?: number | null;
+  source_doc_name?: string;
+  source_page?: number | null;
+  extracted_at?: string;
+  confidence?: number | null;
+  verified_at?: string | null;
+  status?: "extracted" | "confirmed" | "wrong" | "unverifiable" | "calculated" | "missing" | "manual" | "stale" | string;
+  conflict?: Array<{ doc_id: number; doc_name: string; value: unknown }> | null;
+  locked?: boolean;
+  verification_source?: string;
+  verification_note?: string;
+}
+
+export interface DealQualitySummary {
+  total_fields: number;
+  verified: number;
+  extracted: number;
+  calculated: number;
+  manual: number;
+  conflicting: number;
+  locked: number;
+  wrong: number;
+  unverifiable: number;
+  last_extracted_at: string | null;
+  last_verified_at?: string | null;
+  confidence?: number | null;
 }
 
 export interface ValidationFlag {
@@ -173,8 +210,18 @@ export interface DealMetrics {
 
 export interface DealDetail extends DealSummary {
   documents: DealDocument[];
-  metrics: DealMetrics;
+  metrics: DealMetrics & {
+    _provenance?: Record<string, FieldProvenance>;
+    _locks?: Record<string, boolean>;
+    _verification?: {
+      verified_at?: string;
+      confidence?: number | null;
+      totals?: Record<string, number>;
+    };
+    _extraction_history?: Array<{ at: string; changes: string[]; doc_count: number; conflicts: string[] }>;
+  };
   scores: Partial<DealScores>;
+  quality?: DealQualitySummary;
 }
 
 /* Cashflow + Waterfall */

@@ -19,6 +19,7 @@ const SECTIONS: Array<{
 ];
 
 export function MetricsTab({ deal }: { deal: DealDetail }) {
+  const provenance = deal.metrics?._provenance;
   return (
     <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
       {SECTIONS.map((s) => (
@@ -26,7 +27,10 @@ export function MetricsTab({ deal }: { deal: DealDetail }) {
           key={s.key}
           title={s.title}
           description={s.description}
+          sectionKey={String(s.key)}
           data={deal.metrics?.[s.key] as Record<string, unknown> | undefined}
+          provenance={provenance}
+          dealId={deal.id}
         />
       ))}
     </div>

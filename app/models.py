@@ -52,6 +52,9 @@ class DealDocument(Base):
     extracted_text = Column(Text, default="")
     page_count = Column(Integer, default=0)
     upload_date = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    # Per-page extraction diagnostics (source: text|ocr|empty, chars per page).
+    # Surfaces OCR failures to the UI so critical missing data is never silent.
+    extraction_quality = Column(JSON, default=dict)
 
     deal = relationship("Deal", back_populates="documents")
 

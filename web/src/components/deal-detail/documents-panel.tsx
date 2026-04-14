@@ -126,7 +126,7 @@ export function DocumentsPanel({
                 </div>
                 <div className="min-w-0 flex-1">
                   <div className="text-sm font-medium truncate">{d.filename}</div>
-                  <div className="text-[11px] text-muted-foreground mt-0.5 flex items-center gap-2">
+                  <div className="text-[11px] text-muted-foreground mt-0.5 flex items-center gap-2 flex-wrap">
                     <span className="uppercase tracking-wider">{d.doc_type.replace(/_/g, " ")}</span>
                     <span className="opacity-40">·</span>
                     <span>{d.page_count} pages</span>
@@ -136,6 +136,28 @@ export function DocumentsPanel({
                         <span className="inline-flex items-center gap-1 text-success">
                           <CheckCircle2 className="h-3 w-3" />
                           Extracted
+                        </span>
+                      </>
+                    )}
+                    {d.extraction_quality?.quality_score != null && d.extraction_quality.quality_score < 80 && (
+                      <>
+                        <span className="opacity-40">·</span>
+                        <span
+                          className="inline-flex items-center gap-1 text-warning"
+                          title={`Quality ${d.extraction_quality.quality_score}%. Pages with no usable text: ${
+                            d.extraction_quality.empty_pages?.join(", ") || "—"
+                          }`}
+                        >
+                          <span className="h-1.5 w-1.5 rounded-full bg-warning" />
+                          Quality {d.extraction_quality.quality_score}%
+                        </span>
+                      </>
+                    )}
+                    {(d.extraction_quality?.ocr_pages ?? 0) > 0 && (
+                      <>
+                        <span className="opacity-40">·</span>
+                        <span className="text-muted-foreground">
+                          {d.extraction_quality?.ocr_pages} OCR {d.extraction_quality?.ocr_pages === 1 ? "page" : "pages"}
                         </span>
                       </>
                     )}
