@@ -35,6 +35,7 @@ from app.services.location_intelligence import (
     build_location_bundle,
     geocode as geocode_address,
 )
+from app.services import notifications as notif_svc
 
 router = APIRouter()
 
@@ -404,6 +405,26 @@ async def upload_document(
     await db.commit()
     await db.refresh(doc)
 
+    # Notification: upload complete (low-noise, but users expect feedback
+    # for long uploads).
+    q_score = quality.get("quality_score") if isinstance(quality, dict) else None
+    body_bits = [f"{page_count} page{'s' if page_count != 1 else ''}"]
+    if q_score is not None:
+        body_bits.append(f"extraction quality {q_score}%")
+    empty = (quality or {}).get("empty_pages") or []
+    kind = "warning" if empty else "info"
+    if empty:
+        body_bits.append(f"{len(empty)} page{'s' if len(empty) != 1 else ''} failed OCR")
+    await notif_svc.emit(
+        db,
+        kind=kind,
+        title=f"Uploaded {doc.filename}",
+        body=" · ".join(body_bits),
+        href=f"/deals/{deal_id}?tab=documents",
+        payload={"deal_id": deal_id, "doc_id": doc.id},
+    )
+    await db.commit()
+
     return {
         "id": doc.id,
         "filename": doc.filename,
@@ -655,6 +676,28 @@ async def extract_deal_metrics(deal_id: int, db: AsyncSession = Depends(get_db))
     if not deal.state and ml.get("state"):
         deal.state = ml["state"]
 
+    # Notification: extraction complete. Conflicts = red, otherwise info.
+    reds = [f for f in validation_flags if f.get("severity") == "red"]
+    n_conflicts = len(conflicts)
+    body_parts = [f"{len(changes)} field{'s' if len(changes) != 1 else ''} updated"]
+    if n_conflicts:
+        body_parts.append(f"{n_conflicts} cross-document conflict{'s' if n_conflicts != 1 else ''}")
+    if reds:
+        body_parts.append(f"{len(reds)} red flag{'s' if len(reds) != 1 else ''}")
+    await notif_svc.emit(
+        db,
+        kind="error" if n_conflicts or reds else "success",
+        title=f"Metrics extracted for {deal.project_name}",
+        body=" · ".join(body_parts),
+        href=f"/deals/{deal.id}?tab=overview",
+        payload={
+            "deal_id": deal.id,
+            "changes": len(changes),
+            "conflicts": n_conflicts,
+            "red_flags": len(reds),
+        },
+    )
+
     await db.commit()
     return {
         "message": "Metrics extracted",
@@ -763,6 +806,34 @@ async def verify_deal_endpoint(deal_id: int, auto_correct: bool = True, db: Asyn
         'warn': len([c for c in math_results if c['status'] == 'warn']),
         'info': len([c for c in math_results if c['status'] == 'info']),
     }
+
+    # Notification: verification complete.
+    vsummary = (verification or {}).get("summary") or {}
+    confidence = vsummary.get("confidence_score")
+    totals = {}
+    for row in (verification or {}).get("audit_results", []) or []:
+        st = str(row.get("status") or "").lower()
+        totals[st] = totals.get(st, 0) + 1
+    wrong = totals.get("wrong", 0)
+    missing = totals.get("missing", 0)
+    body_parts = []
+    if confidence is not None:
+        body_parts.append(f"{confidence}% confidence")
+    if wrong:
+        body_parts.append(f"{wrong} corrected")
+    if missing:
+        body_parts.append(f"{missing} missing")
+    if changes:
+        body_parts.append(f"{len(changes)} auto-applied")
+    await notif_svc.emit(
+        db,
+        kind="warning" if wrong or missing else "success",
+        title=f"Verification complete — {deal.project_name}",
+        body=" · ".join(body_parts) if body_parts else "All extracted values match the source docs.",
+        href=f"/deals/{deal.id}?tab=overview",
+        payload={"deal_id": deal.id, **totals, "confidence": confidence},
+    )
+    await db.commit()
 
     return {
         "message": "Verification complete",

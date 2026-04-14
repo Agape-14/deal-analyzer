@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import { MobileNav } from "@/components/app-sidebar";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { HelpButton } from "@/components/help-overlay";
+import { NotificationsBell } from "@/components/notifications-bell";
 
 /**
  * Minimal header. Search placeholder triggers command palette (⌘K).
@@ -28,6 +29,7 @@ export function AppHeader() {
           </kbd>
         </button>
         <div className="hidden md:block flex-1" />
+        <NotificationsBell />
         <HelpButton />
         <ThemeToggle />
         <Button

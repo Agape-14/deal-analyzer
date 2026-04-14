@@ -108,6 +108,28 @@ class Investment(Base):
     distributions = relationship("Distribution", back_populates="investment", cascade="all, delete-orphan")
 
 
+class Notification(Base):
+    """A per-user (single-user) async notification.
+
+    Populated by side-effects of endpoints (extraction completes, verify
+    finds issues, upload done, conflict detected) and consumed by the
+    header bell dropdown. Payload is free-form JSON so we can attach
+    {deal_id, severity, counts, ...} without a schema migration per
+    event type.
+    """
+
+    __tablename__ = "notifications"
+
+    id = Column(Integer, primary_key=True, index=True)
+    kind = Column(String(50), nullable=False, default="info")
+    title = Column(String(255), nullable=False)
+    body = Column(Text, default="")
+    href = Column(String(500), default="")
+    payload = Column(JSON, default=dict)
+    read_at = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), index=True)
+
+
 class Distribution(Base):
     __tablename__ = "distributions"
 
