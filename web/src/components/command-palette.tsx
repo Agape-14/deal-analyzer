@@ -118,12 +118,35 @@ export function CommandPalette() {
               >
                 New investment
               </Item>
+              <Item
+                icon={Plus}
+                onSelect={() => {
+                  setOpen(false);
+                  router.push("/developers");
+                  setTimeout(() => {
+                    document.dispatchEvent(new CustomEvent("open-new-developer"));
+                  }, 120);
+                }}
+              >
+                New developer
+              </Item>
               <Item icon={LayoutDashboard} onSelect={() => go("/")}>
                 Go to deals
               </Item>
               <Item icon={GitCompareArrows} onSelect={() => go("/compare")}>
                 Compare deals
               </Item>
+              {deals && deals.length >= 2 && (
+                <Item
+                  icon={GitCompareArrows}
+                  onSelect={() => {
+                    const top = [...deals].slice(0, Math.min(3, deals.length));
+                    go(`/compare?ids=${top.map((d) => d.id).join(",")}&preset=exec`);
+                  }}
+                >
+                  Compare top 3 recent deals
+                </Item>
+              )}
               <Item icon={Building2} onSelect={() => go("/developers")}>
                 View developers
               </Item>
