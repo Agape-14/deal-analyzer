@@ -49,9 +49,7 @@ log = logging.getLogger("kenyon.boot")
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Skip DB init on Railway (ephemeral filesystem)
-    if os.getenv("RAILWAY_ENVIRONMENT") != "production":
-        await init_db()
+    await init_db()
     # Surface environment configuration at boot so operators don't discover
     # missing keys by user bug reports.
     status = environment_status()

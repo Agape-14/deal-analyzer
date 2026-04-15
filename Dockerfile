@@ -19,8 +19,8 @@ COPY . .
 # Expose port
 EXPOSE 8000
 
-# Use in-memory SQLite for Railway (ephemeral filesystem)
-ENV DATABASE_URL="sqlite+aiosqlite:///:memory:"
+# Point to persistent volume for database
+ENV DB_DIR="/data"
 
 # Run app
 CMD ["python", "-m", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
