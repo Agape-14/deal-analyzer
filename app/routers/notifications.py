@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Response
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
@@ -25,8 +25,14 @@ async def list_notifications(
 
 
 @router.get("/unread-count")
-async def unread_count(db: AsyncSession = Depends(get_db)):
-    """Lightweight poll endpoint for the header bell indicator."""
+async def unread_count(response: Response, db: AsyncSession = Depends(get_db)):
+    """Lightweight poll endpoint for the header bell indicator.
+
+    Cached for 15s so the 45-second client poll plus any simultaneous
+    dashboard loads don't all hit the DB. Fresh enough that a just-
+    triggered notification shows up within one polling window.
+    """
+    response.headers["Cache-Control"] = "private, max-age=15"
     return {"unread": await notif_svc.unread_count(db)}
 
 

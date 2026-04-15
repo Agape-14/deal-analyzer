@@ -10,7 +10,8 @@ class Developer(Base):
     id = Column(Integer, primary_key=True, index=True)
     # Soft-delete timestamp. When non-null the row is hidden from list/get
     # endpoints but remains in the DB for ~30 days so users can Undo.
-    deleted_at = Column(DateTime, nullable=True)
+    # Indexed because every list query filters on `deleted_at IS NULL`.
+    deleted_at = Column(DateTime, nullable=True, index=True)
     name = Column(String(255), nullable=False)
     contact_name = Column(String(255), default="")
     contact_email = Column(String(255), default="")
@@ -26,14 +27,17 @@ class Deal(Base):
     __tablename__ = "deals"
 
     id = Column(Integer, primary_key=True, index=True)
-    deleted_at = Column(DateTime, nullable=True)
-    developer_id = Column(Integer, ForeignKey("developers.id"), nullable=True)
+    deleted_at = Column(DateTime, nullable=True, index=True)
+    # `developer_id` is the join key for the developer-detail view and
+    # gets an index so looking up "all deals under sponsor X" is fast.
+    developer_id = Column(Integer, ForeignKey("developers.id"), nullable=True, index=True)
     project_name = Column(String(500), nullable=False)
     location = Column(String(500), default="")
     city = Column(String(255), default="")
     state = Column(String(100), default="")
     property_type = Column(String(100), default="multifamily")
-    status = Column(String(50), default="reviewing")
+    # Status drives the dashboard filter and pipeline widgets — indexed.
+    status = Column(String(50), default="reviewing", index=True)
     metrics = Column(JSON, default=dict)
     scores = Column(JSON, default=dict)
     notes = Column(Text, default="")
@@ -56,7 +60,9 @@ class DealDocument(Base):
     __tablename__ = "deal_documents"
 
     id = Column(Integer, primary_key=True, index=True)
-    deal_id = Column(Integer, ForeignKey("deals.id"), nullable=False)
+    # Every document lookup is "give me all docs for this deal", so
+    # index the FK.
+    deal_id = Column(Integer, ForeignKey("deals.id"), nullable=False, index=True)
     filename = Column(String(500), nullable=False)
     file_path = Column(String(1000), nullable=False)
     doc_type = Column(String(50), default="other")
@@ -74,7 +80,7 @@ class DealChat(Base):
     __tablename__ = "deal_chats"
 
     id = Column(Integer, primary_key=True, index=True)
-    deal_id = Column(Integer, ForeignKey("deals.id"), nullable=False)
+    deal_id = Column(Integer, ForeignKey("deals.id"), nullable=False, index=True)
     role = Column(String(20), nullable=False)
     content = Column(Text, nullable=False)
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
@@ -86,8 +92,8 @@ class Investment(Base):
     __tablename__ = "investments"
 
     id = Column(Integer, primary_key=True, index=True)
-    deleted_at = Column(DateTime, nullable=True)
-    deal_id = Column(Integer, ForeignKey("deals.id"), nullable=True)
+    deleted_at = Column(DateTime, nullable=True, index=True)
+    deal_id = Column(Integer, ForeignKey("deals.id"), nullable=True, index=True)
     project_name = Column(String(500), default="")  # Can track non-deal investments too
     sponsor_name = Column(String(255), default="")
     investment_date = Column(Date, nullable=True)
@@ -134,7 +140,7 @@ class Distribution(Base):
     __tablename__ = "distributions"
 
     id = Column(Integer, primary_key=True, index=True)
-    investment_id = Column(Integer, ForeignKey("investments.id"), nullable=False)
+    investment_id = Column(Integer, ForeignKey("investments.id"), nullable=False, index=True)
     date = Column(Date, nullable=False)
     amount = Column(Float, nullable=False)
     dist_type = Column(String(50), default="cash_flow")  # cash_flow, return_of_capital, sale_proceeds, refinance

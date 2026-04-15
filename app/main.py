@@ -11,6 +11,8 @@ from fastapi.requests import Request
 from fastapi.responses import RedirectResponse, JSONResponse
 from starlette.middleware.sessions import SessionMiddleware
 from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.middleware.gzip import GZipMiddleware
+from app.security_headers import SecurityHeadersMiddleware
 from contextlib import asynccontextmanager
 from app.database import init_db
 from app.routers import (
@@ -91,10 +93,23 @@ class EnforceAuthMiddleware(BaseHTTPMiddleware):
         return await call_next(request)
 
 
+# Cookie Secure flag: on in production (Railway sets RAILWAY_ENVIRONMENT;
+# any deploy with HTTPS should have it). Override with SESSION_HTTPS_ONLY=0
+# for local HTTP development.
+_session_https_only = os.getenv(
+    "SESSION_HTTPS_ONLY",
+    "1" if os.getenv("RAILWAY_ENVIRONMENT") or os.getenv("PRODUCTION") else "0",
+).strip().lower() in ("1", "true", "yes")
+
 # Middleware ordering note: `add_middleware` registers in reverse — the
 # LAST one added is the OUTERMOST layer (first to see the request). So
 # SessionMiddleware must be added LAST so it runs before EnforceAuth and
 # populates `request.session`.
+#
+# Gzip runs innermost (gets to see the final body) so we set minimum
+# size to 1 KB — below that the overhead outweighs the wire savings.
+app.add_middleware(GZipMiddleware, minimum_size=1024)
+app.add_middleware(SecurityHeadersMiddleware)
 app.add_middleware(EnforceAuthMiddleware)
 app.add_middleware(
     SessionMiddleware,
@@ -102,7 +117,7 @@ app.add_middleware(
     session_cookie="kenyon_session",
     max_age=60 * 60 * 24 * 30,          # 30 days
     same_site="lax",
-    https_only=False,                    # Railway terminates TLS at the edge
+    https_only=_session_https_only,
 )
 
 
@@ -131,7 +146,8 @@ async def healthz():
         each with a human-readable `message` when misconfigured.
 
     A dashboard banner can consume this to warn users before they click a
-    button that would 503.
+    button that would 503. Cached for 10s so every route visit in a
+    short period shares one response.
     """
     env = environment_status()
     auth = describe_auth()
@@ -140,13 +156,14 @@ async def healthz():
     # it on healthz so the banner can warn even on an otherwise clean deploy.
     if not auth.get("enabled"):
         degraded = True
-    return {
+    body = {
         "status": "degraded" if degraded else "ok",
         "models": describe_models(),
         "environment": env,
         "auth": auth,
         "rate_limits": describe_policies(),
     }
+    return JSONResponse(body, headers={"Cache-Control": "private, max-age=10"})
 
 
 @app.get("/")

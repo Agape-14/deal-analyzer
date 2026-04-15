@@ -3,7 +3,7 @@ import uuid
 import io
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, Response
 from fastapi.responses import StreamingResponse
 from app.rate_limit import limit
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -171,15 +171,23 @@ async def create_deal(data: DealCreate, db: AsyncSession = Depends(get_db)):
 
 
 @router.get("/pipeline/summary")
-async def pipeline_summary_endpoint(db: AsyncSession = Depends(get_db)):
+async def pipeline_summary_endpoint(
+    response: Response,
+    db: AsyncSession = Depends(get_db),
+):
     """Dashboard widgets: total deals, velocity (6mo), win rate (12mo),
     aging deals, capital deployed, average analyst score. Derived from
-    the live Deal table on every call — no materialized view yet."""
+    the live Deal table on every call — no materialized view yet.
+
+    Cached for 30s. The numbers change only when a deal is created /
+    scored / status-changed, which is infrequent on an operator tool.
+    """
     from app.services.pipeline_analytics import pipeline_summary
 
     result = await db.execute(
         select(Deal).options(selectinload(Deal.developer)).where(Deal.deleted_at.is_(None))
     )
+    response.headers["Cache-Control"] = "private, max-age=30"
     return pipeline_summary(result.scalars().all())
 
 
@@ -524,8 +532,15 @@ async def get_document_file(doc_id: int, db: AsyncSession = Depends(get_db)):
             status_code=410,
             detail="Original file is no longer available on disk.",
         )
+    # Path-traversal guard: even though file_path is only writable by our
+    # own upload handler (which uses a uuid filename under UPLOAD_DIR), a
+    # compromised DB value must not let us serve /etc/passwd or similar.
+    real = os.path.realpath(doc.file_path)
+    upload_root = os.path.realpath(UPLOAD_DIR)
+    if not real.startswith(upload_root + os.sep):
+        raise HTTPException(status_code=404, detail="Document not found")
     return FileResponse(
-        doc.file_path,
+        real,
         media_type="application/pdf",
         # `inline` (not attachment) so the browser renders it; safer for
         # our same-origin UI than forcing a download.
