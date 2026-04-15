@@ -4,9 +4,17 @@
 nixPkgs = ["python311", "tesseract", "poppler_utils", "gcc"]
 
 [phases.install]
-cmds = ["python -m ensurepip --upgrade && python -m pip install --no-cache-dir -r requirements.txt"]
+# Create a venv to sidestep PEP 668 (the Nix-store Python is
+# "externally managed" and refuses direct pip installs). Everything
+# the app needs — alembic, uvicorn, fastapi, etc. — lives inside
+# /opt/venv and is called by absolute path at start-time.
+cmds = [
+  "python -m venv /opt/venv",
+  "/opt/venv/bin/pip install --no-cache-dir --upgrade pip",
+  "/opt/venv/bin/pip install --no-cache-dir -r requirements.txt"
+]
 
 [start]
 # Apply any pending Alembic migrations before booting the API. Safe to
 # run on every restart — Alembic no-ops when the DB is already at head.
-cmd = "alembic upgrade head && python -m uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000}"
+cmd = "/opt/venv/bin/alembic upgrade head && /opt/venv/bin/python -m uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000}"
