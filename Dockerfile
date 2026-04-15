@@ -19,7 +19,10 @@ COPY . .
 # Expose port
 EXPOSE 8000
 
-# Run app (skip migrations for now)
+# Use in-memory SQLite for Railway (ephemeral filesystem)
+ENV DATABASE_URL="sqlite+aiosqlite:///:memory:"
+
+# Run app
 CMD ["python", "-m", "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
 
 HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
