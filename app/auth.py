@@ -7,13 +7,17 @@ intentional: this app runs as a tool for a single operator, and the
 simplest thing that works keeps attack surface small.
 
     AUTH_USERNAME         (optional, default "admin")
-    AUTH_PASSWORD_HASH    (bcrypt hash; run `python -m app.auth hash <pw>`)
+    AUTH_PASSWORD         (plaintext — hashed in memory on first read;
+                           simplest option for a dashboard env-var UI)
+    AUTH_PASSWORD_HASH    (bcrypt hash; run `python -m app.auth hash <pw>`
+                           or use the browser snippet in DEPLOY.md)
     AUTH_SECRET           (32+ char random string; required if auth is on)
     AUTH_DISABLED         ("1" or "true" disables auth entirely; for local dev)
 
-When AUTH_PASSWORD_HASH is unset the server treats auth as disabled — the
-app is wide open. The healthz endpoint surfaces this so the operator
-sees the warning immediately.
+Exactly one of AUTH_PASSWORD or AUTH_PASSWORD_HASH is enough. If both are
+set, the explicit hash wins. When neither is set the server treats auth
+as disabled — the app is wide open. The healthz endpoint surfaces this
+so the operator sees the warning immediately.
 """
 
 from __future__ import annotations
@@ -30,11 +34,12 @@ from fastapi import HTTPException, Request
 # ----------------------------- configuration ----------------------------- #
 
 def auth_enabled() -> bool:
-    """True when a password hash is configured and auth isn't explicitly off."""
+    """True when a password (hash or plaintext) is configured and auth isn't
+    explicitly off."""
     disabled = os.getenv("AUTH_DISABLED", "").strip().lower() in ("1", "true", "yes")
     if disabled:
         return False
-    return bool(os.getenv("AUTH_PASSWORD_HASH"))
+    return bool(os.getenv("AUTH_PASSWORD_HASH") or os.getenv("AUTH_PASSWORD"))
 
 
 def expected_username() -> str:
@@ -42,8 +47,32 @@ def expected_username() -> str:
 
 
 def _password_hash() -> Optional[str]:
-    v = os.getenv("AUTH_PASSWORD_HASH")
-    return v.strip() if v else None
+    """Return the bcrypt hash to check passwords against.
+
+    Precedence:
+      1. AUTH_PASSWORD_HASH (explicit bcrypt hash) — used as-is.
+      2. AUTH_PASSWORD (plaintext) — hashed once in memory and cached
+         under a private env key so subsequent requests skip the bcrypt
+         work (bcrypt at rounds=12 takes ~100ms — fine for boot, too
+         slow to do per request).
+
+    Returning None means "no credential configured" → auth_enabled()
+    is False.
+    """
+    explicit = os.getenv("AUTH_PASSWORD_HASH")
+    if explicit and explicit.strip():
+        return explicit.strip()
+
+    plain = os.getenv("AUTH_PASSWORD")
+    if plain:
+        cached = os.environ.get("_KENYON_PASSWORD_HASH_CACHE")
+        if cached:
+            return cached
+        hashed = hash_password(plain)
+        os.environ["_KENYON_PASSWORD_HASH_CACHE"] = hashed
+        return hashed
+
+    return None
 
 
 def session_secret() -> str:
@@ -155,7 +184,7 @@ def describe_auth() -> dict:
         "message": (
             None
             if auth_enabled()
-            else "AUTH_PASSWORD_HASH is not set — every endpoint is publicly reachable."
+            else "AUTH_PASSWORD / AUTH_PASSWORD_HASH is not set — every endpoint is publicly reachable."
         ),
     }
 
