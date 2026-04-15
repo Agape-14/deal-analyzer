@@ -56,12 +56,14 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
           </Suspense>
           <Toaster
             position="bottom-right"
-            theme="system"
+            theme="dark"
+            richColors
+            closeButton
             toastOptions={{
               style: {
-                background: "hsl(var(--card))",
-                border: "1px solid hsl(var(--border))",
-                color: "hsl(var(--foreground))",
+                background: "#1a1d24",
+                border: "1px solid #2a2e38",
+                color: "#f5f5f7",
               },
             }}
           />
