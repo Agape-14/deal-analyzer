@@ -2,7 +2,6 @@
 
 import os
 import json
-from typing import Optional
 
 
 def _safe_float(val, default=0.0):

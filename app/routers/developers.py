@@ -1,8 +1,11 @@
+from datetime import datetime, timezone
+
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func
 from pydantic import BaseModel
 from typing import Optional
+
 from app.database import get_db
 from app.models import Developer, Deal
 
@@ -120,8 +123,6 @@ async def update_developer(dev_id: int, data: DeveloperUpdate, db: AsyncSession 
 @router.delete("/{dev_id}")
 async def delete_developer(dev_id: int, db: AsyncSession = Depends(get_db)):
     """Soft-delete. See the Deal equivalent for semantics."""
-    from datetime import datetime, timezone
-
     result = await db.execute(select(Developer).where(Developer.id == dev_id))
     dev = result.scalar_one_or_none()
     if not dev or dev.deleted_at is not None:

@@ -24,7 +24,7 @@ import time
 from typing import Optional
 
 import bcrypt
-from fastapi import Depends, HTTPException, Request
+from fastapi import HTTPException, Request
 
 
 # ----------------------------- configuration ----------------------------- #

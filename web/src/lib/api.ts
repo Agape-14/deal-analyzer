@@ -33,10 +33,11 @@ async function forwardedCookieHeader(): Promise<string | null> {
   }
 }
 
-export type ApiError = {
+/** Shape thrown from `api.*` on non-2xx responses. */
+interface ApiError {
   status: number;
   detail: string;
-};
+}
 
 async function request<T>(
   path: string,

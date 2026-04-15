@@ -6,7 +6,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 from pydantic import BaseModel
 from app.database import get_db
-from app.models import Deal, DealChat, DealDocument
+from app.models import Deal, DealChat
 from app.config import MODEL_CHAT
 from app.rate_limit import limit
 

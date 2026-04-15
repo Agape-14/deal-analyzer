@@ -17,7 +17,7 @@ import csv
 import io
 import json
 import zipfile
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
@@ -27,7 +27,7 @@ from sqlalchemy.orm import selectinload
 
 from app.database import get_db
 from app.models import Deal, Developer, Investment
-from app.services.portfolio_analytics import portfolio_analytics, investment_performance
+from app.services.portfolio_analytics import portfolio_analytics
 
 router = APIRouter()
 
@@ -553,7 +553,7 @@ async def export_all_json(db: AsyncSession = Depends(get_db)):
     } for i in inv_r.scalars().all()]
 
     payload = {
-        "exported_at": datetime.utcnow().isoformat() + "Z",
+        "exported_at": datetime.now(timezone.utc).isoformat(),
         "developers": developers,
         "deals": deals,
         "investments": investments,

@@ -5,7 +5,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 from pydantic import BaseModel, Field, field_validator
 from typing import Optional
-from datetime import date
+from datetime import date, datetime, timezone
 from app.database import get_db
 from app.models import Investment, Distribution, Deal
 from app.services.portfolio_analytics import (
@@ -248,8 +248,6 @@ async def update_investment(investment_id: int, data: InvestmentUpdate, db: Asyn
 @router.delete("/{investment_id}")
 async def delete_investment(investment_id: int, db: AsyncSession = Depends(get_db)):
     """Soft-delete. Follow up with `/restore` or `/purge` as needed."""
-    from datetime import datetime, timezone
-
     result = await db.execute(select(Investment).where(Investment.id == investment_id))
     inv = result.scalar_one_or_none()
     if not inv or inv.deleted_at is not None:
@@ -334,8 +332,7 @@ def _serialize_investment(inv: Investment) -> dict:
     # Actual cash-on-cash (annual distributions / invested)
     actual_coc = 0
     if invested > 0 and inv.investment_date and inv.distributions:
-        from datetime import date as date_type
-        today = inv.exit_date or date_type.today()
+        today = inv.exit_date or date.today()
         years = max((today - inv.investment_date).days / 365.25, 0.1)
         actual_coc = round((total_distributions / years) / invested * 100, 1)
 

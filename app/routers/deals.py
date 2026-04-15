@@ -1,6 +1,8 @@
 import os
 import uuid
 import io
+from datetime import datetime, timezone
+
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form
 from fastapi.responses import StreamingResponse
 from app.rate_limit import limit
@@ -10,8 +12,8 @@ from sqlalchemy.orm import selectinload
 from pydantic import BaseModel, Field, field_validator
 from typing import Optional
 from app.database import get_db
-from app.models import Deal, DealDocument, Developer
-from app.services.pdf_extractor import extract_text_from_pdf, extract_pdf
+from app.models import Deal, DealDocument
+from app.services.pdf_extractor import extract_pdf
 from app.services.deal_extractor import extract_metrics_from_docs
 from app.services.deal_scorer import score_deal
 from app.services.deal_validator import validate_deal_metrics
@@ -239,8 +241,6 @@ async def delete_deal(deal_id: int, db: AsyncSession = Depends(get_db)):
     """Soft-delete. The deal is hidden from list/get endpoints but
     remains in the DB. `POST /{id}/restore` reverses within the undo
     window; `DELETE /{id}/purge` hard-deletes immediately."""
-    from datetime import datetime, timezone
-
     result = await db.execute(select(Deal).where(Deal.id == deal_id))
     deal = result.scalar_one_or_none()
     if not deal or deal.deleted_at is not None:
