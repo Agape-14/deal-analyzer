@@ -1,10 +1,10 @@
 # Nixpacks config for the FastAPI service on Railway.
 # Pins Python + system deps (Tesseract for OCR, poppler for PDF image extraction).
 [phases.setup]
-nixPkgs = ["python311", "python311Packages.pip", "tesseract", "poppler_utils", "gcc"]
+nixPkgs = ["python311", "tesseract", "poppler_utils", "gcc"]
 
 [phases.install]
-cmds = ["python -m pip install --no-cache-dir -r requirements.txt"]
+cmds = ["python -m ensurepip --upgrade", "python -m pip install --no-cache-dir -r requirements.txt"]
 
 [start]
 # Apply any pending Alembic migrations before booting the API. Safe to
