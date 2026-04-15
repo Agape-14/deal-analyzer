@@ -17,4 +17,4 @@ cmds = [
 [start]
 # Apply any pending Alembic migrations before booting the API. Safe to
 # run on every restart — Alembic no-ops when the DB is already at head.
-cmd = "/opt/venv/bin/alembic upgrade head && /opt/venv/bin/python -m uvicorn app.main:app --host :: --port ${PORT:-8000}"
+cmd = "/opt/venv/bin/alembic upgrade head && /opt/venv/bin/python start.py"

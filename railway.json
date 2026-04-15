@@ -5,7 +5,7 @@
     "nixpacksConfigPath": "nixpacks.toml"
   },
   "deploy": {
-    "startCommand": "/opt/venv/bin/alembic upgrade head && /opt/venv/bin/python -m uvicorn app.main:app --host :: --port ${PORT:-8000}",
+    "startCommand": "/opt/venv/bin/alembic upgrade head && /opt/venv/bin/python start.py",
     "healthcheckPath": "/api/healthz",
     "healthcheckTimeout": 30,
     "restartPolicyType": "ON_FAILURE",
