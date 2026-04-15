@@ -4,7 +4,7 @@
 nixPkgs = ["python311", "tesseract", "poppler_utils", "gcc"]
 
 [phases.install]
-cmds = ["pip install --no-cache-dir -r requirements.txt"]
+cmds = ["python -m pip install --no-cache-dir -r requirements.txt"]
 
 [start]
 # Apply any pending Alembic migrations before booting the API. Safe to
