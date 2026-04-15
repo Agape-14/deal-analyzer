@@ -20,6 +20,9 @@ needs a public domain.
    - Variables to set:
      - `ANTHROPIC_API_KEY` — for AI scoring / chat.
      - `DB_DIR=/data` — where SQLite lives; see volume step.
+       Uploaded PDFs also go here (`/data/uploads/`) by default, so
+       they survive redeploys. Override with `UPLOADS_DIR` if you
+       want a separate mount for file storage.
      - **Auth** (required for real deploy — without these the app is public):
        - `AUTH_USERNAME=admin` (pick your login name)
        - `AUTH_PASSWORD_HASH=<bcrypt>` — generate with

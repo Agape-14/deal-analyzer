@@ -42,7 +42,13 @@ from app.services import notifications as notif_svc
 router = APIRouter()
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-UPLOAD_DIR = os.path.join(BASE_DIR, "uploads")
+# UPLOADS_DIR override lets Railway mount a Volume at /data/uploads so files
+# survive redeploys. Falls back to DB_DIR/uploads (same volume as SQLite when
+# DB_DIR is set), else repo-root/uploads for local dev.
+UPLOAD_DIR = os.environ.get(
+    "UPLOADS_DIR",
+    os.path.join(os.environ.get("DB_DIR", BASE_DIR), "uploads"),
+)
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 
 
