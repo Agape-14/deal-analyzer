@@ -52,32 +52,11 @@ export function QualityPanel({
 
   async function runVerify() {
     setBusy("verify");
-    const startedAt = Date.now();
     try {
       await api.post(`/api/deals/${dealId}/verify?auto_correct=true`);
-      toast.success("Verification complete");
-      router.refresh();
+      toast.success("Verification started — running in background (~90s). Refresh the page in a couple minutes to see results.", { duration: 8000 });
     } catch (e) {
-      // Long-running verify calls sometimes look like failures on the
-      // client (Railway edge proxy cuts at ~60s, browser fetch can
-      // time out) while the server actually finishes a minute later
-      // and commits the result. Refresh regardless and peek at the
-      // fresh data: if last_verified_at is newer than we started,
-      // the work succeeded — turn the error into a success message.
-      router.refresh();
-      try {
-        const fresh = await api.get<{ metrics?: { _quality?: { last_verified_at?: string } } }>(
-          `/api/deals/${dealId}`,
-        );
-        const when = fresh?.metrics?._quality?.last_verified_at;
-        if (when && Date.parse(when) >= startedAt - 60_000) {
-          toast.success("Verification complete");
-          return;
-        }
-      } catch {
-        /* fall through to error toast */
-      }
-      toast.error("Verification failed", { description: (e as { detail?: string })?.detail });
+      toast.error("Verification failed to start", { description: (e as { detail?: string })?.detail });
     } finally {
       setBusy(null);
     }

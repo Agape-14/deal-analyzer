@@ -787,13 +787,12 @@ async def validate_deal(deal_id: int, db: AsyncSession = Depends(get_db)):
 
 @router.post("/{deal_id}/verify", dependencies=[Depends(limit("ai"))])
 async def verify_deal_endpoint(deal_id: int, auto_correct: bool = True, db: AsyncSession = Depends(get_db)):
-    """Second-pass AI verification of extracted metrics against source documents.
-    
-    Sends extracted metrics + original PDF page images to AI for forensic audit.
-    Checks every value, flags errors, finds missing data, verifies calculations.
-    
-    Args:
-        auto_correct: If True, automatically applies corrections to metrics
+    """Second-pass AI verification — runs as a background task.
+
+    Returns 202 immediately and runs the (slow) verification in the
+    background. The UI polls for completion via the quality endpoint.
+    This avoids the Railway edge-proxy 60s timeout killing the request
+    mid-verify and losing 4 of 5 section chunks.
     """
     result = await db.execute(
         select(Deal).options(selectinload(Deal.documents)).where(Deal.id == deal_id)
@@ -805,77 +804,99 @@ async def verify_deal_endpoint(deal_id: int, auto_correct: bool = True, db: Asyn
     if not deal.metrics:
         raise HTTPException(status_code=400, detail="No metrics extracted yet. Run extraction first.")
 
-    try:
-        verification = await verify_deal_metrics(deal, db)
-    except Exception as e:
-        msg = str(e)
-        status = 503 if "ANTHROPIC_API_KEY" in msg else 500
-        raise HTTPException(status_code=status, detail=f"Verification failed: {msg}")
-
-    # Always stamp the verification result into provenance, even when
-    # auto_correct=False. This gives the UI per-field "confirmed / wrong /
-    # unverifiable" badges without touching the underlying values.
-    metrics = deal.metrics.copy() if deal.metrics else {}
-    changes: list[str] = []
-    if auto_correct:
-        metrics, changes = apply_corrections(metrics, verification)
-
-    metrics = stamp_verification(metrics, verification)
-
-    # Re-run validation (+ conflict / staleness flags) on the post-verify
-    # metrics so the dashboard reflects the newest state.
-    flags = validate_deal_metrics(metrics, deal.property_type)
-    flags.extend(staleness_flags(metrics, deal.documents))
-    metrics["validation_flags"] = flags
-
-    deal.metrics = metrics
-    await db.commit()
-
-    # Run math checks on the (possibly corrected) metrics
-    math_results = run_math_checks(deal.metrics or {})
-    math_summary = {
-        'pass': len([c for c in math_results if c['status'] == 'pass']),
-        'fail': len([c for c in math_results if c['status'] == 'fail']),
-        'warn': len([c for c in math_results if c['status'] == 'warn']),
-        'info': len([c for c in math_results if c['status'] == 'info']),
-    }
-
-    # Notification: verification complete.
-    vsummary = (verification or {}).get("summary") or {}
-    confidence = vsummary.get("confidence_score")
-    totals = {}
-    for row in (verification or {}).get("audit_results", []) or []:
-        st = str(row.get("status") or "").lower()
-        totals[st] = totals.get(st, 0) + 1
-    wrong = totals.get("wrong", 0)
-    missing = totals.get("missing", 0)
-    body_parts = []
-    if confidence is not None:
-        body_parts.append(f"{confidence}% confidence")
-    if wrong:
-        body_parts.append(f"{wrong} corrected")
-    if missing:
-        body_parts.append(f"{missing} missing")
-    if changes:
-        body_parts.append(f"{len(changes)} auto-applied")
-    await notif_svc.emit(
-        db,
-        kind="warning" if wrong or missing else "success",
-        title=f"Verification complete — {deal.project_name}",
-        body=" · ".join(body_parts) if body_parts else "All extracted values match the source docs.",
-        href=f"/deals/{deal.id}?tab=overview",
-        payload={"deal_id": deal.id, **totals, "confidence": confidence},
-    )
-    await db.commit()
+    # Launch verification as a fire-and-forget background coroutine.
+    # FastAPI's BackgroundTasks run AFTER the response is sent, which
+    # is perfect here — the client gets 202 immediately, and the 5
+    # section-chunked verify calls have all the time they need
+    # without worrying about proxy timeouts.
+    import asyncio
+    asyncio.ensure_future(_run_verify_background(deal_id, auto_correct))
 
     return {
-        "message": "Verification complete",
-        "verification": verification,
-        "corrections_applied": changes,
-        "auto_corrected": auto_correct,
-        "math_checks": math_results,
-        "math_summary": math_summary,
+        "message": "Verification started — this runs in the background (~2-5 min). "
+                   "Refresh the page to see updated verification status.",
+        "status": "started",
+        "deal_id": deal_id,
     }
+
+
+async def _run_verify_background(deal_id: int, auto_correct: bool):
+    """Background verify task. Runs independently of the HTTP request lifecycle.
+
+    Uses its own DB session (can't share the request-scoped one) and
+    commits results directly. Any exception is logged to operation_log
+    + stderr but never propagates to a client (there's no client).
+    """
+    import logging
+    logger = logging.getLogger("kenyon.verify_bg")
+
+    from app.database import async_session
+    async with async_session() as db:
+        try:
+            result = await db.execute(
+                select(Deal).options(selectinload(Deal.documents)).where(Deal.id == deal_id)
+            )
+            deal = result.scalar_one_or_none()
+            if not deal or not deal.metrics:
+                logger.warning("verify_bg: deal %s not found or no metrics", deal_id)
+                return
+
+            verification = await verify_deal_metrics(deal, db)
+
+            metrics = deal.metrics.copy() if deal.metrics else {}
+            changes: list[str] = []
+            if auto_correct:
+                metrics, changes = apply_corrections(metrics, verification)
+
+            metrics = stamp_verification(metrics, verification)
+
+            flags = validate_deal_metrics(metrics, deal.property_type)
+            flags.extend(staleness_flags(metrics, deal.documents))
+            metrics["validation_flags"] = flags
+
+            deal.metrics = metrics
+            await db.commit()
+
+            # Re-run math checks
+            math_results = run_math_checks(deal.metrics or {})
+
+            # Notification
+            vsummary = (verification or {}).get("summary") or {}
+            confidence = vsummary.get("confidence_score")
+            totals = {}
+            for row in (verification or {}).get("audit_results", []) or []:
+                st = str(row.get("status") or "").lower()
+                totals[st] = totals.get(st, 0) + 1
+            wrong = totals.get("wrong", 0)
+            missing = totals.get("missing", 0)
+            body_parts = []
+            if confidence is not None:
+                body_parts.append(f"{confidence}% confidence")
+            if wrong:
+                body_parts.append(f"{wrong} corrected")
+            if missing:
+                body_parts.append(f"{missing} missing")
+            if changes:
+                body_parts.append(f"{len(changes)} auto-applied")
+            await notif_svc.emit(
+                db,
+                kind="warning" if wrong or missing else "success",
+                title=f"Verification complete — {deal.project_name}",
+                body=" · ".join(body_parts) if body_parts else "All extracted values match the source docs.",
+                href=f"/deals/{deal.id}?tab=overview",
+                payload={"deal_id": deal.id, **totals, "confidence": confidence},
+            )
+            await db.commit()
+
+            logger.info(
+                "verify_bg: deal %s complete — %d confirmed, %d wrong, %d unverifiable",
+                deal_id, totals.get("confirmed", 0), wrong, totals.get("unverifiable", 0),
+            )
+        except Exception:
+            logger.exception("verify_bg: deal %s failed", deal_id)
+            # The per-chunk operation_log entries already captured the
+            # error. Nothing else to do — the user will see the stale
+            # verified_at timestamp and know to retry.
 
 
 @router.get("/{deal_id}/math-check")

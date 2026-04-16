@@ -340,22 +340,30 @@ async def verify_deal_metrics(deal, db) -> dict:
     if extra_sections:
         groups_to_run.append(extra_sections)
 
-    # Merge the per-group results into a single verification dict.
+    # Run chunks in PARALLEL — each chunk is independent (same PDF
+    # pages, different metric sections). Sequential took 5+ min
+    # (sum of all chunk durations); parallel takes ~90-100s (limited
+    # by the slowest chunk). Anthropic's rate limits on the Build
+    # tier handle 5 concurrent requests at ~10K input tokens each.
+    import asyncio
     combined: dict = {"audit_results": [], "missing_data": [], "summary": {}}
     confidences: list[float] = []
     errors: list[str] = []
 
-    for group in groups_to_run:
+    async def _run_one(group: list[str]) -> tuple[list[str], dict | Exception]:
         subset = {s: metrics.get(s) for s in group if metrics.get(s) is not None}
         try:
             res = await _verify_sections(group, subset, rendered, api_key, getattr(deal, "id", None))
+            return group, res
         except Exception as e:
-            # One group failing shouldn't sink the whole verification —
-            # other sections still get audited. The diagnostics entry
-            # for the failed group records the exception.
-            errors.append(f"{','.join(group)}: {e}")
-            continue
+            return group, e
 
+    results = await asyncio.gather(*[_run_one(g) for g in groups_to_run])
+
+    for group, res in results:
+        if isinstance(res, Exception):
+            errors.append(f"{','.join(group)}: {res}")
+            continue
         if isinstance(res, dict):
             combined["audit_results"].extend(res.get("audit_results") or [])
             combined["missing_data"].extend(res.get("missing_data") or [])
