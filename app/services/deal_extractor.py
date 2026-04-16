@@ -5,6 +5,7 @@ import base64
 import anthropic
 
 from app.config import MODEL_EXTRACT
+from app.services.operation_log import record
 
 EXTRACTION_PROMPT = """You are a real estate investment analyst specializing in LP due diligence for syndications. Extract ALL available metrics from the following deal documents.
 
@@ -278,42 +279,68 @@ async def extract_metrics_from_docs(doc_texts: list[dict], doc_paths: list[str] 
                 "text": f"\n(Note: Could not extract page images: {e}. Relying on text only.)\n"
             })
 
-    client = anthropic.Anthropic(api_key=api_key)
-    message = client.messages.create(
+    # Stages recorded separately so the diagnostics panel shows which
+    # step failed — Claude call vs JSON parse vs post-process.
+    filenames = [d.get("filename") for d in doc_texts] or (doc_paths or [])
+    async with record(
+        "extract",
         model=MODEL_EXTRACT,
-        max_tokens=8192,
-        messages=[{"role": "user", "content": content_blocks}]
-    )
+        meta={
+            "docs": filenames,
+            "pages_used": pages_used,
+            "text_chars": sum(len(d.get("text", "") or "") for d in doc_texts),
+        },
+    ) as op:
+        client = anthropic.Anthropic(api_key=api_key)
+        op.note = "calling Anthropic"
+        message = client.messages.create(
+            model=MODEL_EXTRACT,
+            max_tokens=8192,
+            messages=[{"role": "user", "content": content_blocks}]
+        )
+        # Record usage even on the happy path so operators can spot a
+        # deal that's eating an unexpected number of tokens.
+        try:
+            op.input_tokens = getattr(message.usage, "input_tokens", None)
+            op.output_tokens = getattr(message.usage, "output_tokens", None)
+        except Exception:
+            pass
 
-    response_text = message.content[0].text.strip()
+        op.note = "received response, parsing"
+        response_text = message.content[0].text.strip()
+        # Truncated preview for the diagnostics UI — the full response
+        # can be 30+ KB and we don't want to bloat the buffer.
+        op.response_preview = response_text[:2000]
 
-    # Try to parse JSON, handle potential markdown wrapping
-    if response_text.startswith("```"):
-        lines = response_text.split("\n")
-        lines = [l for l in lines if not l.startswith("```")]
-        response_text = "\n".join(lines)
+        # Try to parse JSON, handle potential markdown wrapping
+        if response_text.startswith("```"):
+            lines = response_text.split("\n")
+            lines = [l for l in lines if not l.startswith("```")]
+            response_text = "\n".join(lines)
 
-    try:
-        metrics = json.loads(response_text)
-    except json.JSONDecodeError:
-        # Try to find JSON in the response
-        start = response_text.find("{")
-        end = response_text.rfind("}") + 1
-        if start >= 0 and end > start:
-            metrics = json.loads(response_text[start:end])
-        else:
-            raise ValueError(f"Could not parse AI response as JSON")
+        try:
+            metrics = json.loads(response_text)
+        except json.JSONDecodeError:
+            # Try to find JSON in the response
+            start = response_text.find("{")
+            end = response_text.rfind("}") + 1
+            if start >= 0 and end > start:
+                metrics = json.loads(response_text[start:end])
+            else:
+                raise ValueError("Could not parse AI response as JSON")
 
-    # Ensure new sections exist even if AI didn't return them
-    if "underwriting_checks" not in metrics:
-        metrics["underwriting_checks"] = {}
-    if "sponsor_evaluation" not in metrics:
-        metrics["sponsor_evaluation"] = {}
+        # Ensure new sections exist even if AI didn't return them
+        if "underwriting_checks" not in metrics:
+            metrics["underwriting_checks"] = {}
+        if "sponsor_evaluation" not in metrics:
+            metrics["sponsor_evaluation"] = {}
 
-    # Post-processing: calculate derived fields if AI missed them
-    _post_process_metrics(metrics)
+        # Post-processing: calculate derived fields if AI missed them
+        op.note = "post-processing"
+        _post_process_metrics(metrics)
 
-    return metrics
+        op.meta["top_level_keys"] = sorted(list(metrics.keys()))
+        return metrics
 
 
 def _safe_num(val):

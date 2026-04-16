@@ -23,6 +23,7 @@ from app.routers import (
     reports,
     auth as auth_router,
     notifications as notifications_router,
+    admin as admin_router,
 )
 from app.config import describe_models, environment_status
 from app.auth import (
@@ -133,6 +134,7 @@ app.include_router(chat.router, prefix="/api/chat", tags=["chat"])
 app.include_router(investments.router, prefix="/api/investments", tags=["investments"])
 app.include_router(reports.router, prefix="/api/reports", tags=["reports"])
 app.include_router(notifications_router.router, prefix="/api/notifications", tags=["notifications"])
+app.include_router(admin_router.router, prefix="/api/admin", tags=["admin"])
 
 
 @app.get("/api/healthz")

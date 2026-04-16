@@ -172,32 +172,47 @@ async def verify_deal_metrics(deal, db) -> dict:
                 })
             pdf_doc.close()
     
-    client = anthropic.Anthropic(api_key=api_key)
-    message = client.messages.create(
+    from app.services.operation_log import record
+    async with record(
+        "verify",
+        deal_id=getattr(deal, "id", None),
         model=MODEL_VERIFY,
-        max_tokens=8192,
-        messages=[{"role": "user", "content": content_blocks}]
-    )
-    
-    response_text = message.content[0].text.strip()
-    
-    # Parse JSON response
-    if response_text.startswith("```"):
-        lines = response_text.split("\n")
-        lines = [l for l in lines if not l.startswith("```")]
-        response_text = "\n".join(lines)
-    
-    try:
-        verification = json.loads(response_text)
-    except json.JSONDecodeError:
-        start = response_text.find("{")
-        end = response_text.rfind("}") + 1
-        if start >= 0 and end > start:
-            verification = json.loads(response_text[start:end])
-        else:
-            raise ValueError("Could not parse verification response as JSON")
-    
-    return verification
+        meta={"num_pdf_docs": len(doc_paths)},
+    ) as op:
+        client = anthropic.Anthropic(api_key=api_key)
+        op.note = "calling Anthropic"
+        message = client.messages.create(
+            model=MODEL_VERIFY,
+            max_tokens=8192,
+            messages=[{"role": "user", "content": content_blocks}]
+        )
+        try:
+            op.input_tokens = getattr(message.usage, "input_tokens", None)
+            op.output_tokens = getattr(message.usage, "output_tokens", None)
+        except Exception:
+            pass
+
+        response_text = message.content[0].text.strip()
+        op.response_preview = response_text[:2000]
+
+        # Parse JSON response
+        op.note = "parsing response"
+        if response_text.startswith("```"):
+            lines = response_text.split("\n")
+            lines = [l for l in lines if not l.startswith("```")]
+            response_text = "\n".join(lines)
+
+        try:
+            verification = json.loads(response_text)
+        except json.JSONDecodeError:
+            start = response_text.find("{")
+            end = response_text.rfind("}") + 1
+            if start >= 0 and end > start:
+                verification = json.loads(response_text[start:end])
+            else:
+                raise ValueError("Could not parse verification response as JSON")
+
+        return verification
 
 
 def apply_corrections(metrics: dict, verification: dict) -> tuple[dict, list[str]]:
