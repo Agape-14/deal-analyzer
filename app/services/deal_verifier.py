@@ -149,106 +149,112 @@ def _parse_json_defensively(text: str) -> dict:
     )
 
 
-async def verify_deal_metrics(deal, db) -> dict:
-    """Run second-pass verification on extracted metrics.
-    
-    Args:
-        deal: Deal ORM object with metrics and documents
-        db: Database session
-        
-    Returns:
-        Verification results dict with audit trail
+# Groups of metric sections audited together — kept small so each
+# verify call stays well under Anthropic's input-tokens-per-minute
+# ceiling on non-enterprise tiers. Sections are paired by how closely
+# they cross-reference each other in OM tables (deal_structure and
+# target_returns often live on the same page; project_details with
+# market_location, etc.).
+VERIFY_SECTION_GROUPS: list[list[str]] = [
+    ["deal_structure", "target_returns"],
+    ["project_details", "market_location"],
+    ["financial_projections", "underwriting_checks"],
+    ["sponsor_evaluation"],
+]
+# Max PDF pages per verify call. Below the Anthropic message-size
+# soft ceiling that was causing 429s. Each page at 150 DPI base64
+# is ~250 KB, so 5 pages keeps a single verify well under ~1.5 MB.
+VERIFY_MAX_PAGES = 5
+
+
+def _render_pdf_pages_to_b64(doc_paths: list[str], max_pages: int) -> list[tuple[str, int, int, str]]:
+    """Render the first `max_pages` pages of each PDF to base64 PNGs.
+
+    Returns a list of (filename, page_number, total_pages, b64_data) tuples.
+    Shared by all per-group verify calls so we only pay the PDF render
+    cost once per verify run.
     """
-    api_key = os.environ.get("ANTHROPIC_API_KEY")
-    if not api_key:
-        raise ValueError("ANTHROPIC_API_KEY not set")
-    
-    metrics = deal.metrics
-    if not metrics:
-        return {"error": "No metrics to verify"}
-    
-    # Build content blocks
-    content_blocks = []
-    
-    # Clean metrics for verification (remove validation_flags)
-    clean_metrics = {k: v for k, v in metrics.items() if k != 'validation_flags'}
-    
-    # Add the prompt + extracted metrics
-    content_blocks.append({
-        "type": "text",
-        "text": VERIFY_PROMPT + json.dumps(clean_metrics, indent=2)
-    })
-    
-    # Add document page images
-    doc_paths = [
-        doc.file_path
-        for doc in deal.documents
-        if doc.file_path and doc.file_path.endswith(".pdf")
-    ]
-    
-    if doc_paths:
-        content_blocks.append({
-            "type": "text",
-            "text": "\n\nBELOW ARE THE ORIGINAL DOCUMENT PAGES. Check every extracted value against these:\n"
-        })
-        
-        for path in doc_paths:
-            if not os.path.exists(path):
-                continue
-            pdf_doc = fitz.open(path)
+    rendered: list[tuple[str, int, int, str]] = []
+    for path in doc_paths:
+        if not os.path.exists(path):
+            continue
+        pdf_doc = fitz.open(path)
+        try:
             fname = os.path.basename(path)
-            # Send up to 10 pages at lower res to stay within limits
-            max_pages = min(pdf_doc.page_count, 10)
-            for page_num in range(max_pages):
+            n = min(pdf_doc.page_count, max_pages)
+            for page_num in range(n):
                 page = pdf_doc[page_num]
-                # 150 DPI for readability while managing size
-                mat = fitz.Matrix(150/72, 150/72)
+                mat = fitz.Matrix(150 / 72, 150 / 72)
                 pix = page.get_pixmap(matrix=mat)
                 img_bytes = pix.tobytes("png")
-                img_b64 = base64.b64encode(img_bytes).decode("utf-8")
-                content_blocks.append({
-                    "type": "text",
-                    "text": f"Document '{fname}' — Page {page_num + 1} of {pdf_doc.page_count}:"
-                })
-                content_blocks.append({
-                    "type": "image",
-                    "source": {
-                        "type": "base64",
-                        "media_type": "image/png",
-                        "data": img_b64
-                    }
-                })
+                rendered.append(
+                    (fname, page_num + 1, pdf_doc.page_count,
+                     base64.b64encode(img_bytes).decode("utf-8"))
+                )
+        finally:
             pdf_doc.close()
-    
+    return rendered
+
+
+async def _verify_sections(
+    sections: list[str],
+    subset_metrics: dict,
+    rendered_pages: list[tuple[str, int, int, str]],
+    api_key: str,
+    deal_id: int | None,
+) -> dict:
+    """Verify one group of metric sections against the rendered PDF pages.
+
+    Returns the parsed verification dict (audit_results, missing_data,
+    summary). Runs inside a dedicated operation_log.record() so each
+    chunk is visible in the diagnostics panel with its own timing.
+    """
+    content_blocks: list[dict] = []
+    content_blocks.append({
+        "type": "text",
+        "text": (
+            VERIFY_PROMPT
+            + "\n\nFOCUS: only audit fields in these sections: "
+            + ", ".join(sections)
+            + ".\n\n"
+            + json.dumps(subset_metrics, indent=2)
+        ),
+    })
+    if rendered_pages:
+        content_blocks.append({
+            "type": "text",
+            "text": "\n\nBELOW ARE THE ORIGINAL DOCUMENT PAGES. Check every extracted value against these:\n",
+        })
+        for fname, page_num, total, b64 in rendered_pages:
+            content_blocks.append({
+                "type": "text",
+                "text": f"Document '{fname}' — Page {page_num} of {total}:",
+            })
+            content_blocks.append({
+                "type": "image",
+                "source": {"type": "base64", "media_type": "image/png", "data": b64},
+            })
+
     from app.services.operation_log import record
     async with record(
         "verify",
-        deal_id=getattr(deal, "id", None),
+        deal_id=deal_id,
         model=MODEL_VERIFY,
-        meta={"num_pdf_docs": len(doc_paths)},
+        note=f"sections: {','.join(sections)}",
+        meta={"sections": sections, "pages": len(rendered_pages)},
     ) as op:
         client = anthropic.AsyncAnthropic(api_key=api_key)
-        op.note = "calling Anthropic (async streaming)"
-        # AsyncAnthropic + async streaming keeps the event loop free
-        # during the long verify call — sync streaming blocks the
-        # worker for the full duration, healthchecks fail, Railway
-        # restarts the container mid-call, and the error trail is
-        # lost. max_tokens=16000 gives enough room for a typical
-        # well-populated deal's audit entries (60-90 fields × ~250
-        # tokens each = ~20K, but we use a tighter output format so
-        # 16K is usually enough and completes in ~90s instead of
-        # ~180s).
         response_text = ""
         input_tokens = None
         output_tokens = None
         stop_reason = None
         async with client.messages.stream(
             model=MODEL_VERIFY,
-            max_tokens=16000,
+            max_tokens=8000,
             messages=[{"role": "user", "content": content_blocks}],
         ) as stream:
-            async for text_chunk in stream.text_stream:
-                response_text += text_chunk
+            async for chunk in stream.text_stream:
+                response_text += chunk
             final = await stream.get_final_message()
             try:
                 input_tokens = getattr(final.usage, "input_tokens", None)
@@ -262,18 +268,104 @@ async def verify_deal_metrics(deal, db) -> dict:
         op.meta["stop_reason"] = stop_reason
         if stop_reason == "max_tokens":
             raise ValueError(
-                "Verification response hit the max_tokens ceiling — "
-                "deal has too many fields to audit in a single call. "
-                "Reduce the field set or chunk the verification."
+                f"Verification for {sections} hit max_tokens ceiling. "
+                "Try splitting the sections further or reducing pages."
             )
 
         response_text = response_text.strip()
         op.response_preview = response_text[:2000]
-
-        # Parse JSON response
         op.note = "parsing response"
-        verification = _parse_json_defensively(response_text)
-        return verification
+        return _parse_json_defensively(response_text)
+
+
+async def verify_deal_metrics(deal, db) -> dict:
+    """Run second-pass verification on extracted metrics.
+
+    Verification is split into multiple smaller Anthropic calls — one
+    per group of tightly-related metric sections — so we stay under
+    Anthropic's per-minute input-tokens rate limit on non-enterprise
+    tiers. A single monolithic call with all ~100 fields and 10 PDF
+    pages was hitting 429s. Per-chunk calls are short (8-15s each)
+    and their results are merged into one verification dict compatible
+    with the existing stamp_verification / apply_corrections pipeline.
+
+    Args:
+        deal: Deal ORM object with metrics and documents
+        db: Database session
+
+    Returns:
+        Verification results dict with audit trail (audit_results,
+        missing_data, summary) — same shape as before, regardless of
+        how many underlying calls ran.
+    """
+    api_key = os.environ.get("ANTHROPIC_API_KEY")
+    if not api_key:
+        raise ValueError("ANTHROPIC_API_KEY not set")
+
+    metrics = deal.metrics
+    if not metrics:
+        return {"error": "No metrics to verify"}
+
+    doc_paths = [
+        doc.file_path
+        for doc in deal.documents
+        if doc.file_path and doc.file_path.endswith(".pdf")
+    ]
+    # Render pages once up-front so each chunk reuses the same b64 data.
+    rendered = _render_pdf_pages_to_b64(doc_paths, VERIFY_MAX_PAGES) if doc_paths else []
+
+    # Decide which section groups actually have something to audit.
+    groups_to_run: list[list[str]] = []
+    for group in VERIFY_SECTION_GROUPS:
+        if any(metrics.get(s) for s in group):
+            groups_to_run.append(group)
+    # Any sections the metrics have that we didn't plan for — fold
+    # them into their own group so nothing is silently skipped.
+    planned = {s for g in VERIFY_SECTION_GROUPS for s in g}
+    extra_sections = [
+        s for s in metrics.keys()
+        if s not in planned
+        and not s.startswith("_")
+        and s not in ("validation_flags",)
+        and isinstance(metrics.get(s), dict)
+        and metrics.get(s)
+    ]
+    if extra_sections:
+        groups_to_run.append(extra_sections)
+
+    # Merge the per-group results into a single verification dict.
+    combined: dict = {"audit_results": [], "missing_data": [], "summary": {}}
+    confidences: list[float] = []
+    errors: list[str] = []
+
+    for group in groups_to_run:
+        subset = {s: metrics.get(s) for s in group if metrics.get(s) is not None}
+        try:
+            res = await _verify_sections(group, subset, rendered, api_key, getattr(deal, "id", None))
+        except Exception as e:
+            # One group failing shouldn't sink the whole verification —
+            # other sections still get audited. The diagnostics entry
+            # for the failed group records the exception.
+            errors.append(f"{','.join(group)}: {e}")
+            continue
+
+        if isinstance(res, dict):
+            combined["audit_results"].extend(res.get("audit_results") or [])
+            combined["missing_data"].extend(res.get("missing_data") or [])
+            s = (res.get("summary") or {})
+            c = s.get("confidence_score")
+            try:
+                if c is not None:
+                    confidences.append(float(c))
+            except (TypeError, ValueError):
+                pass
+
+    if confidences:
+        combined["summary"]["confidence_score"] = round(sum(confidences) / len(confidences), 1)
+    if errors:
+        combined["summary"]["partial_errors"] = errors
+
+    return combined
 
 
 def apply_corrections(metrics: dict, verification: dict) -> tuple[dict, list[str]]:

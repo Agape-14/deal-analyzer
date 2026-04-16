@@ -420,40 +420,30 @@ def _post_process_metrics(metrics: dict):
     uc = metrics.get("underwriting_checks", {}) or {}
     tr = metrics.get("target_returns", {}) or {}
 
-    # target_irr is the headline IRR shown on the snapshot card. OMs
-    # often state "Gross IRR 21%" (hypothetical sale scenario) and
-    # "Net IRR 13%" (long-term hold with refinance). Claude sometimes
-    # grabs the larger / more prominent sale-scenario number and puts
-    # it in target_irr — which is wrong for deals the sponsor plans
-    # to hold. Force the right value based on the stated strategy:
+    # target_irr is the HEADLINE number on the snapshot card. For an
+    # LP reading this dashboard, "target" means what THEY are
+    # projected to earn — which is the NET (post-fee, post-promote)
+    # IRR. Gross / project-level IRR is interesting context but is
+    # never what an investor actually receives.
     #
-    #   - hold / hold_with_sale_option — prefer net_irr (the
-    #     investor's long-term return), then preferred_return.
-    #     NEVER the hypothetical sale IRR.
-    #   - sale — use net_irr if available, else gross_irr.
-    #   - unknown / missing — fall back to net -> gross.
-    primary_strategy = (tr.get("primary_strategy") or "").strip().lower()
+    # Simple rule: whenever net_irr is present, it wins. Claude often
+    # grabs the more prominent / larger gross figure from a
+    # hypothetical sale scenario and writes it to target_irr; this
+    # corrects that. If there's no net_irr but there is a preferred
+    # return and the strategy is hold-first, use the pref (which is
+    # the investor's contractual floor on a hold deal). Otherwise
+    # fall back to gross.
     net = _safe_num(tr.get("net_irr"))
     gross = _safe_num(tr.get("gross_irr"))
-    # preferred_return lives on deal_structure, not target_returns.
-    pref = _safe_num(ds.get("preferred_return"))
+    pref = _safe_num(ds.get("preferred_return"))  # lives on deal_structure
+    primary_strategy = (tr.get("primary_strategy") or "").strip().lower()
 
-    if primary_strategy in ("hold", "hold_with_sale_option"):
-        # Whatever Claude put in target_irr is likely the sale-scenario
-        # number — override with the hold-aligned return.
-        if net is not None:
-            tr["target_irr"] = net
-        elif pref is not None:
-            tr["target_irr"] = pref
-    elif primary_strategy == "sale":
-        # For explicit sale strategies it's reasonable to keep whatever
-        # Claude extracted, but only if it's present — else fall back.
-        if tr.get("target_irr") is None:
-            tr["target_irr"] = net if net is not None else gross
-    else:
-        # Strategy unknown — be conservative and prefer net over gross.
-        if tr.get("target_irr") is None:
-            tr["target_irr"] = net if net is not None else gross
+    if net is not None:
+        tr["target_irr"] = net
+    elif primary_strategy in ("hold", "hold_with_sale_option") and pref is not None:
+        tr["target_irr"] = pref
+    elif tr.get("target_irr") is None and gross is not None:
+        tr["target_irr"] = gross
 
     metrics["target_returns"] = tr
 
