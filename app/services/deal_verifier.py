@@ -181,9 +181,15 @@ async def verify_deal_metrics(deal, db) -> dict:
     ) as op:
         client = anthropic.Anthropic(api_key=api_key)
         op.note = "calling Anthropic"
+        # Verify emits one audit entry per extracted field and per
+        # field can run 300-500 output tokens (status + correct_value
+        # + source citation + confidence). A well-populated deal has
+        # 60-90 fields → easily 24-32K output tokens. 8192 was
+        # truncating mid-JSON. Opus 4.6 supports 32K output, so use
+        # most of that headroom.
         message = client.messages.create(
             model=MODEL_VERIFY,
-            max_tokens=8192,
+            max_tokens=32000,
             messages=[{"role": "user", "content": content_blocks}]
         )
         try:
@@ -191,6 +197,18 @@ async def verify_deal_metrics(deal, db) -> dict:
             op.output_tokens = getattr(message.usage, "output_tokens", None)
         except Exception:
             pass
+
+        # If Claude still stops because of max_tokens, surface it
+        # clearly — otherwise the operator sees a generic
+        # JSONDecodeError and has no clue the response was cut off.
+        stop_reason = getattr(message, "stop_reason", None)
+        op.meta["stop_reason"] = stop_reason
+        if stop_reason == "max_tokens":
+            raise ValueError(
+                "Verification response hit the max_tokens ceiling — "
+                "deal has too many fields to audit in a single call. "
+                "Reduce the field set or chunk the verification."
+            )
 
         response_text = message.content[0].text.strip()
         op.response_preview = response_text[:2000]

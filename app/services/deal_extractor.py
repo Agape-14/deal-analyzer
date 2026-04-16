@@ -293,9 +293,14 @@ async def extract_metrics_from_docs(doc_texts: list[dict], doc_paths: list[str] 
     ) as op:
         client = anthropic.Anthropic(api_key=api_key)
         op.note = "calling Anthropic"
+        # Opus 4.6 supports 32K output tokens. Extraction output is
+        # usually 4-5K but can spike higher on deals with every
+        # scenario filled in — give ourselves room before JSON
+        # truncation becomes the bottleneck. See the verifier change
+        # for the same rationale.
         message = client.messages.create(
             model=MODEL_EXTRACT,
-            max_tokens=8192,
+            max_tokens=16384,
             messages=[{"role": "user", "content": content_blocks}]
         )
         # Record usage even on the happy path so operators can spot a
@@ -305,6 +310,15 @@ async def extract_metrics_from_docs(doc_texts: list[dict], doc_paths: list[str] 
             op.output_tokens = getattr(message.usage, "output_tokens", None)
         except Exception:
             pass
+
+        stop_reason = getattr(message, "stop_reason", None)
+        op.meta["stop_reason"] = stop_reason
+        if stop_reason == "max_tokens":
+            raise ValueError(
+                "Extraction response hit the max_tokens ceiling — "
+                "Claude's JSON was truncated. Try fewer documents per "
+                "extraction or a tighter prompt."
+            )
 
         op.note = "received response, parsing"
         response_text = message.content[0].text.strip()
