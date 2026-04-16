@@ -63,11 +63,51 @@ def validate_deal_metrics(metrics: dict, property_type: str | None = None) -> li
     gross_irr = _num(tr.get('gross_irr'))
     net_irr = _num(tr.get('net_irr'))
     target_irr = _num(tr.get('target_irr'))
-    if gross_irr and net_irr:
-        fee_drag = gross_irr - net_irr
+
+    # Fee drag only makes sense when gross and net are computed on the
+    # SAME scenario (e.g. both sale-scenario IRRs, or both hold-
+    # scenario cash-on-cash). OMs commonly quote "Gross IRR 21%"
+    # (hypothetical sale) alongside "Net cash-on-cash 12%" (hold),
+    # and blindly subtracting them produces a nonsense "fee drag"
+    # number that accuses the sponsor of eating returns. Only emit
+    # the flag when we can prove we're comparing like-for-like:
+    #
+    # 1. primary_strategy is "sale" (both IRRs are sale-scenario), or
+    # 2. sale_scenario has its own gross/net pair, or
+    # 3. hold_scenario has its own gross/net pair.
+    primary_strategy = (tr.get('primary_strategy') or '').lower()
+    sale_scenario = tr.get('sale_scenario') or {}
+    hold_scenario = tr.get('hold_scenario') or {}
+
+    scenario_gross = None
+    scenario_net = None
+    scenario_label = None
+    if primary_strategy == 'sale' and gross_irr and net_irr:
+        scenario_gross, scenario_net, scenario_label = gross_irr, net_irr, 'sale IRR'
+    else:
+        s_gross = _num(sale_scenario.get('sale_gross_irr'))
+        s_net = _num(sale_scenario.get('sale_irr'))
+        if s_gross and s_net:
+            scenario_gross, scenario_net, scenario_label = s_gross, s_net, 'sale IRR'
+        else:
+            h_gross = _num(hold_scenario.get('gross_cash_on_cash'))
+            h_net = _num(hold_scenario.get('cash_on_cash_return'))
+            if h_gross and h_net:
+                scenario_gross, scenario_net, scenario_label = h_gross, h_net, 'hold cash-on-cash'
+
+    if scenario_gross and scenario_net:
+        fee_drag = scenario_gross - scenario_net
         if fee_drag > 5:
             flags.append({'severity': 'red', 'category': 'Returns',
-                          'message': f'Fee drag is {fee_drag:.1f}% (gross {gross_irr}% vs net {net_irr}%). Sponsor fees are eating too much.'})
+                          'message': f'Fee drag is {fee_drag:.1f}% ({scenario_label}: gross {scenario_gross}% vs net {scenario_net}%). Sponsor fees are eating too much.'})
+    elif gross_irr and net_irr:
+        # We have both but can't confirm they're the same scenario.
+        # Mention the spread as context, not as an accusation.
+        spread = gross_irr - net_irr
+        if spread > 5:
+            flags.append({'severity': 'yellow', 'category': 'Returns',
+                          'message': f'Gross IRR ({gross_irr}%) and Net IRR ({net_irr}%) differ by {spread:.1f}%, but they may be from different scenarios (e.g. hypothetical sale vs hold). Confirm they are apples-to-apples before calling this fee drag.'})
+
     if target_irr and not net_irr:
         flags.append({'severity': 'yellow', 'category': 'Returns',
                       'message': 'Cannot determine if quoted IRR is gross or net. Always ask for NET (to investor) returns.'})

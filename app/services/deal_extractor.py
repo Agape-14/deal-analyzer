@@ -292,26 +292,33 @@ async def extract_metrics_from_docs(doc_texts: list[dict], doc_paths: list[str] 
         },
     ) as op:
         client = anthropic.Anthropic(api_key=api_key)
-        op.note = "calling Anthropic"
-        # Opus 4.6 supports 32K output tokens. Extraction output is
-        # usually 4-5K but can spike higher on deals with every
-        # scenario filled in — give ourselves room before JSON
-        # truncation becomes the bottleneck. See the verifier change
-        # for the same rationale.
-        message = client.messages.create(
+        op.note = "calling Anthropic (streaming)"
+        # Anthropic SDK refuses non-streaming requests whose worst-case
+        # runtime could exceed 10 minutes — max_tokens >= ~8192 on Opus
+        # typically trips that. Stream and reassemble the full response
+        # so we get the headroom (up to 32K output) without the
+        # artificial timeout.
+        response_text = ""
+        input_tokens = None
+        output_tokens = None
+        stop_reason = None
+        with client.messages.stream(
             model=MODEL_EXTRACT,
             max_tokens=16384,
-            messages=[{"role": "user", "content": content_blocks}]
-        )
-        # Record usage even on the happy path so operators can spot a
-        # deal that's eating an unexpected number of tokens.
-        try:
-            op.input_tokens = getattr(message.usage, "input_tokens", None)
-            op.output_tokens = getattr(message.usage, "output_tokens", None)
-        except Exception:
-            pass
+            messages=[{"role": "user", "content": content_blocks}],
+        ) as stream:
+            for text_chunk in stream.text_stream:
+                response_text += text_chunk
+            final = stream.get_final_message()
+            try:
+                input_tokens = getattr(final.usage, "input_tokens", None)
+                output_tokens = getattr(final.usage, "output_tokens", None)
+            except Exception:
+                pass
+            stop_reason = getattr(final, "stop_reason", None)
 
-        stop_reason = getattr(message, "stop_reason", None)
+        op.input_tokens = input_tokens
+        op.output_tokens = output_tokens
         op.meta["stop_reason"] = stop_reason
         if stop_reason == "max_tokens":
             raise ValueError(
@@ -321,7 +328,7 @@ async def extract_metrics_from_docs(doc_texts: list[dict], doc_paths: list[str] 
             )
 
         op.note = "received response, parsing"
-        response_text = message.content[0].text.strip()
+        response_text = response_text.strip()
         # Truncated preview for the diagnostics UI — the full response
         # can be 30+ KB and we don't want to bloat the buffer.
         op.response_preview = response_text[:2000]

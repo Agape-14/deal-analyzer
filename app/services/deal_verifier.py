@@ -180,28 +180,34 @@ async def verify_deal_metrics(deal, db) -> dict:
         meta={"num_pdf_docs": len(doc_paths)},
     ) as op:
         client = anthropic.Anthropic(api_key=api_key)
-        op.note = "calling Anthropic"
-        # Verify emits one audit entry per extracted field and per
-        # field can run 300-500 output tokens (status + correct_value
-        # + source citation + confidence). A well-populated deal has
-        # 60-90 fields → easily 24-32K output tokens. 8192 was
-        # truncating mid-JSON. Opus 4.6 supports 32K output, so use
-        # most of that headroom.
-        message = client.messages.create(
+        op.note = "calling Anthropic (streaming)"
+        # Verify emits one audit entry per extracted field (300-500
+        # output tokens each) — a well-populated deal has 60-90
+        # fields, so up to 24-32K output tokens. At 8K we hit
+        # max_tokens; at 32K the Anthropic SDK refuses non-streaming
+        # because the worst-case runtime exceeds its 10-minute
+        # timeout. Streaming gives us both headroom and no timeout.
+        response_text = ""
+        input_tokens = None
+        output_tokens = None
+        stop_reason = None
+        with client.messages.stream(
             model=MODEL_VERIFY,
             max_tokens=32000,
-            messages=[{"role": "user", "content": content_blocks}]
-        )
-        try:
-            op.input_tokens = getattr(message.usage, "input_tokens", None)
-            op.output_tokens = getattr(message.usage, "output_tokens", None)
-        except Exception:
-            pass
+            messages=[{"role": "user", "content": content_blocks}],
+        ) as stream:
+            for text_chunk in stream.text_stream:
+                response_text += text_chunk
+            final = stream.get_final_message()
+            try:
+                input_tokens = getattr(final.usage, "input_tokens", None)
+                output_tokens = getattr(final.usage, "output_tokens", None)
+            except Exception:
+                pass
+            stop_reason = getattr(final, "stop_reason", None)
 
-        # If Claude still stops because of max_tokens, surface it
-        # clearly — otherwise the operator sees a generic
-        # JSONDecodeError and has no clue the response was cut off.
-        stop_reason = getattr(message, "stop_reason", None)
+        op.input_tokens = input_tokens
+        op.output_tokens = output_tokens
         op.meta["stop_reason"] = stop_reason
         if stop_reason == "max_tokens":
             raise ValueError(
@@ -210,7 +216,7 @@ async def verify_deal_metrics(deal, db) -> dict:
                 "Reduce the field set or chunk the verification."
             )
 
-        response_text = message.content[0].text.strip()
+        response_text = response_text.strip()
         op.response_preview = response_text[:2000]
 
         # Parse JSON response
