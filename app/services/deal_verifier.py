@@ -163,10 +163,11 @@ VERIFY_SECTION_GROUPS: list[list[str]] = [
     ["financial_projections", "underwriting_checks"],
     ["sponsor_evaluation"],
 ]
-# Max PDF pages per verify call. Below the Anthropic message-size
-# soft ceiling that was causing 429s. Each page at 150 DPI base64
-# is ~250 KB, so 5 pages keeps a single verify well under ~1.5 MB.
-VERIFY_MAX_PAGES = 5
+# Max PDF pages per verify call — increased from 5 to 10. With
+# background-task processing + parallel chunks we have the time
+# headroom, and the extra pages dramatically reduce "unverifiable"
+# counts (fields whose source data was on an unseen page).
+VERIFY_MAX_PAGES = 10
 # Output ceiling per chunk. Each audit row is ~300-500 tokens
 # (status + correct_value + source citation + note + confidence);
 # 16K gives us ~35-50 fields of headroom which comfortably covers
@@ -207,6 +208,7 @@ async def _verify_sections(
     sections: list[str],
     subset_metrics: dict,
     rendered_pages: list[tuple[str, int, int, str]],
+    doc_texts: list[dict],
     api_key: str,
     deal_id: int | None,
 ) -> dict:
@@ -227,6 +229,18 @@ async def _verify_sections(
             + json.dumps(subset_metrics, indent=2)
         ),
     })
+
+    # Include full extracted text from all docs so the verifier can
+    # cross-reference values even from pages not included as images.
+    # This is the #1 fix for "unverifiable" counts — the text covers
+    # 100% of pages while images only cover VERIFY_MAX_PAGES.
+    if doc_texts:
+        text_block = "\n\nFULL EXTRACTED TEXT FROM ALL DOCUMENTS (use this to verify values from pages not shown as images):\n"
+        for dt in doc_texts:
+            text_block += f"\n===== {dt.get('filename', 'document')} =====\n"
+            text_block += (dt.get("text", "") or "")[:20000]
+        content_blocks.append({"type": "text", "text": text_block})
+
     if rendered_pages:
         content_blocks.append({
             "type": "text",
@@ -321,6 +335,15 @@ async def verify_deal_metrics(deal, db) -> dict:
     # Render pages once up-front so each chunk reuses the same b64 data.
     rendered = _render_pdf_pages_to_b64(doc_paths, VERIFY_MAX_PAGES) if doc_paths else []
 
+    # Collect full extracted text from all docs — sent alongside
+    # images so the verifier can confirm values from pages that
+    # aren't included as images. Dramatically reduces "unverifiable."
+    doc_texts = [
+        {"filename": d.filename, "text": d.extracted_text or ""}
+        for d in deal.documents
+        if d.extracted_text
+    ]
+
     # Decide which section groups actually have something to audit.
     groups_to_run: list[list[str]] = []
     for group in VERIFY_SECTION_GROUPS:
@@ -353,7 +376,7 @@ async def verify_deal_metrics(deal, db) -> dict:
     async def _run_one(group: list[str]) -> tuple[list[str], dict | Exception]:
         subset = {s: metrics.get(s) for s in group if metrics.get(s) is not None}
         try:
-            res = await _verify_sections(group, subset, rendered, api_key, getattr(deal, "id", None))
+            res = await _verify_sections(group, subset, rendered, doc_texts, api_key, getattr(deal, "id", None))
             return group, res
         except Exception as e:
             return group, e
