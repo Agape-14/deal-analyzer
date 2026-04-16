@@ -43,7 +43,15 @@ export function MetricsSection({
     );
   }
 
-  const entries = Object.entries(data).filter(([, v]) => v !== null && v !== "" && v !== undefined);
+  const entries = Object.entries(data).filter(([, v]) => {
+    if (v === null || v === "" || v === undefined) return false;
+    // Empty arrays / empty objects add visual noise without carrying info.
+    if (Array.isArray(v) && v.length === 0) return false;
+    if (typeof v === "object" && !Array.isArray(v) && Object.keys(v as object).length === 0) {
+      return false;
+    }
+    return true;
+  });
   if (keysOrder) {
     entries.sort(([a], [b]) => {
       const ai = keysOrder.indexOf(a);
@@ -85,7 +93,12 @@ function MetricRow({
 }) {
   const label = humanize(name);
   const formatted = formatValue(name, value);
-  const isLong = typeof value === "string" && value.length > 80;
+  // Long content — either original strings >80 chars OR object descriptions
+  // we unwrapped above — needs to span both grid columns so it wraps
+  // cleanly instead of pushing past the card's right edge.
+  const isLong =
+    (typeof value === "string" && value.length > 80) ||
+    (typeof value === "object" && value !== null && !Array.isArray(value) && formatted.length > 80);
   const hasConflict =
     Array.isArray(provenance?.conflict) && (provenance!.conflict as unknown[]).length > 1;
 
@@ -140,7 +153,19 @@ function formatValue(name: string, value: unknown): string {
   if (value == null) return "—";
   if (typeof value === "boolean") return value ? "Yes" : "No";
   if (Array.isArray(value)) return value.join(", ") || "—";
-  if (typeof value === "object") return JSON.stringify(value);
+  if (typeof value === "object") {
+    // Some extracted fields (e.g. hold_scenario, sale_scenario) come back
+    // as nested objects. Raw JSON.stringify makes the card overflow and
+    // duplicates data that's already in sibling scalar fields. Prefer
+    // `description` when present; otherwise fall back to a short summary
+    // of the sub-keys so the field isn't silently blank.
+    const obj = value as Record<string, unknown>;
+    const desc = obj.description;
+    if (typeof desc === "string" && desc.trim()) return desc;
+    const keys = Object.keys(obj).filter((k) => obj[k] != null);
+    if (keys.length === 0) return "—";
+    return keys.map(humanize).join(", ");
+  }
 
   if (typeof value === "number") {
     const n = name.toLowerCase();
