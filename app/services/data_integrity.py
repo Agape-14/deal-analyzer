@@ -289,20 +289,99 @@ def _values_equivalent(a: Any, b: Any, tol: float) -> bool:
 
 
 def conflicts_to_flags(conflicts: dict[str, list[dict[str, Any]]]) -> list[dict[str, Any]]:
-    """Turn a conflict map into red validation flags for the UI."""
+    """Turn a conflict map into validation flags for the UI.
+
+    Auto-resolved conflicts (marked by auto_resolve_conflicts) get a
+    green info flag instead of a red action-required flag. Only
+    UNRESOLVED conflicts stay red.
+    """
     flags: list[dict[str, Any]] = []
     for path, entries in conflicts.items():
-        values_shown = ", ".join(
-            f"{e['doc_name']}: {e['value']}" for e in entries[:3]
-        )
-        flags.append(
-            {
-                "severity": "red",
-                "category": "Data conflict",
-                "message": f"{path} disagrees across documents ({values_shown}). Verify which is current.",
-            }
-        )
+        # Check if this conflict was auto-resolved.
+        if any(e.get("auto_resolved") for e in entries):
+            winner = next((e for e in entries if e.get("auto_resolved")), None)
+            if winner:
+                flags.append(
+                    {
+                        "severity": "green",
+                        "category": "Data conflict (auto-resolved)",
+                        "message": (
+                            f"{path}: multiple documents disagreed — used "
+                            f"value from newest doc ({winner.get('doc_name', '?')})."
+                        ),
+                    }
+                )
+        else:
+            values_shown = ", ".join(
+                f"{e['doc_name']}: {e['value']}" for e in entries[:3]
+            )
+            flags.append(
+                {
+                    "severity": "red",
+                    "category": "Data conflict",
+                    "message": f"{path} disagrees across documents ({values_shown}). Verify which is current.",
+                }
+            )
     return flags
+
+
+def auto_resolve_conflicts(
+    conflicts: dict[str, list[dict[str, Any]]],
+    merged: dict[str, Any],
+    doc_upload_dates: dict[int, Any],
+) -> int:
+    """Auto-resolve conflicts by preferring the newest document's value.
+
+    For each conflicting field:
+      1. Sort the conflicting entries by the document's upload date.
+      2. Pick the value from the most recent document.
+      3. Patch `merged` with that value.
+      4. Mark the winning entry with `auto_resolved=True` so
+         `conflicts_to_flags` emits a green info flag instead of a
+         red action-required one.
+      5. Update provenance to reflect the winning document.
+
+    Returns the number of conflicts that were auto-resolved.
+    """
+    resolved = 0
+    prov = dict(merged.get("_provenance") or {})
+
+    for path, entries in conflicts.items():
+        if len(entries) < 2:
+            continue
+
+        # Sort by upload_date descending — newest first.
+        sorted_entries = sorted(
+            entries,
+            key=lambda e: doc_upload_dates.get(e.get("doc_id", 0), 0) or 0,
+            reverse=True,
+        )
+
+        winner = sorted_entries[0]
+        winner_value = winner["value"]
+
+        # Apply the winning value to the merged metrics.
+        parts = path.split(".", 1)
+        if len(parts) == 2:
+            section, field = parts
+            if section in merged and isinstance(merged[section], dict):
+                merged[section][field] = winner_value
+
+        # Mark the winner so conflicts_to_flags knows it's resolved.
+        winner["auto_resolved"] = True
+
+        # Update provenance.
+        p = dict(prov.get(path) or {})
+        p["source_doc_id"] = winner.get("doc_id")
+        p["source_doc_name"] = winner.get("doc_name")
+        p["conflict"] = entries  # keep for audit trail
+        p["conflict_resolution"] = "auto_newer_doc"
+        prov[path] = p
+
+        resolved += 1
+
+    merged["_provenance"] = prov
+    return resolved
 
 
 # ----------------------- verification persistence ----------------------- #

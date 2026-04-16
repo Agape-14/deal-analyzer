@@ -25,6 +25,7 @@ from app.services.waterfall_calculator import waterfall_from_deal
 from app.services.data_integrity import (
     smart_merge,
     detect_conflicts,
+    auto_resolve_conflicts,
     conflicts_to_flags,
     staleness_flags,
     quality_summary,
@@ -658,11 +659,19 @@ async def extract_deal_metrics(deal_id: int, db: AsyncSession = Depends(get_db))
         source_doc_name=primary_doc.filename if primary_doc else "multiple documents",
     )
 
-    # Conflict detection across documents
+    # Conflict detection across documents — then auto-resolve by
+    # preferring the newest document. 56 manual conflict reviews
+    # on a 2-doc deal is operator-hostile; the right default is
+    # "newer doc wins" with an audit trail showing what was overridden.
     conflicts = detect_conflicts(per_doc_results) if len(per_doc_results) >= 2 else {}
+    n_auto_resolved = 0
     if conflicts:
-        # Annotate provenance with the conflict so the UI can render an
-        # inline picker next to each conflicting metric.
+        doc_upload_dates = {d.id: d.upload_date for d in deal.documents}
+        n_auto_resolved = auto_resolve_conflicts(conflicts, merged, doc_upload_dates)
+
+        # Keep the conflict data on provenance for audit trail (already
+        # done inside auto_resolve_conflicts). Just make sure any
+        # un-resolved ones get annotated too.
         prov = dict(merged.get("_provenance") or {})
         for path, entries in conflicts.items():
             existing_prov = prov.get(path, {})
@@ -709,24 +718,27 @@ async def extract_deal_metrics(deal_id: int, db: AsyncSession = Depends(get_db))
         # The Re-score button remains as a manual retry.
         pass
 
-    # Notification: extraction complete. Conflicts = red, otherwise info.
+    # Notification: extraction complete.
     reds = [f for f in validation_flags if f.get("severity") == "red"]
-    n_conflicts = len(conflicts)
+    n_unresolved_conflicts = len(conflicts) - n_auto_resolved
     body_parts = [f"{len(changes)} field{'s' if len(changes) != 1 else ''} updated"]
-    if n_conflicts:
-        body_parts.append(f"{n_conflicts} cross-document conflict{'s' if n_conflicts != 1 else ''}")
+    if n_auto_resolved:
+        body_parts.append(f"{n_auto_resolved} conflict{'s' if n_auto_resolved != 1 else ''} auto-resolved (newer doc wins)")
+    if n_unresolved_conflicts:
+        body_parts.append(f"{n_unresolved_conflicts} unresolved conflict{'s' if n_unresolved_conflicts != 1 else ''}")
     if reds:
         body_parts.append(f"{len(reds)} red flag{'s' if len(reds) != 1 else ''}")
     await notif_svc.emit(
         db,
-        kind="error" if n_conflicts or reds else "success",
+        kind="error" if n_unresolved_conflicts or reds else "success",
         title=f"Metrics extracted for {deal.project_name}",
         body=" · ".join(body_parts),
         href=f"/deals/{deal.id}?tab=overview",
         payload={
             "deal_id": deal.id,
             "changes": len(changes),
-            "conflicts": n_conflicts,
+            "conflicts": n_unresolved_conflicts,
+            "auto_resolved": n_auto_resolved,
             "red_flags": len(reds),
         },
     )
