@@ -145,6 +145,13 @@ export interface FieldProvenance {
   locked?: boolean;
   verification_source?: string;
   verification_note?: string;
+  // Populated by apply_corrections when /verify?auto_correct=true
+  // replaces a wrong value. The UI shows "corrected from X" and
+  // offers a revert.
+  previous_value?: unknown;
+  corrected_value?: unknown;
+  correction_source?: string;
+  correction_note?: string;
 }
 
 export interface DealQualitySummary {

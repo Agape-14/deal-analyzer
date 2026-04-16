@@ -278,12 +278,17 @@ async def verify_deal_metrics(deal, db) -> dict:
 
 def apply_corrections(metrics: dict, verification: dict) -> tuple[dict, list[str]]:
     """Apply verified corrections to metrics.
-    
+
     Returns:
         (corrected_metrics, list of changes made)
+
+    Also stashes the previous extracted value on the provenance tree
+    under `_provenance[<path>].previous_value` so the UI can show
+    "corrected from X → Y" and offer a revert.
     """
     changes = []
-    
+    prov = dict(metrics.get("_provenance") or {})
+
     # Apply corrections for wrong AND calculated-wrong fields
     for result in verification.get("audit_results", []):
         status = result.get("status", "")
@@ -301,14 +306,34 @@ def apply_corrections(metrics: dict, verification: dict) -> tuple[dict, list[str
             field = result.get("field")
             old_val = extracted_val
             new_val = correct_val
-            
+
             if section in metrics and isinstance(metrics[section], dict):
+                # Capture the pre-correction value from the actual
+                # metrics dict (more reliable than the verification
+                # result's extracted_value, which the model sometimes
+                # reformats before echoing back).
+                pre = metrics[section].get(field, old_val)
                 metrics[section][field] = new_val
                 changes.append(
-                    f"CORRECTED {section}.{field}: {old_val} → {new_val} "
+                    f"CORRECTED {section}.{field}: {pre} → {new_val} "
                     f"(Source: {result.get('source', 'verification')})"
                 )
-    
+                # Stash previous value + correction metadata on
+                # provenance so the UI's integrity badge can render
+                # an actionable "corrected from X" card with a
+                # revert button.
+                path = f"{section}.{field}"
+                p = dict(prov.get(path) or {})
+                p["previous_value"] = pre
+                p["corrected_value"] = new_val
+                if result.get("source"):
+                    p["correction_source"] = str(result.get("source"))
+                if result.get("note"):
+                    p["correction_note"] = str(result.get("note"))
+                prov[path] = p
+
+    metrics["_provenance"] = prov
+
     # Apply missing data that was found
     for found in verification.get("missing_data", []):
         section = found.get("section")

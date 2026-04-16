@@ -109,7 +109,7 @@ function MetricRow({
       <div className="sm:col-span-2 py-1.5">
         <dt className="text-[10px] uppercase tracking-[0.1em] text-muted-foreground mb-1 flex items-center gap-1.5">
           {label}
-          <IntegrityBadge provenance={provenance} compact />
+          <IntegrityBadge provenance={provenance} compact dealId={dealId} path={path} />
         </dt>
         <dd className="text-sm leading-relaxed text-foreground/90">{formatted}</dd>
       </div>
