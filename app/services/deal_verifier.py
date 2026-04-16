@@ -163,11 +163,10 @@ VERIFY_SECTION_GROUPS: list[list[str]] = [
     ["financial_projections", "underwriting_checks"],
     ["sponsor_evaluation"],
 ]
-# Max PDF pages per verify call — increased from 5 to 10. With
-# background-task processing + parallel chunks we have the time
-# headroom, and the extra pages dramatically reduce "unverifiable"
-# counts (fields whose source data was on an unseen page).
-VERIFY_MAX_PAGES = 10
+# Max PDF pages per verify call. Each page at 150 DPI JPEG is ~50KB
+# base64 (vs ~250KB as PNG). 5 pages × 50KB = 250KB of image data
+# per chunk, well under Anthropic's request size limit.
+VERIFY_MAX_PAGES = 5
 # Output ceiling per chunk. Each audit row is ~300-500 tokens
 # (status + correct_value + source citation + note + confidence);
 # 16K gives us ~35-50 fields of headroom which comfortably covers
@@ -194,7 +193,7 @@ def _render_pdf_pages_to_b64(doc_paths: list[str], max_pages: int) -> list[tuple
                 page = pdf_doc[page_num]
                 mat = fitz.Matrix(150 / 72, 150 / 72)
                 pix = page.get_pixmap(matrix=mat)
-                img_bytes = pix.tobytes("png")
+                img_bytes = pix.tobytes("jpeg")  # JPEG ~5x smaller than PNG
                 rendered.append(
                     (fname, page_num + 1, pdf_doc.page_count,
                      base64.b64encode(img_bytes).decode("utf-8"))
@@ -235,10 +234,13 @@ async def _verify_sections(
     # This is the #1 fix for "unverifiable" counts — the text covers
     # 100% of pages while images only cover VERIFY_MAX_PAGES.
     if doc_texts:
-        text_block = "\n\nFULL EXTRACTED TEXT FROM ALL DOCUMENTS (use this to verify values from pages not shown as images):\n"
+        # Cap at 8K chars per doc to stay under Anthropic's request
+        # size limit when combined with page images. 8K chars ≈ 2K
+        # tokens — enough to cover most OM text without blowing up.
+        text_block = "\n\nEXTRACTED TEXT FROM DOCUMENTS (use to verify values from pages not shown as images):\n"
         for dt in doc_texts:
             text_block += f"\n===== {dt.get('filename', 'document')} =====\n"
-            text_block += (dt.get("text", "") or "")[:20000]
+            text_block += (dt.get("text", "") or "")[:8000]
         content_blocks.append({"type": "text", "text": text_block})
 
     if rendered_pages:
@@ -253,7 +255,7 @@ async def _verify_sections(
             })
             content_blocks.append({
                 "type": "image",
-                "source": {"type": "base64", "media_type": "image/png", "data": b64},
+                "source": {"type": "base64", "media_type": "image/jpeg", "data": b64},
             })
 
     from app.services.operation_log import record
