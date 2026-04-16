@@ -93,12 +93,14 @@ function MetricRow({
 }) {
   const label = humanize(name);
   const formatted = formatValue(name, value);
-  // Long content — either original strings >80 chars OR object descriptions
-  // we unwrapped above — needs to span both grid columns so it wraps
-  // cleanly instead of pushing past the card's right edge.
+  // "Long" content gets its own full-width row so it wraps cleanly
+  // instead of overflowing the narrow value column. Threshold is 40
+  // characters — short enough to catch "75/25 Class B/Class A after
+  // 100% of Class B equity is repaid (Tier 5)" (~70 chars) while
+  // keeping \$39.3M / 13.0% / 1.50x on compact rows.
   const isLong =
-    (typeof value === "string" && value.length > 80) ||
-    (typeof value === "object" && value !== null && !Array.isArray(value) && formatted.length > 80);
+    (typeof value === "string" && value.length > 40) ||
+    formatted.length > 40;
   const hasConflict =
     Array.isArray(provenance?.conflict) && (provenance!.conflict as unknown[]).length > 1;
 

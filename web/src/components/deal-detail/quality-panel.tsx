@@ -2,7 +2,7 @@
 
 import * as React from "react";
 import { useRouter } from "next/navigation";
-import { ShieldCheck, AlertTriangle, Clock, RefreshCw, Loader2, Sparkles } from "lucide-react";
+import { ShieldCheck, AlertTriangle, Clock, RefreshCw, Loader2, Sparkles, ChevronDown } from "lucide-react";
 import { toast } from "sonner";
 import { motion } from "framer-motion";
 import { Card } from "@/components/ui/card";
@@ -29,6 +29,10 @@ export function QualityPanel({
 }) {
   const router = useRouter();
   const [busy, setBusy] = React.useState<"extract" | "verify" | null>(null);
+  // Collapsed by default — the trust bar + action buttons are the
+  // primary signal; the counter grid is noise until the operator
+  // asks for it.
+  const [expanded, setExpanded] = React.useState(false);
 
   async function runExtract() {
     setBusy("extract");
@@ -142,7 +146,7 @@ export function QualityPanel({
 
       {q && total > 0 && (
         <>
-          {/* Trust bar */}
+          {/* Trust bar — always visible, the at-a-glance signal. */}
           {trust != null && (
             <div className="mt-5">
               <div className="h-1.5 rounded-full bg-muted overflow-hidden">
@@ -159,44 +163,65 @@ export function QualityPanel({
             </div>
           )}
 
-          {/* Counter grid */}
-          <div className="mt-5 grid grid-cols-2 sm:grid-cols-4 gap-3">
-            <Counter label="Verified" value={q.verified} color="text-success" />
-            <Counter label="Extracted" value={q.extracted} />
-            <Counter label="Calculated" value={q.calculated} />
-            <Counter label="Manual" value={q.manual} color="text-primary" />
-            <Counter label="Conflicts" value={q.conflicting} color={q.conflicting ? "text-destructive" : undefined} />
-            <Counter label="Wrong (flagged)" value={q.wrong} color={q.wrong ? "text-destructive" : undefined} />
-            <Counter label="Unverifiable" value={q.unverifiable} />
-            <Counter label="Locked" value={q.locked} />
-          </div>
+          {/* Toggle — show/hide the full breakdown */}
+          <button
+            type="button"
+            onClick={() => setExpanded((v) => !v)}
+            className="mt-4 inline-flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors"
+          >
+            <ChevronDown
+              className={cn("h-3.5 w-3.5 transition-transform", expanded && "rotate-180")}
+            />
+            {expanded ? "Hide breakdown" : "Show breakdown"}
+          </button>
 
-          {/* Timestamps + staleness */}
-          <div className="mt-4 pt-4 border-t border-border/60 flex items-center gap-4 text-xs text-muted-foreground flex-wrap">
-            <span className="inline-flex items-center gap-1.5">
-              <Clock className="h-3 w-3" />
-              Last extracted:{" "}
-              <span className={cn("tabular-nums", stale ? "text-warning" : "text-foreground")}>
-                {fmtDate(lastExtracted)}
-                {ageDays != null && ` (${ageDays}d ago)`}
-              </span>
-            </span>
-            {q.last_verified_at && (
-              <span className="inline-flex items-center gap-1.5">
-                <ShieldCheck className="h-3 w-3" />
-                Last verified: <span className="text-foreground">{fmtDate(q.last_verified_at)}</span>
-                {typeof q.confidence === "number" && (
-                  <span className="text-muted-foreground">· {q.confidence}% confidence</span>
+          {expanded && (
+            <>
+              {/* Counter grid */}
+              <div className="mt-4 grid grid-cols-2 sm:grid-cols-4 gap-3">
+                <Counter
+                  label="Verified"
+                  value={q.verified}
+                  color="text-success"
+                  hint={q.verified === 0 ? "Click Verify against docs" : undefined}
+                />
+                <Counter label="Extracted" value={q.extracted} />
+                <Counter label="Calculated" value={q.calculated} />
+                <Counter label="Manual" value={q.manual} color="text-primary" />
+                <Counter label="Conflicts" value={q.conflicting} color={q.conflicting ? "text-destructive" : undefined} />
+                <Counter label="Wrong (flagged)" value={q.wrong} color={q.wrong ? "text-destructive" : undefined} />
+                <Counter label="Unverifiable" value={q.unverifiable} />
+                <Counter label="Locked" value={q.locked} />
+              </div>
+
+              {/* Timestamps + staleness */}
+              <div className="mt-4 pt-4 border-t border-border/60 flex items-center gap-4 text-xs text-muted-foreground flex-wrap">
+                <span className="inline-flex items-center gap-1.5">
+                  <Clock className="h-3 w-3" />
+                  Last extracted:{" "}
+                  <span className={cn("tabular-nums", stale ? "text-warning" : "text-foreground")}>
+                    {fmtDate(lastExtracted)}
+                    {ageDays != null && ` (${ageDays}d ago)`}
+                  </span>
+                </span>
+                {q.last_verified_at && (
+                  <span className="inline-flex items-center gap-1.5">
+                    <ShieldCheck className="h-3 w-3" />
+                    Last verified: <span className="text-foreground">{fmtDate(q.last_verified_at)}</span>
+                    {typeof q.confidence === "number" && (
+                      <span className="text-muted-foreground">· {q.confidence}% confidence</span>
+                    )}
+                  </span>
                 )}
-              </span>
-            )}
-          </div>
+              </div>
 
-          {stale && (
-            <div className="mt-3 inline-flex items-center gap-2 rounded-md bg-warning/10 text-warning ring-1 ring-warning/30 px-2.5 py-1 text-xs">
-              <AlertTriangle className="h-3 w-3" />
-              Metrics are {ageDays}+ days old — re-extract if newer documents are available.
-            </div>
+              {stale && (
+                <div className="mt-3 inline-flex items-center gap-2 rounded-md bg-warning/10 text-warning ring-1 ring-warning/30 px-2.5 py-1 text-xs">
+                  <AlertTriangle className="h-3 w-3" />
+                  Metrics are {ageDays}+ days old — re-extract if newer documents are available.
+                </div>
+              )}
+            </>
           )}
         </>
       )}
@@ -218,11 +243,22 @@ export function QualityPanel({
   );
 }
 
-function Counter({ label, value, color }: { label: string; value: number; color?: string }) {
+function Counter({
+  label,
+  value,
+  color,
+  hint,
+}: {
+  label: string;
+  value: number;
+  color?: string;
+  hint?: string;
+}) {
   return (
     <div>
       <div className="text-[10px] uppercase tracking-[0.12em] text-muted-foreground">{label}</div>
       <div className={cn("text-xl font-semibold tabular-nums mt-1", color)}>{value}</div>
+      {hint && <div className="text-[10px] text-muted-foreground mt-0.5">{hint}</div>}
     </div>
   );
 }

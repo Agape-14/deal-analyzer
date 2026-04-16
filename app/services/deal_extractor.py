@@ -359,6 +359,21 @@ def _post_process_metrics(metrics: dict):
     pd_ = metrics.get("project_details", {}) or {}
     fp = metrics.get("financial_projections", {}) or {}
     uc = metrics.get("underwriting_checks", {}) or {}
+    tr = metrics.get("target_returns", {}) or {}
+
+    # target_irr is the headline IRR shown on the snapshot card. OMs
+    # often state "Gross IRR 21%" and "Net IRR 13%" without calling
+    # either one "target" — fall back to net (what investors actually
+    # see) when target_irr isn't explicit, and to gross only if net
+    # is also missing.
+    if tr.get("target_irr") is None:
+        net = _safe_num(tr.get("net_irr"))
+        gross = _safe_num(tr.get("gross_irr"))
+        if net is not None:
+            tr["target_irr"] = net
+        elif gross is not None:
+            tr["target_irr"] = gross
+    metrics["target_returns"] = tr
 
     total_cost = ds.get("total_project_cost")
     units = pd_.get("unit_count")

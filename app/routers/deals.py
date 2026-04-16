@@ -697,6 +697,18 @@ async def extract_deal_metrics(deal_id: int, db: AsyncSession = Depends(get_db))
     if not deal.state and ml.get("state"):
         deal.state = ml["state"]
 
+    # Auto-score after a successful extraction. Users were having to
+    # click Re-extract and then separately hit Re-score to get a
+    # number on the header; for a brand-new deal with no prior scores
+    # that just looks broken. Scoring is cheap (pure-python, no AI
+    # call) so running it inline is safe.
+    try:
+        deal.scores = score_deal(merged)
+    except Exception:
+        # If scoring blows up we still want the extraction to land.
+        # The Re-score button remains as a manual retry.
+        pass
+
     # Notification: extraction complete. Conflicts = red, otherwise info.
     reds = [f for f in validation_flags if f.get("severity") == "red"]
     n_conflicts = len(conflicts)
