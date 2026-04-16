@@ -669,11 +669,13 @@ async def extract_deal_metrics(deal_id: int, db: AsyncSession = Depends(get_db))
         doc_upload_dates = {d.id: d.upload_date for d in deal.documents}
         n_auto_resolved = auto_resolve_conflicts(conflicts, merged, doc_upload_dates)
 
-        # Keep the conflict data on provenance for audit trail (already
-        # done inside auto_resolve_conflicts). Just make sure any
-        # un-resolved ones get annotated too.
+        # auto_resolve_conflicts already patched provenance: resolved
+        # conflicts go to `conflict_history`, unresolved ones keep
+        # `conflict`. Only annotate UNRESOLVED conflicts here.
         prov = dict(merged.get("_provenance") or {})
         for path, entries in conflicts.items():
+            if any(e.get("auto_resolved") for e in entries):
+                continue  # already handled by auto_resolve_conflicts
             existing_prov = prov.get(path, {})
             existing_prov["conflict"] = entries
             prov[path] = existing_prov

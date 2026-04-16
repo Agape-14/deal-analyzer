@@ -370,11 +370,17 @@ def auto_resolve_conflicts(
         # Mark the winner so conflicts_to_flags knows it's resolved.
         winner["auto_resolved"] = True
 
-        # Update provenance.
+        # Move resolved conflict data to `conflict_history` instead of
+        # `conflict`. All existing UI code checks `conflict` to show
+        # red badges / Resolve buttons / conflict counters — keeping
+        # the data there defeated the auto-resolve because the UI
+        # didn't know it was resolved. `conflict_history` preserves
+        # the audit trail without triggering the conflict UI.
         p = dict(prov.get(path) or {})
         p["source_doc_id"] = winner.get("doc_id")
         p["source_doc_name"] = winner.get("doc_name")
-        p["conflict"] = entries  # keep for audit trail
+        p.pop("conflict", None)  # clear the active conflict
+        p["conflict_history"] = entries  # audit trail
         p["conflict_resolution"] = "auto_newer_doc"
         prov[path] = p
 
