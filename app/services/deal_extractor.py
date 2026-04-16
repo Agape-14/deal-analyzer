@@ -63,13 +63,13 @@ Return a JSON object with EXACTLY these keys (use null for any field not found i
       "projected_profit_on_sale": "Total projected profit if sold as dollar number per share/unit",
       "exit_cap_rate": "Assumed exit cap rate as percentage number if mentioned"
     },
-    "target_irr": "The MOST RELEVANT IRR — use hold yield if hold strategy, or sale IRR if sale strategy. For 'hold_with_sale_option', use the HOLD cash-on-cash as the primary metric, NOT the hypothetical sale IRR.",
-    "target_equity_multiple": "The MOST RELEVANT equity multiple — for hold strategies this may not apply or be hypothetical",
-    "target_cash_on_cash": "target cash-on-cash return as percentage number — THIS is the primary metric for hold strategies",
-    "target_avg_annual_return": "target average annual return as percentage number",
-    "projected_profit": "total projected profit as dollar number",
-    "gross_irr": "Gross (project-level) IRR before fees and promote as percentage number",
-    "net_irr": "Net (to investor) IRR after ALL fees and promote as percentage number",
+    "target_irr": "The MOST RELEVANT IRR TO THE INVESTOR — use hold yield if hold strategy, or sale IRR if sale strategy. For 'hold_with_sale_option', use the HOLD cash-on-cash as the primary metric, NOT the hypothetical sale IRR. CRITICAL: read from the INVESTOR / LP column, never from the sponsor / GP / 'Ambient' / manager column. When in doubt, the lower number is the LP return.",
+    "target_equity_multiple": "The MOST RELEVANT equity multiple TO THE INVESTOR — not the sponsor's promote-inclusive multiple. For hold strategies this may not apply or be hypothetical",
+    "target_cash_on_cash": "target cash-on-cash return TO THE INVESTOR as percentage number — THIS is the primary metric for hold strategies. Pull from the LP / Investor column, not the sponsor column.",
+    "target_avg_annual_return": "target average annual return TO THE INVESTOR as percentage number",
+    "projected_profit": "total projected profit TO THE INVESTOR as dollar number (after promote)",
+    "gross_irr": "Gross (project-level / partnership-level / deal-level) IRR BEFORE fees and promote as percentage number. This is typically LARGER than net_irr.",
+    "net_irr": "Net (to the LP / investor) IRR AFTER ALL fees and promote as percentage number. This is what a new LP subscribing today would actually earn — read from the Investor/LP column, NOT the sponsor's column. Typically SMALLER than gross_irr.",
     "gross_equity_multiple": "Gross equity multiple before fees as number",
     "net_equity_multiple": "Net equity multiple after all fees as number",
     "distribution_yield": "Annual cash distribution yield on invested equity as percentage number",
@@ -176,9 +176,58 @@ IMPORTANT RULES:
 7. Be thorough — search every page of EVERY document for relevant data
 8. If multiple documents are provided, COMBINE all information into a single unified extraction. Different docs may contain different pieces (e.g., offering memo has deal terms, proforma has financials, market study has comps). Merge everything.
 9. If a metric appears in multiple documents, use the most recent/prominent value
-9. For IRR and equity multiples, ALWAYS try to identify if they are gross or net. If the document only shows one number without specifying, put it in target_irr/target_equity_multiple AND note in the description fields
-10. Calculate yield_on_cost (stabilized NOI / total project cost) and break_even_occupancy if you have enough data
-11. DSCR = NOI / annual debt service — calculate if possible
+10. For IRR and equity multiples, ALWAYS try to identify if they are gross or net. If the document only shows one number without specifying, put it in target_irr/target_equity_multiple AND note in the description fields
+11. Calculate yield_on_cost (stabilized NOI / total project cost) and break_even_occupancy if you have enough data
+12. DSCR = NOI / annual debt service — calculate if possible
+
+CRITICAL: WHICH COLUMN / ROW TO READ FROM
+Real-estate offering documents routinely present numbers in MULTIPLE
+columns or rows that look similar but report different things. The
+wrong column choice is the #1 source of extraction errors. Apply
+these rules strictly:
+
+  a. LP VS SPONSOR COLUMNS. Tables often have a "Sponsor" /
+     "GP" / "Manager" / "Co-GP" / "Total Partnership" column AND
+     an "Investor" / "LP" / "Class A" / "Limited Partner" column.
+     ALWAYS extract FROM THE INVESTOR / LP COLUMN. Sponsor-column
+     returns are what the GP makes — they include promote, which
+     the LP does NOT receive. An LP reading this app wants their
+     own returns.
+
+     Red flags that you're looking at the wrong column:
+       - The column header is the sponsor's brand/entity name
+         (e.g. "Ambient", "Greenfield Partners", "JV Waterfall")
+         rather than "Investor" / "LP" / a share class letter.
+       - A "GP" / "Manager" / "Sponsor" column next to it has
+         materially lower numbers (that's the LP column).
+       - The number is labeled "Gross", "Partnership", "Deal-Level",
+         "Project-Level" — those are before-fees and not the
+         investor's return.
+
+  b. GROSS VS NET. When both are shown, gross_irr goes in gross_irr
+     and the investor's net goes in net_irr AND target_irr. When
+     only one is shown, put it in target_irr and also in whichever
+     of gross_irr/net_irr the document identifies it as.
+
+  c. HOLD VS SALE SCENARIO. OMs commonly show a long-term HOLD
+     scenario (primary) and a HYPOTHETICAL SALE scenario (for
+     illustration). Do NOT mix numbers across scenarios — the
+     hold scenario's cash-on-cash does not belong in the sale
+     scenario's IRR, and vice versa. Use primary_strategy,
+     hold_scenario.*, and sale_scenario.* to keep them separate.
+
+  d. CLASS A VS CLASS B VS ROLLED-OVER EQUITY. When multiple
+     investor classes exist (Class A preferred vs Class B common,
+     or "New Phase 2 Equity" vs "Rolled-Over Land Equity") the
+     target_irr / target_equity_multiple should reflect the
+     PRIMARY NEW-MONEY LP — the class that a new investor would
+     subscribe to today. If the OM calls one class out as "for
+     new investors" or "Class B New Investors", use that.
+
+  e. If a value is in dispute between two sources in the same
+     doc (e.g. summary page vs detailed table), prefer the
+     detailed table with a line-item breakdown. Summary numbers
+     are often rounded or promotional.
 
 DOCUMENTS TO ANALYZE:
 """
