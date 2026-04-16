@@ -182,17 +182,37 @@ def smart_merge(
 
             if _is_meaningful(new_v):
                 # Fresh value wins
-                if new_v != old_v:
+                value_changed = new_v != old_v
+                if value_changed:
                     changes.append(path)
                 out[key] = new_v
-                prov = FieldProvenance(
-                    source="extraction",
-                    source_doc_id=source_doc_id,
-                    source_doc_name=source_doc_name,
-                    extracted_at=now_iso(),
-                    status="extracted",
-                )
-                provenance[path] = prov.to_dict()
+
+                # Preserve verification status when the value didn't
+                # change — re-extracting the same deal shouldn't wipe
+                # out "confirmed" / "wrong" / "unverifiable" stamps
+                # that a prior /verify run put on unchanged fields.
+                # Only reset to "extracted" when the value actually
+                # moved (then it legitimately needs re-verification).
+                old_prov = provenance.get(path) or {}
+                if not value_changed and old_prov.get("status") in (
+                    "confirmed", "wrong", "unverifiable",
+                ):
+                    # Keep the verified stamp; just refresh the
+                    # extraction timestamp.
+                    new_prov = dict(old_prov)
+                    new_prov["extracted_at"] = now_iso()
+                    new_prov["source_doc_id"] = source_doc_id
+                    new_prov["source_doc_name"] = source_doc_name
+                    provenance[path] = new_prov
+                else:
+                    prov = FieldProvenance(
+                        source="extraction",
+                        source_doc_id=source_doc_id,
+                        source_doc_name=source_doc_name,
+                        extracted_at=now_iso(),
+                        status="extracted",
+                    )
+                    provenance[path] = prov.to_dict()
             else:
                 # Incoming is null/empty — preserve old
                 out[key] = old_v

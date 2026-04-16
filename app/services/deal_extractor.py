@@ -421,17 +421,40 @@ def _post_process_metrics(metrics: dict):
     tr = metrics.get("target_returns", {}) or {}
 
     # target_irr is the headline IRR shown on the snapshot card. OMs
-    # often state "Gross IRR 21%" and "Net IRR 13%" without calling
-    # either one "target" — fall back to net (what investors actually
-    # see) when target_irr isn't explicit, and to gross only if net
-    # is also missing.
-    if tr.get("target_irr") is None:
-        net = _safe_num(tr.get("net_irr"))
-        gross = _safe_num(tr.get("gross_irr"))
+    # often state "Gross IRR 21%" (hypothetical sale scenario) and
+    # "Net IRR 13%" (long-term hold with refinance). Claude sometimes
+    # grabs the larger / more prominent sale-scenario number and puts
+    # it in target_irr — which is wrong for deals the sponsor plans
+    # to hold. Force the right value based on the stated strategy:
+    #
+    #   - hold / hold_with_sale_option — prefer net_irr (the
+    #     investor's long-term return), then preferred_return.
+    #     NEVER the hypothetical sale IRR.
+    #   - sale — use net_irr if available, else gross_irr.
+    #   - unknown / missing — fall back to net -> gross.
+    primary_strategy = (tr.get("primary_strategy") or "").strip().lower()
+    net = _safe_num(tr.get("net_irr"))
+    gross = _safe_num(tr.get("gross_irr"))
+    # preferred_return lives on deal_structure, not target_returns.
+    pref = _safe_num(ds.get("preferred_return"))
+
+    if primary_strategy in ("hold", "hold_with_sale_option"):
+        # Whatever Claude put in target_irr is likely the sale-scenario
+        # number — override with the hold-aligned return.
         if net is not None:
             tr["target_irr"] = net
-        elif gross is not None:
-            tr["target_irr"] = gross
+        elif pref is not None:
+            tr["target_irr"] = pref
+    elif primary_strategy == "sale":
+        # For explicit sale strategies it's reasonable to keep whatever
+        # Claude extracted, but only if it's present — else fall back.
+        if tr.get("target_irr") is None:
+            tr["target_irr"] = net if net is not None else gross
+    else:
+        # Strategy unknown — be conservative and prefer net over gross.
+        if tr.get("target_irr") is None:
+            tr["target_irr"] = net if net is not None else gross
+
     metrics["target_returns"] = tr
 
     total_cost = ds.get("total_project_cost")
