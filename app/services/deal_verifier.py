@@ -151,12 +151,14 @@ def _parse_json_defensively(text: str) -> dict:
 
 # Groups of metric sections audited together — kept small so each
 # verify call stays well under Anthropic's input-tokens-per-minute
-# ceiling on non-enterprise tiers. Sections are paired by how closely
-# they cross-reference each other in OM tables (deal_structure and
-# target_returns often live on the same page; project_details with
-# market_location, etc.).
+# ceiling AND under the output-tokens cap we set per call. Early
+# attempts paired deal_structure + target_returns but that combo
+# hit ~45 fields × ~400 output-tokens = 18K which tripped the
+# per-call max_tokens ceiling. One section per group is the
+# conservative default; we only pair small sections.
 VERIFY_SECTION_GROUPS: list[list[str]] = [
-    ["deal_structure", "target_returns"],
+    ["deal_structure"],
+    ["target_returns"],
     ["project_details", "market_location"],
     ["financial_projections", "underwriting_checks"],
     ["sponsor_evaluation"],
@@ -165,6 +167,11 @@ VERIFY_SECTION_GROUPS: list[list[str]] = [
 # soft ceiling that was causing 429s. Each page at 150 DPI base64
 # is ~250 KB, so 5 pages keeps a single verify well under ~1.5 MB.
 VERIFY_MAX_PAGES = 5
+# Output ceiling per chunk. Each audit row is ~300-500 tokens
+# (status + correct_value + source citation + note + confidence);
+# 16K gives us ~35-50 fields of headroom which comfortably covers
+# even the biggest single section (deal_structure ~25 fields).
+VERIFY_MAX_OUTPUT_TOKENS = 16000
 
 
 def _render_pdf_pages_to_b64(doc_paths: list[str], max_pages: int) -> list[tuple[str, int, int, str]]:
@@ -250,7 +257,7 @@ async def _verify_sections(
         stop_reason = None
         async with client.messages.stream(
             model=MODEL_VERIFY,
-            max_tokens=8000,
+            max_tokens=VERIFY_MAX_OUTPUT_TOKENS,
             messages=[{"role": "user", "content": content_blocks}],
         ) as stream:
             async for chunk in stream.text_stream:

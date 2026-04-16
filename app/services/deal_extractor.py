@@ -186,23 +186,37 @@ columns or rows that look similar but report different things. The
 wrong column choice is the #1 source of extraction errors. Apply
 these rules strictly:
 
-  a. LP VS SPONSOR COLUMNS. Tables often have a "Sponsor" /
-     "GP" / "Manager" / "Co-GP" / "Total Partnership" column AND
-     an "Investor" / "LP" / "Class A" / "Limited Partner" column.
-     ALWAYS extract FROM THE INVESTOR / LP COLUMN. Sponsor-column
-     returns are what the GP makes — they include promote, which
-     the LP does NOT receive. An LP reading this app wants their
-     own returns.
+  a. LP vs SPONSOR RETURNS columns. This rule applies ONLY to the
+     RETURN-LEVEL metrics: IRR, cash-on-cash, equity multiple,
+     distributions, yield, profit per unit. Tables of returns often
+     have a "Sponsor" / "GP" / "Manager" / "Co-GP" / "Total
+     Partnership" column AND an "Investor" / "LP" / "Class A" /
+     "Limited Partner" column. For returns, ALWAYS extract FROM THE
+     INVESTOR / LP COLUMN — sponsor-column returns include promote
+     that the LP does not receive.
 
-     Red flags that you're looking at the wrong column:
-       - The column header is the sponsor's brand/entity name
+     Red flags that you're in the wrong returns column:
+       - Column header is the sponsor's brand/entity name
          (e.g. "Ambient", "Greenfield Partners", "JV Waterfall")
          rather than "Investor" / "LP" / a share class letter.
-       - A "GP" / "Manager" / "Sponsor" column next to it has
-         materially lower numbers (that's the LP column).
-       - The number is labeled "Gross", "Partnership", "Deal-Level",
-         "Project-Level" — those are before-fees and not the
-         investor's return.
+       - An adjacent "GP" / "Manager" / "Sponsor" column has
+         materially lower returns (that's the LP column).
+       - Label says "Gross", "Partnership", "Deal-Level", or
+         "Project-Level" — those are before-fees / not LP.
+
+     DOES NOT APPLY TO STRUCTURAL FIELDS. Fields that describe the
+     sponsor, the GP, or the deal structure legitimately come from
+     the GP / Sponsor rows and numbers. Always extract these from
+     wherever the document reports them, including GP / Sponsor /
+     Manager columns and rows:
+       - gp_coinvest, gp_equity_coinvest_pct (the GP's co-investment
+         dollars and percentage — found ON the GP row)
+       - fees_dev_fee, fees_asset_mgmt, fees_acquisition,
+         fees_disposition, fees_construction_mgmt (sponsor fees)
+       - promote_structure, waterfall_structure, profit_split_*
+       - sponsor_name, sponsor_track_record, sponsor_* fields
+       - preferred_return, investment_class
+     For these, the "GP column" is the SOURCE, not a trap.
 
   b. GROSS VS NET. When both are shown, gross_irr goes in gross_irr
      and the investor's net goes in net_irr AND target_irr. When
