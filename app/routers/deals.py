@@ -645,6 +645,10 @@ async def extract_deal_metrics(deal_id: int, db: AsyncSession = Depends(get_db))
         doc_paths = [d.file_path for d in usable_pdfs]
         incoming_metrics = await extract_metrics_from_docs(doc_texts, doc_paths=doc_paths)
     except Exception as e:
+        import logging
+        logging.getLogger("kenyon.extract").exception(
+            "AI extraction failed for deal %s: %s", deal_id, e
+        )
         msg = str(e)
         status = 503 if "ANTHROPIC_API_KEY" in msg else 500
         raise HTTPException(status_code=status, detail=f"AI extraction failed: {msg}")
