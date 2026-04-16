@@ -436,28 +436,61 @@ def _post_process_metrics(metrics: dict):
 
     # target_irr is the HEADLINE number on the snapshot card. For an
     # LP reading this dashboard, "target" means what THEY are
-    # projected to earn — which is the NET (post-fee, post-promote)
-    # IRR. Gross / project-level IRR is interesting context but is
-    # never what an investor actually receives.
+    # projected to earn — which depends on the deal's strategy.
     #
-    # Simple rule: whenever net_irr is present, it wins. Claude often
-    # grabs the more prominent / larger gross figure from a
-    # hypothetical sale scenario and writes it to target_irr; this
-    # corrects that. If there's no net_irr but there is a preferred
-    # return and the strategy is hold-first, use the pref (which is
-    # the investor's contractual floor on a hold deal). Otherwise
-    # fall back to gross.
+    # For HOLD strategies, the investor's actual return is bounded by
+    # cash flow: preferred return + whatever excess the waterfall
+    # distributes. An IRR of 17-21% on a hold deal is almost always
+    # the hypothetical-sale IRR being pulled from the wrong row —
+    # real hold yields are in the 8-14% range (pref + excess).
+    #
+    # For SALE strategies, net IRR is the right headline — it
+    # includes the terminal sale value that the investor actually
+    # receives.
     net = _safe_num(tr.get("net_irr"))
     gross = _safe_num(tr.get("gross_irr"))
     pref = _safe_num(ds.get("preferred_return"))  # lives on deal_structure
+    coc = _safe_num(tr.get("target_cash_on_cash"))
     primary_strategy = (tr.get("primary_strategy") or "").strip().lower()
 
-    if net is not None:
-        tr["target_irr"] = net
-    elif primary_strategy in ("hold", "hold_with_sale_option") and pref is not None:
-        tr["target_irr"] = pref
-    elif tr.get("target_irr") is None and gross is not None:
-        tr["target_irr"] = gross
+    # Try to get hold-scenario-specific return
+    hold = tr.get("hold_scenario") or {}
+    hold_coc = _safe_num(hold.get("cash_on_cash_return")) if isinstance(hold, dict) else None
+    hold_priority = _safe_num(hold.get("priority_return")) if isinstance(hold, dict) else None
+
+    if primary_strategy in ("hold", "hold_with_sale_option"):
+        # For hold-first deals, the investor's projected return is
+        # the cash flow yield, not any sale-scenario IRR.
+        #
+        # Priority: hold_scenario.cash_on_cash → target_cash_on_cash
+        # → hold_scenario.priority_return → preferred_return.
+        # NEVER use net_irr or gross_irr as target — those are
+        # almost always from the hypothetical sale scenario.
+        hold_return = hold_coc or coc or hold_priority or pref
+        if hold_return is not None:
+            tr["target_irr"] = hold_return
+        elif net is not None:
+            # Last resort: if we have absolutely nothing else, use
+            # net_irr but sanity-check it against the pref. If it's
+            # >30% above pref, it's suspiciously high for a hold deal.
+            if pref is not None and net > pref * 1.3:
+                tr["target_irr"] = pref
+            else:
+                tr["target_irr"] = net
+        elif gross is not None:
+            tr["target_irr"] = gross
+    elif primary_strategy == "sale":
+        # Sale strategy: net IRR is the right headline.
+        if net is not None:
+            tr["target_irr"] = net
+        elif tr.get("target_irr") is None and gross is not None:
+            tr["target_irr"] = gross
+    else:
+        # Unknown strategy: prefer net over gross.
+        if net is not None:
+            tr["target_irr"] = net
+        elif tr.get("target_irr") is None and gross is not None:
+            tr["target_irr"] = gross
 
     metrics["target_returns"] = tr
 
