@@ -101,6 +101,54 @@ HERE ARE THE EXTRACTED METRICS TO VERIFY:
 """
 
 
+def _parse_json_defensively(text: str) -> dict:
+    """Parse Claude's JSON output, recovering from common issues.
+
+    Claude sometimes wraps JSON in markdown fences, appends a stray
+    trailing comma, or prepends a one-line preamble. Walk through
+    a ladder of recovery attempts before giving up.
+    """
+    raw = text.strip()
+
+    # Strip markdown fences like ```json ... ```
+    if raw.startswith("```"):
+        lines = raw.split("\n")
+        lines = [l for l in lines if not l.startswith("```")]
+        raw = "\n".join(lines).strip()
+
+    # Happy path
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError:
+        pass
+
+    # Fall back to the largest balanced {...} span we can find.
+    start = raw.find("{")
+    end = raw.rfind("}") + 1
+    if start >= 0 and end > start:
+        candidate = raw[start:end]
+        try:
+            return json.loads(candidate)
+        except json.JSONDecodeError:
+            # Last-resort: drop trailing commas before a closing
+            # bracket/brace — Claude occasionally emits them.
+            import re
+            scrubbed = re.sub(r",(\s*[}\]])", r"\1", candidate)
+            try:
+                return json.loads(scrubbed)
+            except json.JSONDecodeError as e:
+                raise ValueError(
+                    f"Could not parse verification response as JSON "
+                    f"(error: {e}; tried raw + span + trailing-comma "
+                    f"scrub; first 200 chars: {raw[:200]!r})"
+                )
+
+    raise ValueError(
+        f"No JSON object found in verification response "
+        f"(first 200 chars: {raw[:200]!r})"
+    )
+
+
 async def verify_deal_metrics(deal, db) -> dict:
     """Run second-pass verification on extracted metrics.
     
@@ -179,26 +227,29 @@ async def verify_deal_metrics(deal, db) -> dict:
         model=MODEL_VERIFY,
         meta={"num_pdf_docs": len(doc_paths)},
     ) as op:
-        client = anthropic.Anthropic(api_key=api_key)
-        op.note = "calling Anthropic (streaming)"
-        # Verify emits one audit entry per extracted field (300-500
-        # output tokens each) — a well-populated deal has 60-90
-        # fields, so up to 24-32K output tokens. At 8K we hit
-        # max_tokens; at 32K the Anthropic SDK refuses non-streaming
-        # because the worst-case runtime exceeds its 10-minute
-        # timeout. Streaming gives us both headroom and no timeout.
+        client = anthropic.AsyncAnthropic(api_key=api_key)
+        op.note = "calling Anthropic (async streaming)"
+        # AsyncAnthropic + async streaming keeps the event loop free
+        # during the long verify call — sync streaming blocks the
+        # worker for the full duration, healthchecks fail, Railway
+        # restarts the container mid-call, and the error trail is
+        # lost. max_tokens=16000 gives enough room for a typical
+        # well-populated deal's audit entries (60-90 fields × ~250
+        # tokens each = ~20K, but we use a tighter output format so
+        # 16K is usually enough and completes in ~90s instead of
+        # ~180s).
         response_text = ""
         input_tokens = None
         output_tokens = None
         stop_reason = None
-        with client.messages.stream(
+        async with client.messages.stream(
             model=MODEL_VERIFY,
-            max_tokens=32000,
+            max_tokens=16000,
             messages=[{"role": "user", "content": content_blocks}],
         ) as stream:
-            for text_chunk in stream.text_stream:
+            async for text_chunk in stream.text_stream:
                 response_text += text_chunk
-            final = stream.get_final_message()
+            final = await stream.get_final_message()
             try:
                 input_tokens = getattr(final.usage, "input_tokens", None)
                 output_tokens = getattr(final.usage, "output_tokens", None)
@@ -221,21 +272,7 @@ async def verify_deal_metrics(deal, db) -> dict:
 
         # Parse JSON response
         op.note = "parsing response"
-        if response_text.startswith("```"):
-            lines = response_text.split("\n")
-            lines = [l for l in lines if not l.startswith("```")]
-            response_text = "\n".join(lines)
-
-        try:
-            verification = json.loads(response_text)
-        except json.JSONDecodeError:
-            start = response_text.find("{")
-            end = response_text.rfind("}") + 1
-            if start >= 0 and end > start:
-                verification = json.loads(response_text[start:end])
-            else:
-                raise ValueError("Could not parse verification response as JSON")
-
+        verification = _parse_json_defensively(response_text)
         return verification
 
 

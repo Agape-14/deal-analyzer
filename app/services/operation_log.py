@@ -31,6 +31,7 @@ Design notes:
 from __future__ import annotations
 
 import asyncio
+import logging
 import time
 import traceback
 import uuid
@@ -42,6 +43,12 @@ from typing import Any, AsyncIterator, Optional
 
 
 MAX_ENTRIES = 100
+
+# Mirror every completed operation to the regular log stream so errors
+# survive even when the in-memory buffer is wiped by a restart. Keeps
+# the diagnostics UI as the primary surface but guarantees Railway
+# Deploy Logs also has the exception if the buffer is lost.
+logger = logging.getLogger("kenyon.ops")
 
 
 @dataclass
@@ -156,13 +163,29 @@ async def record(
         entry.error_class = type(exc).__name__
         entry.error_message = str(exc) or repr(exc)
         entry.traceback_excerpt = _traceback_excerpt(exc)
+        # Emit to stderr immediately so the record survives if the
+        # worker dies before the buffer append below, OR if the
+        # buffer is later wiped by a redeploy.
+        logger.exception(
+            "[op:%s] %s failed: %s",
+            entry.id, operation, entry.error_message,
+        )
         raise
     finally:
         entry.duration_ms = int((time.monotonic() - start) * 1000)
         # Even on the error path we want the entry in the buffer —
         # that's the whole point. `append` in a finally is safe here
         # because we don't swallow the exception.
-        await _STORE.append(entry)
+        try:
+            await _STORE.append(entry)
+        except Exception:
+            # Last-ditch: if even the buffer append fails, make sure
+            # stderr has the record. Never let diagnostic plumbing
+            # mask the original error.
+            logger.error(
+                "[op:%s] failed to append diagnostics entry: %r",
+                entry.id, entry,
+            )
 
 
 async def snapshot_entries(include_full_bodies: bool = False) -> list[dict]:

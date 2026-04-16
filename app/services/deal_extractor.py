@@ -291,25 +291,25 @@ async def extract_metrics_from_docs(doc_texts: list[dict], doc_paths: list[str] 
             "text_chars": sum(len(d.get("text", "") or "") for d in doc_texts),
         },
     ) as op:
-        client = anthropic.Anthropic(api_key=api_key)
-        op.note = "calling Anthropic (streaming)"
-        # Anthropic SDK refuses non-streaming requests whose worst-case
-        # runtime could exceed 10 minutes — max_tokens >= ~8192 on Opus
-        # typically trips that. Stream and reassemble the full response
-        # so we get the headroom (up to 32K output) without the
-        # artificial timeout.
+        client = anthropic.AsyncAnthropic(api_key=api_key)
+        op.note = "calling Anthropic (async streaming)"
+        # AsyncAnthropic + async streaming keeps the event loop responsive
+        # during the 1-3 minute call, so healthchecks and the diagnostics
+        # endpoint continue to answer. Sync streaming inside an async
+        # endpoint blocks the whole worker — Railway then kills it mid-
+        # call and we lose the error trail.
         response_text = ""
         input_tokens = None
         output_tokens = None
         stop_reason = None
-        with client.messages.stream(
+        async with client.messages.stream(
             model=MODEL_EXTRACT,
             max_tokens=16384,
             messages=[{"role": "user", "content": content_blocks}],
         ) as stream:
-            for text_chunk in stream.text_stream:
+            async for text_chunk in stream.text_stream:
                 response_text += text_chunk
-            final = stream.get_final_message()
+            final = await stream.get_final_message()
             try:
                 input_tokens = getattr(final.usage, "input_tokens", None)
                 output_tokens = getattr(final.usage, "output_tokens", None)
@@ -333,22 +333,11 @@ async def extract_metrics_from_docs(doc_texts: list[dict], doc_paths: list[str] 
         # can be 30+ KB and we don't want to bloat the buffer.
         op.response_preview = response_text[:2000]
 
-        # Try to parse JSON, handle potential markdown wrapping
-        if response_text.startswith("```"):
-            lines = response_text.split("\n")
-            lines = [l for l in lines if not l.startswith("```")]
-            response_text = "\n".join(lines)
-
-        try:
-            metrics = json.loads(response_text)
-        except json.JSONDecodeError:
-            # Try to find JSON in the response
-            start = response_text.find("{")
-            end = response_text.rfind("}") + 1
-            if start >= 0 and end > start:
-                metrics = json.loads(response_text[start:end])
-            else:
-                raise ValueError("Could not parse AI response as JSON")
+        # Parse defensively — strips markdown fences, falls back to
+        # largest {...} span, drops stray trailing commas. Raises a
+        # ValueError with a readable preview if all attempts fail.
+        from app.services.deal_verifier import _parse_json_defensively
+        metrics = _parse_json_defensively(response_text)
 
         # Ensure new sections exist even if AI didn't return them
         if "underwriting_checks" not in metrics:
