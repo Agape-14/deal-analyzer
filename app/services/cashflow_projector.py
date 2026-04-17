@@ -71,8 +71,16 @@ def project_cash_flows(metrics: dict, investment_amount: float = None) -> dict:
     lp_level = []
     summary = {}
 
-    # LP's share of equity (assume pro-rata)
-    lp_equity_share = 0.95 if total_equity > 0 else 1.0  # Default 95% LP / 5% GP
+    # LP's share of equity (pro-rata). If the "GP co-invest" is
+    # rolled-over LP equity from a prior phase, all equity is LP-side.
+    gp_is_rollover = ds.get("gp_coinvest_is_rollover")
+    if gp_is_rollover is True:
+        lp_equity_share = 1.0
+    elif total_equity > 0:
+        gp_pct = _safe_float(ds.get("gp_equity_coinvest_pct"), 5) / 100.0
+        lp_equity_share = max(0.5, 1.0 - gp_pct)
+    else:
+        lp_equity_share = 1.0
 
     if investment_amount and investment_amount > 0 and total_equity > 0:
         investor_pct = investment_amount / total_equity

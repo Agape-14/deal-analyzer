@@ -225,7 +225,16 @@ def waterfall_from_deal(metrics: dict, investment_amount: float = None) -> dict:
     fp = metrics.get("financial_projections", {}) or {}
 
     total_equity = _safe_float(ds.get("total_equity_required"), 10000000)
-    gp_coinvest_pct = _safe_float(ds.get("gp_equity_coinvest_pct"), 5) / 100.0
+
+    # GP equity split: if the "GP co-invest" is actually rolled-over LP
+    # equity from a prior phase, it's LP capital — the GP's promote
+    # comes through the waterfall tiers, not the capital stack.
+    gp_is_rollover = ds.get("gp_coinvest_is_rollover")
+    if gp_is_rollover is True:
+        gp_coinvest_pct = 0.0
+    else:
+        gp_coinvest_pct = _safe_float(ds.get("gp_equity_coinvest_pct"), 5) / 100.0
+
     gp_equity = total_equity * gp_coinvest_pct
     lp_equity = total_equity - gp_equity
 
