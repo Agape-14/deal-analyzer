@@ -20,17 +20,11 @@ const HERO_KEYS = [
 export function OverviewTab({ deal }: { deal: DealDetail }) {
   const tr = (deal.metrics?.target_returns ?? {}) as Record<string, unknown>;
   const ds = (deal.metrics?.deal_structure ?? {}) as Record<string, unknown>;
-
-  const snapshot = [
-    { key: "target_irr", label: "Target IRR", value: fmtPct(asNum(tr.target_irr), 1) },
-    { key: "target_equity_multiple", label: "Equity Multiple", value: fmtMultiple(asNum(tr.target_equity_multiple)) },
-    { key: "target_cash_on_cash", label: "Cash-on-Cash", value: fmtPct(asNum(tr.target_cash_on_cash), 1) },
-    { key: "hold_period_years", label: "Hold Period", value: fmtYears(asNum(ds.hold_period_years)) },
-    { key: "preferred_return", label: "Pref Return", value: fmtPct(asNum(ds.preferred_return), 1) },
-    { key: "ltv", label: "LTV", value: fmtPct(asNum(ds.ltv), 0) },
-    { key: "total_project_cost", label: "Project Cost", value: fmtMoney(asNum(ds.total_project_cost)) },
-    { key: "total_equity_required", label: "Equity Required", value: fmtMoney(asNum(ds.total_equity_required)) },
-  ];
+  const fp = (deal.metrics?.financial_projections ?? {}) as Record<string, unknown>;
+  const pd = (deal.metrics?.project_details ?? {}) as Record<string, unknown>;
+  const cc = (deal.metrics?.construction_costs ?? {}) as Record<string, unknown>;
+  const uc = (deal.metrics?.underwriting_checks ?? {}) as Record<string, unknown>;
+  const se = (deal.metrics?.sponsor_evaluation ?? {}) as Record<string, unknown>;
 
   const provenance = deal.metrics?._provenance;
 
@@ -39,18 +33,46 @@ export function OverviewTab({ deal }: { deal: DealDetail }) {
       <QualityPanel dealId={deal.id} quality={deal.quality} documents={deal.documents ?? []} />
 
       {/* 2-column: snapshot + scores */}
-      <div className="grid grid-cols-1 lg:grid-cols-[1.2fr_1fr] gap-6">
-        <Card elevated className="p-6">
+      <div className="grid grid-cols-1 lg:grid-cols-[1.2fr_1fr] gap-6 items-stretch">
+        <Card elevated className="p-6 flex flex-col">
           <h3 className="text-base font-semibold tracking-tight mb-4">Snapshot</h3>
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-x-6 gap-y-5">
-            {snapshot.map((s) => (
-              <div key={s.key}>
-                <div className="text-[10px] uppercase tracking-[0.12em] text-muted-foreground">
-                  {s.label}
-                </div>
-                <div className="text-lg font-semibold tabular-nums mt-1">{s.value}</div>
-              </div>
-            ))}
+
+          {/* Returns & Structure */}
+          <div className="grid grid-cols-4 gap-x-6 gap-y-4">
+            <Stat label="Target IRR" value={fmtPct(asNum(tr.target_irr), 1)} />
+            <Stat label="Equity Multiple" value={fmtMultiple(asNum(tr.target_equity_multiple))} />
+            <Stat label="Cash-on-Cash" value={fmtPct(asNum(tr.target_cash_on_cash), 1)} />
+            <Stat label="Hold Period" value={fmtYears(asNum(ds.hold_period_years))} />
+            <Stat label="Pref Return" value={fmtPct(asNum(ds.preferred_return), 1)} />
+            <Stat label="LTV" value={fmtPct(asNum(ds.ltv), 0)} />
+            <Stat label="Project Cost" value={fmtMoney(asNum(ds.total_project_cost))} />
+            <Stat label="Equity Required" value={fmtMoney(asNum(ds.total_equity_required))} />
+          </div>
+
+          {/* Divider */}
+          <div className="border-t border-border/60 my-4" />
+
+          {/* Project & Construction */}
+          <div className="grid grid-cols-4 gap-x-6 gap-y-4">
+            <Stat label="Units" value={fmtInt(asNum(pd.unit_count))} />
+            <Stat label="Cost / Unit" value={fmtMoney(asNum(cc.total_project_cost_per_unit ?? pd.price_per_unit))} />
+            <Stat label="Hard Cost / Unit" value={fmtMoney(asNum(cc.hard_costs_per_unit))} />
+            <Stat label="Land Cost / Unit" value={fmtMoney(asNum(cc.land_cost_per_unit))} />
+            <Stat label="Avg Rent" value={fmtMoney(asNum(fp.avg_rent_per_unit))} sub="/mo" />
+            <Stat label="Occupancy" value={fmtPct(asNum(fp.occupancy_assumption), 0)} />
+            <Stat label="DSCR" value={fmtX(asNum(uc.dscr))} />
+            <Stat label="Yield on Cost" value={fmtPct(asNum(uc.yield_on_cost), 1)} />
+          </div>
+
+          {/* Divider */}
+          <div className="border-t border-border/60 my-4" />
+
+          {/* Sponsor */}
+          <div className="grid grid-cols-4 gap-x-6 gap-y-4">
+            <Stat label="GP Co-Invest" value={fmtPct(asNum(ds.gp_equity_coinvest_pct), 0)} />
+            <Stat label="GP Cash at Risk" value={fmtMoney(asNum(ds.gp_cash_at_risk))} />
+            <Stat label="Interest Rate" value={fmtPct(asNum(ds.interest_rate), 1)} />
+            <Stat label="Sponsor" value={strVal(se.sponsor_name)} small />
           </div>
         </Card>
         <ScoreBreakdown scores={deal.scores ?? {}} />
@@ -82,13 +104,39 @@ export function OverviewTab({ deal }: { deal: DealDetail }) {
   );
 }
 
+function Stat({ label, value, sub, small }: { label: string; value: string; sub?: string; small?: boolean }) {
+  return (
+    <div>
+      <div className="text-[10px] uppercase tracking-[0.12em] text-muted-foreground">{label}</div>
+      <div className={`font-semibold tabular-nums mt-1 ${small ? "text-sm truncate" : "text-lg"}`}>
+        {value}{sub && <span className="text-xs text-muted-foreground font-normal">{sub}</span>}
+      </div>
+    </div>
+  );
+}
+
 function asNum(v: unknown): number | null {
   if (typeof v === "number" && !Number.isNaN(v)) return v;
   if (typeof v === "string" && v.trim() !== "" && !Number.isNaN(Number(v))) return Number(v);
   return null;
 }
 
+function strVal(v: unknown): string {
+  if (typeof v === "string" && v.trim()) return v;
+  return "—";
+}
+
 function fmtYears(n: number | null): string {
   if (n == null) return "—";
   return `${n} ${n === 1 ? "yr" : "yrs"}`;
+}
+
+function fmtInt(n: number | null): string {
+  if (n == null) return "—";
+  return Math.round(n).toLocaleString();
+}
+
+function fmtX(n: number | null): string {
+  if (n == null) return "—";
+  return `${n.toFixed(2)}x`;
 }

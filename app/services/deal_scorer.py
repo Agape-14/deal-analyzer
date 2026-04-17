@@ -72,7 +72,8 @@ def score_market(metrics: dict) -> tuple[int, str]:
     notes = []
 
     if rent_growth is not None:
-        s = _score_range(rent_growth, [(5, 10), (4, 9), (3, 7), (2, 5), (1, 3)])
+        # 1-2% is normal/conservative, 3%+ is strong growth market
+        s = _score_range(rent_growth, [(4, 10), (3, 8), (2, 7), (1, 5), (0, 3)])
         scores.append(s)
         notes.append(f"Rent growth {rent_growth}% → {s}/10")
 
@@ -300,14 +301,19 @@ def score_financials(metrics: dict) -> tuple[int, str]:
         notes.append(f"Rent growth assumption {rent_growth}% → {s}/10")
 
     if expense_ratio is not None:
-        if 40 <= expense_ratio <= 55:
-            s = 8
-        elif 35 <= expense_ratio < 40:
-            s = 5  # Might be understating expenses
-        elif expense_ratio < 35:
-            s = 3  # Suspiciously low
+        # Lower expense ratio = better operations. New construction
+        # typically runs 25-35%, stabilized multifamily 35-50%.
+        # Only flag as suspicious if below 15% (likely missing costs).
+        if expense_ratio < 15:
+            s = 4  # Unrealistically low — probably missing expenses
+        elif expense_ratio <= 30:
+            s = 9  # Excellent — new construction or very efficient ops
+        elif expense_ratio <= 40:
+            s = 8  # Good — well-managed
+        elif expense_ratio <= 50:
+            s = 6  # Average
         else:
-            s = 6
+            s = 4  # High — operational concerns
         scores.append(s)
         notes.append(f"Expense ratio {expense_ratio}% → {s}/10")
 
