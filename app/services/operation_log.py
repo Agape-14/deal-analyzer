@@ -134,7 +134,7 @@ async def record(
 
     Usage:
 
-        async with record("extract", deal_id=42, model="claude-opus-4-6") as op:
+        async with record("extract", deal_id=42, model="claude-opus-4-7") as op:
             result = await call_anthropic(...)
             op.input_tokens = result.usage.input_tokens
             op.output_tokens = result.usage.output_tokens

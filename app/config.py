@@ -2,7 +2,7 @@
 Central config for AI model selection.
 
 Accuracy of the extracted metrics is the whole point of this product, so we
-default to Anthropic's highest-capability model (Opus 4.6) for the paths
+default to Anthropic's highest-capability model (Opus 4.7) for the paths
 that directly write data onto the deal:
 
   MODEL_EXTRACT  — /api/deals/{id}/extract     (pulls metrics from OMs)
@@ -17,8 +17,8 @@ that's noticeably faster and cheaper:
 Every choice is overridable via environment variable so we can tune cost /
 latency without a deploy-and-rebuild cycle:
 
-  MODEL_EXTRACT=claude-opus-4-6
-  MODEL_VERIFY=claude-opus-4-6
+  MODEL_EXTRACT=claude-opus-4-7
+  MODEL_VERIFY=claude-opus-4-7
   MODEL_MARKET=claude-sonnet-4-6
   MODEL_CHAT=claude-sonnet-4-6
 
@@ -30,13 +30,13 @@ from __future__ import annotations
 import os
 
 # Canonical Anthropic model IDs (April 2026 catalogue).
-OPUS_46 = "claude-opus-4-6"
+OPUS_47 = "claude-opus-4-7"
 SONNET_46 = "claude-sonnet-4-6"
 HAIKU_45 = "claude-haiku-4-5-20251001"
 
 # Defaults — highest-accuracy where data correctness matters most.
-MODEL_EXTRACT: str = os.getenv("MODEL_EXTRACT", OPUS_46)
-MODEL_VERIFY: str = os.getenv("MODEL_VERIFY", OPUS_46)
+MODEL_EXTRACT: str = os.getenv("MODEL_EXTRACT", OPUS_47)
+MODEL_VERIFY: str = os.getenv("MODEL_VERIFY", OPUS_47)
 MODEL_MARKET: str = os.getenv("MODEL_MARKET", SONNET_46)
 MODEL_CHAT: str = os.getenv("MODEL_CHAT", SONNET_46)
 
