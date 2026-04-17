@@ -37,14 +37,10 @@ export function QualityPanel({
   async function runExtract() {
     setBusy("extract");
     try {
-      const res = await api.post<{ changes: string[]; conflicts: Record<string, unknown> }>(`/api/deals/${dealId}/extract`);
-      const c = Object.keys(res.conflicts ?? {}).length;
-      toast.success("Extraction refreshed", {
-        description: `${res.changes?.length ?? 0} changes${c ? ` · ${c} conflict${c === 1 ? "" : "s"} flagged` : ""}.`,
-      });
-      router.refresh();
+      await api.post(`/api/deals/${dealId}/extract`);
+      toast.success("Extraction started — running in background (~2-3 min). Refresh the page to see results.", { duration: 8000 });
     } catch (e) {
-      toast.error("Extraction failed", { description: (e as { detail?: string })?.detail });
+      toast.error("Extraction failed to start", { description: (e as { detail?: string })?.detail });
     } finally {
       setBusy(null);
     }

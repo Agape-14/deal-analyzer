@@ -562,18 +562,12 @@ async def get_document_file(doc_id: int, db: AsyncSession = Depends(get_db)):
 
 @router.post("/{deal_id}/extract", dependencies=[Depends(limit("ai"))])
 async def extract_deal_metrics(deal_id: int, db: AsyncSession = Depends(get_db)):
-    """AI-extract metrics from all uploaded documents.
+    """AI-extract metrics from all uploaded documents — runs as a background task.
 
-    Data-integrity guarantees (see app/services/data_integrity.py):
-      1. Smart-merge — a new extraction never overwrites an existing value
-         with null. Re-running extraction is always safe.
-      2. Provenance — every field records which document it came from,
-         when, with what status.
-      3. Conflict detection — when multiple docs are uploaded, we run
-         extraction per-doc first, compare values, and emit red flags for
-         every field where two docs disagree.
-      4. Locks — fields the user has manually edited are never overwritten
-         by re-extraction.
+    Returns 202 immediately and runs the (slow) extraction in the
+    background. This avoids the Railway edge-proxy timeout killing the
+    request mid-extraction (which was causing ECONNRESET errors).
+    The UI polls for completion via the quality endpoint / page refresh.
     """
     result = await db.execute(
         select(Deal).options(selectinload(Deal.documents)).where(Deal.id == deal_id)
@@ -594,170 +588,147 @@ async def extract_deal_metrics(deal_id: int, db: AsyncSession = Depends(get_db))
             status_code=400, detail="No extracted text or PDF files available"
         )
 
-    # Per-document extraction — enables conflict detection. We still do a
-    # whole-set extraction (the union) so rows that only appear in one doc
-    # don't get lost when there are more than 2 docs.
-    per_doc_results: list[tuple[int, str, dict]] = []
-    try:
-        if len(deal.documents) > 1:
-            for doc in deal.documents:
-                text = doc.extracted_text or ""
-                path = (
-                    doc.file_path
-                    if doc.file_path and doc.file_path.endswith(".pdf")
-                    else None
-                )
-                if not text and not path:
-                    continue
-                one_doc_text = (
-                    [
-                        {
-                            "filename": doc.filename,
-                            "doc_type": doc.doc_type,
-                            "text": text,
-                        }
-                    ]
-                    if text
-                    else []
-                )
-                one_doc_path = [path] if path else []
-                try:
-                    mx = await extract_metrics_from_docs(
-                        one_doc_text, doc_paths=one_doc_path
-                    )
-                    per_doc_results.append((doc.id, doc.filename, mx))
-                except Exception:
-                    # A single doc failing shouldn't block the batch; it
-                    # just won't participate in conflict detection.
-                    pass
+    import asyncio
+    asyncio.ensure_future(_run_extract_background(deal_id))
 
-        # Union extraction over all docs at once — this is what we
-        # actually merge into deal.metrics. The per-doc pass above is
-        # only used to compute the conflict map.
-        doc_texts = [
-            {
-                "filename": d.filename,
-                "doc_type": d.doc_type,
-                "text": d.extracted_text or "",
-            }
-            for d in usable_docs
-        ]
-        doc_paths = [d.file_path for d in usable_pdfs]
-        incoming_metrics = await extract_metrics_from_docs(doc_texts, doc_paths=doc_paths)
-    except Exception as e:
-        import logging
-        logging.getLogger("kenyon.extract").exception(
-            "AI extraction failed for deal %s: %s", deal_id, e
-        )
-        msg = str(e)
-        status = 503 if "ANTHROPIC_API_KEY" in msg else 500
-        raise HTTPException(status_code=status, detail=f"AI extraction failed: {msg}")
-
-    # Smart-merge into existing metrics (preserves non-null prior values,
-    # honors locks, records provenance on every updated field).
-    primary_doc = usable_docs[0] if len(usable_docs) == 1 else None
-    merged, changes = smart_merge(
-        deal.metrics,
-        incoming_metrics,
-        source_doc_id=primary_doc.id if primary_doc else None,
-        source_doc_name=primary_doc.filename if primary_doc else "multiple documents",
-    )
-
-    # Conflict detection across documents — then auto-resolve by
-    # preferring the newest document. 56 manual conflict reviews
-    # on a 2-doc deal is operator-hostile; the right default is
-    # "newer doc wins" with an audit trail showing what was overridden.
-    conflicts = detect_conflicts(per_doc_results) if len(per_doc_results) >= 2 else {}
-    n_auto_resolved = 0
-    if conflicts:
-        doc_upload_dates = {d.id: d.upload_date for d in deal.documents}
-        n_auto_resolved = auto_resolve_conflicts(conflicts, merged, doc_upload_dates)
-
-        # auto_resolve_conflicts already patched provenance: resolved
-        # conflicts go to `conflict_history`, unresolved ones keep
-        # `conflict`. Only annotate UNRESOLVED conflicts here.
-        prov = dict(merged.get("_provenance") or {})
-        for path, entries in conflicts.items():
-            if any(e.get("auto_resolved") for e in entries):
-                continue  # already handled by auto_resolve_conflicts
-            existing_prov = prov.get(path, {})
-            existing_prov["conflict"] = entries
-            prov[path] = existing_prov
-        merged["_provenance"] = prov
-
-    # Keep a short extraction-history breadcrumb trail
-    history = list(merged.get("_extraction_history") or [])
-    history.append(
-        {
-            "at": now_iso(),
-            "changes": changes[:50],  # cap
-            "doc_count": len(deal.documents),
-            "conflicts": list(conflicts.keys()),
-        }
-    )
-    merged["_extraction_history"] = history[-20:]  # keep last 20
-
-    # Run validation (includes existing rules + our new conflict + stale flags)
-    validation_flags = validate_deal_metrics(merged, deal.property_type)
-    validation_flags.extend(conflicts_to_flags(conflicts))
-    validation_flags.extend(staleness_flags(merged, deal.documents))
-    merged["validation_flags"] = validation_flags
-
-    deal.metrics = merged
-
-    # Auto-populate city/state from extracted data if empty
-    ml = merged.get("market_location", {}) or {}
-    if not deal.city and ml.get("city"):
-        deal.city = ml["city"]
-    if not deal.state and ml.get("state"):
-        deal.state = ml["state"]
-
-    # Auto-score after a successful extraction. Users were having to
-    # click Re-extract and then separately hit Re-score to get a
-    # number on the header; for a brand-new deal with no prior scores
-    # that just looks broken. Scoring is cheap (pure-python, no AI
-    # call) so running it inline is safe.
-    try:
-        deal.scores = score_deal(merged)
-    except Exception:
-        # If scoring blows up we still want the extraction to land.
-        # The Re-score button remains as a manual retry.
-        pass
-
-    # Notification: extraction complete.
-    reds = [f for f in validation_flags if f.get("severity") == "red"]
-    n_unresolved_conflicts = len(conflicts) - n_auto_resolved
-    body_parts = [f"{len(changes)} field{'s' if len(changes) != 1 else ''} updated"]
-    if n_auto_resolved:
-        body_parts.append(f"{n_auto_resolved} conflict{'s' if n_auto_resolved != 1 else ''} auto-resolved (newer doc wins)")
-    if n_unresolved_conflicts:
-        body_parts.append(f"{n_unresolved_conflicts} unresolved conflict{'s' if n_unresolved_conflicts != 1 else ''}")
-    if reds:
-        body_parts.append(f"{len(reds)} red flag{'s' if len(reds) != 1 else ''}")
-    await notif_svc.emit(
-        db,
-        kind="error" if n_unresolved_conflicts or reds else "success",
-        title=f"Metrics extracted for {deal.project_name}",
-        body=" · ".join(body_parts),
-        href=f"/deals/{deal.id}?tab=overview",
-        payload={
-            "deal_id": deal.id,
-            "changes": len(changes),
-            "conflicts": n_unresolved_conflicts,
-            "auto_resolved": n_auto_resolved,
-            "red_flags": len(reds),
-        },
-    )
-
-    await db.commit()
     return {
-        "message": "Metrics extracted",
-        "metrics": merged,
-        "validation_flags": validation_flags,
-        "changes": changes,
-        "conflicts": conflicts,
-        "quality": quality_summary(merged),
+        "message": "Extraction started — this runs in the background (~2-3 min). "
+                   "Refresh the page to see updated metrics.",
+        "status": "started",
+        "deal_id": deal_id,
     }
+
+
+async def _run_extract_background(deal_id: int):
+    """Background extraction task. Runs independently of the HTTP request lifecycle."""
+    import logging
+    logger = logging.getLogger("kenyon.extract_bg")
+
+    from app.database import async_session
+    async with async_session() as db:
+        try:
+            result = await db.execute(
+                select(Deal).options(selectinload(Deal.documents)).where(Deal.id == deal_id)
+            )
+            deal = result.scalar_one_or_none()
+            if not deal or not deal.documents:
+                logger.warning("extract_bg: deal %s not found or no documents", deal_id)
+                return
+
+            usable_docs = [d for d in deal.documents if (d.extracted_text or "")]
+            usable_pdfs = [
+                d for d in deal.documents if d.file_path and d.file_path.endswith(".pdf")
+            ]
+
+            per_doc_results: list[tuple[int, str, dict]] = []
+            if len(deal.documents) > 1:
+                for doc in deal.documents:
+                    text = doc.extracted_text or ""
+                    path = (
+                        doc.file_path
+                        if doc.file_path and doc.file_path.endswith(".pdf")
+                        else None
+                    )
+                    if not text and not path:
+                        continue
+                    one_doc_text = (
+                        [{"filename": doc.filename, "doc_type": doc.doc_type, "text": text}]
+                        if text else []
+                    )
+                    one_doc_path = [path] if path else []
+                    try:
+                        mx = await extract_metrics_from_docs(one_doc_text, doc_paths=one_doc_path)
+                        per_doc_results.append((doc.id, doc.filename, mx))
+                    except Exception:
+                        pass
+
+            doc_texts = [
+                {"filename": d.filename, "doc_type": d.doc_type, "text": d.extracted_text or ""}
+                for d in usable_docs
+            ]
+            doc_paths = [d.file_path for d in usable_pdfs]
+            incoming_metrics = await extract_metrics_from_docs(doc_texts, doc_paths=doc_paths)
+
+            primary_doc = usable_docs[0] if len(usable_docs) == 1 else None
+            merged, changes = smart_merge(
+                deal.metrics,
+                incoming_metrics,
+                source_doc_id=primary_doc.id if primary_doc else None,
+                source_doc_name=primary_doc.filename if primary_doc else "multiple documents",
+            )
+
+            conflicts = detect_conflicts(per_doc_results) if len(per_doc_results) >= 2 else {}
+            n_auto_resolved = 0
+            if conflicts:
+                doc_upload_dates = {d.id: d.upload_date for d in deal.documents}
+                n_auto_resolved = auto_resolve_conflicts(conflicts, merged, doc_upload_dates)
+                prov = dict(merged.get("_provenance") or {})
+                for path, entries in conflicts.items():
+                    if any(e.get("auto_resolved") for e in entries):
+                        continue
+                    existing_prov = prov.get(path, {})
+                    existing_prov["conflict"] = entries
+                    prov[path] = existing_prov
+                merged["_provenance"] = prov
+
+            history = list(merged.get("_extraction_history") or [])
+            history.append({
+                "at": now_iso(),
+                "changes": changes[:50],
+                "doc_count": len(deal.documents),
+                "conflicts": list(conflicts.keys()),
+            })
+            merged["_extraction_history"] = history[-20:]
+
+            validation_flags = validate_deal_metrics(merged, deal.property_type)
+            validation_flags.extend(conflicts_to_flags(conflicts))
+            validation_flags.extend(staleness_flags(merged, deal.documents))
+            merged["validation_flags"] = validation_flags
+
+            deal.metrics = merged
+
+            ml = merged.get("market_location", {}) or {}
+            if not deal.city and ml.get("city"):
+                deal.city = ml["city"]
+            if not deal.state and ml.get("state"):
+                deal.state = ml["state"]
+
+            try:
+                deal.scores = score_deal(merged)
+            except Exception:
+                pass
+
+            reds = [f for f in validation_flags if f.get("severity") == "red"]
+            n_unresolved_conflicts = len(conflicts) - n_auto_resolved
+            body_parts = [f"{len(changes)} field{'s' if len(changes) != 1 else ''} updated"]
+            if n_auto_resolved:
+                body_parts.append(f"{n_auto_resolved} conflict{'s' if n_auto_resolved != 1 else ''} auto-resolved (newer doc wins)")
+            if n_unresolved_conflicts:
+                body_parts.append(f"{n_unresolved_conflicts} unresolved conflict{'s' if n_unresolved_conflicts != 1 else ''}")
+            if reds:
+                body_parts.append(f"{len(reds)} red flag{'s' if len(reds) != 1 else ''}")
+            await notif_svc.emit(
+                db,
+                kind="error" if n_unresolved_conflicts or reds else "success",
+                title=f"Metrics extracted for {deal.project_name}",
+                body=" · ".join(body_parts),
+                href=f"/deals/{deal.id}?tab=overview",
+                payload={
+                    "deal_id": deal.id,
+                    "changes": len(changes),
+                    "conflicts": n_unresolved_conflicts,
+                    "auto_resolved": n_auto_resolved,
+                    "red_flags": len(reds),
+                },
+            )
+
+            await db.commit()
+            logger.info(
+                "extract_bg: deal %s complete — %d changes, %d conflicts (%d auto-resolved)",
+                deal_id, len(changes), len(conflicts), n_auto_resolved,
+            )
+        except Exception:
+            logger.exception("extract_bg: deal %s failed", deal_id)
 
 
 @router.post("/{deal_id}/score", dependencies=[Depends(limit("write"))])
