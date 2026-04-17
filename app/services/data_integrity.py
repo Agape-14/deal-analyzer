@@ -636,9 +636,9 @@ def quality_summary(metrics: dict[str, Any]) -> dict[str, Any]:
             counters["conflicting"] += 1
         if p.get("locked"):
             counters["locked"] += 1
-        if status == "confirmed":
+        if status in ("confirmed", "calculated"):
             counters["verified"] += 1
-        elif status == "wrong":
+        elif status in ("wrong", "missing"):
             counters["wrong"] += 1
         elif status == "unverifiable":
             counters["unverifiable"] += 1

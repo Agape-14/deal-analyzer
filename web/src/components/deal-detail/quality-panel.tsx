@@ -70,7 +70,7 @@ export function QualityPanel({
       q.calculated * 0.9 +
       q.manual * 1 +
       q.extracted * 0.6 +
-      q.unverifiable * 0.3;
+      q.unverifiable * 0.7;
     const penalties = q.conflicting * 0.8 + q.wrong * 1.2;
     const pct = Math.max(0, Math.min(100, Math.round(((weighted - penalties) / total) * 100)));
     return pct;

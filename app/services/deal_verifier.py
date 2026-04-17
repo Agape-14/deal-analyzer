@@ -23,14 +23,15 @@ VERIFY_PROMPT = """You are a forensic real estate investment auditor. Your job i
 You will receive:
 1. A set of EXTRACTED METRICS (JSON) that an AI previously extracted from deal documents
 2. The ORIGINAL DOCUMENT PAGES (as images) to check against
+3. The full EXTRACTED TEXT from the source documents
 
-Your task: Go through EVERY non-null extracted value and verify it against what you can actually see in the documents.
+Your task: Go through EVERY non-null extracted value and verify it against the source material. Use BOTH the page images AND the extracted text. If a value appears in the extracted text, that counts as confirmation even if the specific page image is not shown.
 
 For EACH field, determine:
-- "confirmed" — You can see this exact value (or very close) in the source document
+- "confirmed" — The value matches what's in the source (from images OR text). Use this liberally: if the extracted text contains the same number, it's confirmed.
 - "wrong" — The extracted value does NOT match what's in the document. Provide the CORRECT value.
-- "unverifiable" — You cannot find this data point in the visible pages (it may be correct but you can't confirm)
-- "calculated" — This is a derived/calculated value. Verify the math is correct.
+- "unverifiable" — You cannot find this data point in ANY of the provided material (images AND text). Only use this as a last resort — search the extracted text thoroughly before marking unverifiable.
+- "calculated" — This is a derived/calculated value (e.g. price_per_unit = cost / units). Verify the math is correct and mark as "calculated" if math checks out.
 - "missing" — The value is null but you CAN see this data in the documents. Provide the correct value.
 
 Return a JSON object with this structure:
@@ -90,12 +91,13 @@ IMPORTANT RULES:
 1. Return ONLY valid JSON
 2. Check EVERY non-null field — do not skip any
 3. For calculated fields, show your math step by step
-4. If you find data in the images that was NOT extracted, include it in missing_data
+4. If you find data in the images or text that was NOT extracted, include it in missing_data
 5. Be especially careful with: unit counts (market rate vs total), dollar amounts, percentages, fee structures
-6. For the unit_count field specifically: check if it should be market rate only (119) or total including affordable (141) — note which is used
-7. Double-check all division calculations (price/unit, price/sqft, etc.)
-8. Flag ANY inconsistency, even small ones
-9. confidence_score: 0-100 based on how much you could verify
+6. Double-check all division calculations (price/unit, price/sqft, etc.)
+7. Flag ANY inconsistency, even small ones
+8. confidence_score: 0-100 based on how much you could verify
+9. PREFER "confirmed" over "unverifiable" — if the extracted text contains a matching value, confirm it. Only mark "unverifiable" when neither images NOR text contain the data point.
+10. For risk scores (1-10 ratings) that the AI assigned during extraction, mark as "calculated" not "unverifiable" — these are AI assessments, not document data points.
 
 HERE ARE THE EXTRACTED METRICS TO VERIFY:
 """
@@ -161,12 +163,12 @@ VERIFY_SECTION_GROUPS: list[list[str]] = [
     ["target_returns"],
     ["project_details", "market_location"],
     ["financial_projections", "underwriting_checks"],
-    ["sponsor_evaluation"],
+    ["sponsor_evaluation", "risk_assessment"],
 ]
-# Max PDF pages per verify call. Each page at 150 DPI JPEG is ~50KB
-# base64 (vs ~250KB as PNG). 5 pages × 50KB = 250KB of image data
-# per chunk, well under Anthropic's request size limit.
-VERIFY_MAX_PAGES = 5
+# Max PDF pages per verify call. Each page at 150 DPI JPEG is ~50-100KB
+# base64. 8 pages × 100KB = 800KB of image data per chunk, well under
+# Anthropic's request size limit.
+VERIFY_MAX_PAGES = 8
 # Output ceiling per chunk. Each audit row is ~300-500 tokens
 # (status + correct_value + source citation + note + confidence);
 # 16K gives us ~35-50 fields of headroom which comfortably covers
@@ -234,13 +236,14 @@ async def _verify_sections(
     # This is the #1 fix for "unverifiable" counts — the text covers
     # 100% of pages while images only cover VERIFY_MAX_PAGES.
     if doc_texts:
-        # Cap at 8K chars per doc to stay under Anthropic's request
-        # size limit when combined with page images. 8K chars ≈ 2K
-        # tokens — enough to cover most OM text without blowing up.
+        # 20K chars per doc ≈ 5K tokens — covers most of an OM so the
+        # verifier can cross-reference values from pages not shown as
+        # images. The extractor sees 30K; giving the verifier 20K
+        # closes the coverage gap that was causing excess "unverifiable".
         text_block = "\n\nEXTRACTED TEXT FROM DOCUMENTS (use to verify values from pages not shown as images):\n"
         for dt in doc_texts:
             text_block += f"\n===== {dt.get('filename', 'document')} =====\n"
-            text_block += (dt.get("text", "") or "")[:8000]
+            text_block += (dt.get("text", "") or "")[:20000]
         content_blocks.append({"type": "text", "text": text_block})
 
     if rendered_pages:
