@@ -198,6 +198,7 @@ export interface DealMetrics {
   deal_structure?: Record<string, unknown>;
   target_returns?: Record<string, unknown>;
   project_details?: Record<string, unknown>;
+  construction_costs?: Record<string, unknown>;
   financial_projections?: Record<string, unknown>;
   market_location?: Record<string, unknown>;
   risk_assessment?: Record<string, unknown>;

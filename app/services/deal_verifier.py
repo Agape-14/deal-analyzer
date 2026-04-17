@@ -162,6 +162,7 @@ VERIFY_SECTION_GROUPS: list[list[str]] = [
     ["deal_structure"],
     ["target_returns"],
     ["project_details", "market_location"],
+    ["construction_costs"],
     ["financial_projections", "underwriting_checks"],
     ["sponsor_evaluation", "risk_assessment"],
 ]

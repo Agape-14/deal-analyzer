@@ -51,6 +51,7 @@ METRIC_SECTIONS = (
     "deal_structure",
     "target_returns",
     "project_details",
+    "construction_costs",
     "financial_projections",
     "market_location",
     "risk_assessment",

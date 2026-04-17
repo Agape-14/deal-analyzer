@@ -100,6 +100,24 @@ Return a JSON object with EXACTLY these keys (use null for any field not found i
     "rent_premium": "Expected rent increase from renovations — describe dollar amount and percentage",
     "comparable_properties": "Comp properties used to justify rent assumptions"
   },
+  "construction_costs": {
+    "total_project_cost": "All-in total project cost as dollar number — should match deal_structure.total_project_cost",
+    "total_project_cost_per_unit": "Total project cost divided by unit count as dollar number (e.g. 444958)",
+    "hard_costs_total": "Total hard/construction costs (on-site development + vertical construction) as dollar number",
+    "hard_costs_per_unit": "Hard costs per unit as dollar number",
+    "hard_costs_per_sqft": "Hard costs per square foot as dollar number",
+    "land_cost_total": "Land acquisition cost as dollar number",
+    "land_cost_per_unit": "Land cost per unit as dollar number",
+    "soft_costs_total": "Total soft costs (architecture, engineering, legal, permits, entitlements) as dollar number",
+    "soft_costs_per_unit": "Soft costs per unit as dollar number",
+    "site_work_total": "Site work / off-site improvements cost as dollar number",
+    "contingency_total": "Contingency reserve as dollar number",
+    "contingency_pct": "Contingency as percentage of hard costs as number",
+    "financing_costs_total": "Total financing costs (interest reserve, loan origination, closing costs) as dollar number",
+    "developer_fee_total": "Developer fee in dollars as number",
+    "reserves_total": "Operating reserves / working capital as dollar number",
+    "cost_breakdown_notes": "Any other notable line items from the sources & uses or development budget — quote actual numbers"
+  },
   "financial_projections": {
     "stabilized_noi": "stabilized net operating income as dollar number",
     "entry_cap_rate": "going-in/entry cap rate as percentage number",
@@ -575,6 +593,42 @@ def _post_process_metrics(metrics: dict):
         except (ValueError, TypeError):
             pass
 
+    # Construction costs: calculate per-unit figures from totals if AI missed them
+    cc = metrics.get("construction_costs", {}) or {}
+    if units and units > 0:
+        if cc.get("total_project_cost") and not cc.get("total_project_cost_per_unit"):
+            cc["total_project_cost_per_unit"] = round(_safe_num(cc["total_project_cost"]) / units)
+        elif total_cost and not cc.get("total_project_cost_per_unit"):
+            cc["total_project_cost_per_unit"] = round(total_cost / units)
+        if cc.get("hard_costs_total") and not cc.get("hard_costs_per_unit"):
+            cc["hard_costs_per_unit"] = round(_safe_num(cc["hard_costs_total"]) / units)
+        if cc.get("land_cost_total") and not cc.get("land_cost_per_unit"):
+            cc["land_cost_per_unit"] = round(_safe_num(cc["land_cost_total"]) / units)
+        if cc.get("soft_costs_total") and not cc.get("soft_costs_per_unit"):
+            cc["soft_costs_per_unit"] = round(_safe_num(cc["soft_costs_total"]) / units)
+
+    sqft_val = _safe_num(sqft)
+    if sqft_val and sqft_val > 0:
+        if cc.get("hard_costs_total") and not cc.get("hard_costs_per_sqft"):
+            cc["hard_costs_per_sqft"] = round(_safe_num(cc["hard_costs_total"]) / sqft_val)
+
+    # Cross-fill from financial_projections if construction_costs is empty
+    if not cc.get("hard_costs_total") and fp.get("hard_costs"):
+        cc["hard_costs_total"] = fp["hard_costs"]
+    if not cc.get("land_cost_total") and fp.get("land_cost"):
+        cc["land_cost_total"] = fp["land_cost"]
+    if not cc.get("soft_costs_total") and fp.get("soft_costs"):
+        cc["soft_costs_total"] = fp["soft_costs"]
+    if not cc.get("total_project_cost") and total_cost:
+        cc["total_project_cost"] = total_cost
+
+    # Contingency as percentage of hard costs
+    cont = _safe_num(cc.get("contingency_total"))
+    hard = _safe_num(cc.get("hard_costs_total"))
+    if cont and hard and hard > 0 and not cc.get("contingency_pct"):
+        cc["contingency_pct"] = round(cont / hard * 100, 1)
+
+    metrics["construction_costs"] = cc
     metrics["deal_structure"] = ds
     metrics["project_details"] = pd_
     metrics["underwriting_checks"] = uc

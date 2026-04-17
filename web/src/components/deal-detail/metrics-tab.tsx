@@ -11,6 +11,7 @@ const SECTIONS: Array<{
   { key: "deal_structure", title: "Deal structure", description: "Capitalization, leverage, fees, and waterfall mechanics." },
   { key: "target_returns", title: "Target returns", description: "Projected IRR, multiple, cash-on-cash, yield." },
   { key: "project_details", title: "Project details", description: "Units, square footage, construction, timing." },
+  { key: "construction_costs", title: "Construction costs", description: "Total, hard, soft, land costs — total and per unit. Key for deal comparison." },
   { key: "financial_projections", title: "Financial projections", description: "NOI, cap rates, rent and expense assumptions." },
   { key: "market_location", title: "Market & location", description: "Geography, submarket, demographics, drivers." },
   { key: "underwriting_checks", title: "Underwriting", description: "BEO, DSCR, YoC, sensitivities." },
