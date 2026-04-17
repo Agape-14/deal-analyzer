@@ -166,9 +166,10 @@ VERIFY_SECTION_GROUPS: list[list[str]] = [
     ["sponsor_evaluation", "risk_assessment"],
 ]
 # Max PDF pages per verify call. Each page at 150 DPI JPEG is ~50-100KB
-# base64. 8 pages × 100KB = 800KB of image data per chunk, well under
-# Anthropic's request size limit.
-VERIFY_MAX_PAGES = 8
+# base64. 15 pages × 100KB = 1.5MB of image data per chunk, well under
+# Anthropic's request size limit. More pages = more fields confirmed
+# instead of "unverifiable".
+VERIFY_MAX_PAGES = 15
 # Output ceiling per chunk. Each audit row is ~300-500 tokens
 # (status + correct_value + source citation + note + confidence);
 # 16K gives us ~35-50 fields of headroom which comfortably covers
@@ -236,14 +237,14 @@ async def _verify_sections(
     # This is the #1 fix for "unverifiable" counts — the text covers
     # 100% of pages while images only cover VERIFY_MAX_PAGES.
     if doc_texts:
-        # 20K chars per doc ≈ 5K tokens — covers most of an OM so the
-        # verifier can cross-reference values from pages not shown as
-        # images. The extractor sees 30K; giving the verifier 20K
-        # closes the coverage gap that was causing excess "unverifiable".
-        text_block = "\n\nEXTRACTED TEXT FROM DOCUMENTS (use to verify values from pages not shown as images):\n"
+        # Send full document text — the verifier needs the same view
+        # of the document as the extractor to confirm values. Truncating
+        # caused the verifier to mark fields "unverifiable" simply
+        # because the relevant text was cut off.
+        text_block = "\n\nFULL EXTRACTED TEXT FROM DOCUMENTS (search this thoroughly to verify values — data may appear anywhere in the document):\n"
         for dt in doc_texts:
             text_block += f"\n===== {dt.get('filename', 'document')} =====\n"
-            text_block += (dt.get("text", "") or "")[:20000]
+            text_block += (dt.get("text", "") or "")
         content_blocks.append({"type": "text", "text": text_block})
 
     if rendered_pages:

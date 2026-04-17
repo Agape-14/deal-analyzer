@@ -169,16 +169,22 @@ Return a JSON object with EXACTLY these keys (use null for any field not found i
 IMPORTANT RULES:
 1. Return ONLY valid JSON — no markdown, no explanation, no code blocks
 2. Use numbers for numeric fields (not strings like "$50,000" — just 50000)
-3. Use null for any field you cannot find in the documents
+3. Use null for any field you cannot find in the documents. NULL IS ALWAYS BETTER THAN A GUESS. If you're not confident a value is correct, return null. This tool is used for financial decisions — a wrong number is far more dangerous than a missing one.
 4. For percentage fields, use the number only (e.g. 18.5 not "18.5%")
 5. For dollar amounts, use raw numbers (e.g. 5000000 not "$5M")
 6. Risk scores should be integers 1-10 where 10 = lowest risk / best
-7. Be thorough — search every page of EVERY document for relevant data
+7. Be thorough — search every page of EVERY document for relevant data. Check the full text AND every page image. Financial tables with critical numbers often appear on pages 15-30+.
 8. If multiple documents are provided, COMBINE all information into a single unified extraction. Different docs may contain different pieces (e.g., offering memo has deal terms, proforma has financials, market study has comps). Merge everything.
 9. If a metric appears in multiple documents, use the most recent/prominent value
 10. For IRR and equity multiples, ALWAYS try to identify if they are gross or net. If the document only shows one number without specifying, put it in target_irr/target_equity_multiple AND note in the description fields
 11. Calculate yield_on_cost (stabilized NOI / total project cost) and break_even_occupancy if you have enough data
 12. DSCR = NOI / annual debt service — calculate if possible
+13. CROSS-CHECK YOUR WORK: After extracting, verify internal consistency:
+    - total_project_cost should ≈ total_equity_required + debt_amount
+    - ltv should = debt_amount / total_project_cost × 100
+    - price_per_unit should = total_project_cost / unit_count
+    - If any of these don't reconcile, re-examine which numbers you pulled
+14. For description/text fields (waterfall_structure, sources_and_uses, etc.), be SPECIFIC and quote actual numbers from the document rather than paraphrasing vaguely
 
 CRITICAL: WHICH COLUMN / ROW TO READ FROM
 Real-estate offering documents routinely present numbers in MULTIPLE
@@ -264,30 +270,34 @@ async def extract_metrics_from_docs(doc_texts: list[dict], doc_paths: list[str] 
     # Build content blocks - mix of text and images
     content_blocks = []
 
-    # Add text context
+    # Send full document text — no truncation. A 30-page OM is ~80K
+    # chars ≈ 20K tokens. With Opus 4.7's 200K context this fits
+    # easily, and truncation was the #1 cause of missed data (critical
+    # financial tables on page 15+ were invisible).
     doc_context = ""
     for doc in doc_texts:
         doc_context += f"\n\n===== DOCUMENT: {doc['filename']} (Type: {doc['doc_type']}) =====\n"
-        text = doc['text'][:30000]
-        doc_context += text
+        doc_context += doc['text']
 
     content_blocks.append({
         "type": "text",
         "text": EXTRACTION_PROMPT + doc_context
     })
 
-    # Add page images from PDFs for vision-based extraction
-    # Budget: ~12 pages total across all docs at 150 DPI to stay under API limits
-    MAX_TOTAL_PAGES = 12
+    # Send ALL page images from PDFs for vision-based extraction.
+    # Tables, charts, and waterfall diagrams are often unreadable in
+    # plain text but crystal-clear in images. At 150 DPI JPEG each
+    # page is ~50-100KB; a 30-page OM totals ~3MB — well within
+    # Anthropic's request limits. Cap at 30 pages as a safety valve.
+    MAX_TOTAL_PAGES = 30
     DPI = 150
     pages_used = 0
 
     if doc_paths:
         try:
             import fitz
-            # Calculate pages per doc
-            total_doc_pages = 0
             doc_infos = []
+            total_doc_pages = 0
             for path in doc_paths:
                 if not os.path.exists(path):
                     continue
@@ -295,7 +305,6 @@ async def extract_metrics_from_docs(doc_texts: list[dict], doc_paths: list[str] 
                 doc_infos.append((path, pdf_doc))
                 total_doc_pages += pdf_doc.page_count
 
-            # Distribute page budget across docs proportionally
             for path, pdf_doc in doc_infos:
                 if pages_used >= MAX_TOTAL_PAGES:
                     pdf_doc.close()
@@ -303,22 +312,16 @@ async def extract_metrics_from_docs(doc_texts: list[dict], doc_paths: list[str] 
 
                 fname = os.path.basename(path)
                 pages_remaining = MAX_TOTAL_PAGES - pages_used
-                # Proportional allocation, minimum 3 pages per doc
-                if len(doc_infos) > 1:
-                    alloc = max(3, int(MAX_TOTAL_PAGES * pdf_doc.page_count / total_doc_pages))
-                else:
-                    alloc = MAX_TOTAL_PAGES
-                max_pages = min(pdf_doc.page_count, alloc, pages_remaining)
+                max_pages = min(pdf_doc.page_count, pages_remaining)
 
                 content_blocks.append({
                     "type": "text",
-                    "text": f"\n\nBELOW ARE PAGE IMAGES from '{fname}' ({pdf_doc.page_count} pages total, showing {max_pages}). These contain tables, charts, and formatted data that may not appear in the text above. Extract ALL numbers, fees, projections, and financial data from these images:\n"
+                    "text": f"\n\nBELOW ARE ALL PAGE IMAGES from '{fname}' ({pdf_doc.page_count} pages total, showing {max_pages}). These contain tables, charts, and formatted data that may not appear in the text above. Extract ALL numbers, fees, projections, and financial data from these images:\n"
                 })
                 for page_num in range(max_pages):
                     page = pdf_doc[page_num]
                     mat = fitz.Matrix(DPI/72, DPI/72)
                     pix = page.get_pixmap(matrix=mat)
-                    # Convert to JPEG for smaller size (vs PNG)
                     img_bytes = pix.tobytes("jpeg")
                     img_b64 = base64.b64encode(img_bytes).decode("utf-8")
                     content_blocks.append({
@@ -336,7 +339,6 @@ async def extract_metrics_from_docs(doc_texts: list[dict], doc_paths: list[str] 
                     pages_used += 1
                 pdf_doc.close()
         except Exception as e:
-            # If image extraction fails, continue with text only
             content_blocks.append({
                 "type": "text",
                 "text": f"\n(Note: Could not extract page images: {e}. Relying on text only.)\n"
@@ -367,7 +369,7 @@ async def extract_metrics_from_docs(doc_texts: list[dict], doc_paths: list[str] 
         stop_reason = None
         async with client.messages.stream(
             model=MODEL_EXTRACT,
-            max_tokens=16384,
+            max_tokens=32768,
             messages=[{"role": "user", "content": content_blocks}],
         ) as stream:
             async for text_chunk in stream.text_stream:
