@@ -141,14 +141,23 @@ def validate_deal_metrics(metrics: dict, property_type: str | None = None) -> li
     gp_coinvest = _num(ds.get('gp_equity_coinvest_pct'))
     gp_is_rollover = ds.get('gp_coinvest_is_rollover')
 
+    gp_cash = _num(ds.get('gp_cash_at_risk'))
+    gp_desc = ds.get('gp_coinvest_description') or ''
+
     if gp_is_rollover is True:
+        cash_note = f' GP cash at risk: ${gp_cash:,.0f}.' if gp_cash else ' GP actual cash at risk: unknown.'
         flags.append({'severity': 'yellow', 'category': 'Alignment',
-                      'message': f'GP co-invest of {gp_coinvest or "?"}% appears to be rolled-over equity from a prior phase — not new cash from the sponsor. '
-                                 'True GP alignment requires the sponsor\'s own capital at risk. Verify what portion is actual GP money.'})
+                      'message': f'GP co-invest of {gp_coinvest or "?"}% appears to be rolled-over equity / land basis / deferred fees — not new cash from the sponsor.{cash_note} '
+                                 'True alignment requires the sponsor\'s own capital at risk.'})
+    elif gp_coinvest is not None and gp_coinvest > 20 and gp_is_rollover is None:
+        # Suspiciously high GP co-invest without rollover analysis
+        flags.append({'severity': 'yellow', 'category': 'Alignment',
+                      'message': f'GP co-invest of {gp_coinvest}% is unusually high. Verify this is actual GP cash — '
+                                 'not rolled equity from a prior phase, land contribution, or deferred fees.'})
     elif gp_coinvest is not None and gp_coinvest < 5:
         flags.append({'severity': 'red', 'category': 'Alignment',
                       'message': f'GP co-invest is only {gp_coinvest}%. Strong sponsors invest 5-10%+ alongside LPs.'})
-    elif gp_coinvest and gp_coinvest >= 10:
+    elif gp_coinvest and gp_coinvest >= 10 and gp_is_rollover is False:
         flags.append({'severity': 'green', 'category': 'Alignment',
                       'message': f'GP co-invest of {gp_coinvest}% shows strong alignment. Sponsor has skin in the game.'})
 

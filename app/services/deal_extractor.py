@@ -38,8 +38,9 @@ Return a JSON object with EXACTLY these keys (use null for any field not found i
     "capital_stack": "Full capital stack breakdown — senior debt, mezzanine debt, preferred equity, common equity, GP co-invest. Describe each layer with amount and position",
     "sources_and_uses": "Sources: LP equity, GP equity, senior debt, mezzanine, etc. Uses: acquisition/land, hard costs, soft costs, reserves, fees, closing costs. Full breakdown as text",
     "gp_equity_coinvest_pct": "What percentage of total equity is the GP/sponsor investing with their OWN MONEY (not rolled-over LP equity from a prior phase)? As number (e.g. 5 for 5%). If the document shows a large 'GP equity' figure but it's actually rolled-over equity from prior investors, return null or the true GP-only amount.",
-    "gp_coinvest_is_rollover": "true if the GP's 'co-invest' is actually rolled-over equity from a prior phase or prior LP investors rather than new cash from the sponsor. false if it's genuinely new GP money. null if unclear.",
+    "gp_coinvest_is_rollover": "true if the GP's 'co-invest' is actually rolled-over equity from a prior phase, prior LP investors, land contribution at appraised value, or deferred fees rather than new cash from the sponsor. false if it's genuinely new GP money. null if unclear.",
     "gp_coinvest_description": "Describe the nature of the GP co-investment: Is it new cash? Rolled land basis? Prior LP equity rolling forward? Deferred fees? Quote the document's language.",
+    "gp_cash_at_risk": "The actual dollar amount of NEW CASH the GP/sponsor has personally at risk in this deal. Not rolled equity, not deferred fees, not appraised land — only cash. null if not stated or unclear.",
     "distribution_frequency": "Monthly, quarterly, annually, or upon sale/refi",
     "capital_call_provisions": "What happens if there's a capital call? Dilutive or punitive? What are LP obligations?",
     "exit_strategies": "All planned exit strategies: sale, refinance, recapitalize, hold for cash flow, REIT conversion",
@@ -268,6 +269,33 @@ these rules strictly:
      doc (e.g. summary page vs detailed table), prefer the
      detailed table with a line-item breakdown. Summary numbers
      are often rounded or promotional.
+
+  f. GP CO-INVEST: ANALYZE THE SOURCE, NOT JUST THE NUMBER.
+     This is critical for LP due diligence. A high "GP co-invest"
+     percentage does NOT always mean alignment. Analyze what the
+     GP equity actually represents:
+
+     REAL GP SKIN IN THE GAME (gp_coinvest_is_rollover = false):
+       - Sponsor writes a check from their own funds
+       - Language: "GP will contribute $X from personal capital"
+       - Typically 2-10% of total equity
+
+     NOT REAL GP CASH (gp_coinvest_is_rollover = true):
+       - Rolled-over equity from a prior acquisition phase
+         (e.g. "Phase 1 investors rolling into Phase 2")
+       - Land contributed at appraised value (cost basis may
+         be much lower — the sponsor isn't putting in new cash)
+       - Deferred development fees counted as "equity"
+       - Prior LP investors' equity being relabeled as "GP"
+       - Language: "rolled equity", "contributed interest",
+         "existing ownership", "land basis", "deferred fees",
+         "Phase 1 equity", "original basis"
+       - Red flag: GP "co-invest" > 20% of equity — this is
+         almost never actual cash. Look for the explanation.
+
+     Fill gp_coinvest_is_rollover, gp_coinvest_description,
+     and gp_cash_at_risk with your analysis. When in doubt,
+     set gp_coinvest_is_rollover = null (not false).
 
 DOCUMENTS TO ANALYZE:
 """

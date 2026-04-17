@@ -147,13 +147,28 @@ def score_structure(metrics: dict) -> tuple[int, str]:
             gp_val = None
 
     gp_is_rollover = _safe_get(metrics, "deal_structure", "gp_coinvest_is_rollover")
+    gp_cash = _safe_get(metrics, "deal_structure", "gp_cash_at_risk")
+    total_equity = _safe_get(metrics, "deal_structure", "total_equity_required")
 
     if gp_val is not None:
         if gp_is_rollover is True:
-            # Rolled-over equity from prior investors/phases is NOT true
-            # GP skin-in-the-game. Cap the score regardless of percentage.
-            s = 4
-            notes.append(f"GP co-invest {gp_val}% (rolled equity, not new GP cash) → {s}/10")
+            # Rolled equity — score based on actual GP cash at risk if known
+            if gp_cash and total_equity and total_equity > 0:
+                real_pct = gp_cash / total_equity * 100
+                if real_pct >= 5:
+                    s = 7
+                elif real_pct >= 2:
+                    s = 5
+                else:
+                    s = 3
+                notes.append(f"GP co-invest {gp_val}% (rolled equity) but ${gp_cash:,.0f} actual cash ({real_pct:.1f}%) → {s}/10")
+            else:
+                s = 4
+                notes.append(f"GP co-invest {gp_val}% (rolled equity, not new GP cash) → {s}/10")
+        elif gp_val > 20 and gp_is_rollover is None:
+            # Suspiciously high, unconfirmed — moderate score
+            s = 6
+            notes.append(f"GP co-invest {gp_val}% (unconfirmed source — may be rolled equity) → {s}/10")
         elif gp_val >= 10:
             s = 10
         elif gp_val >= 5:
@@ -162,7 +177,7 @@ def score_structure(metrics: dict) -> tuple[int, str]:
             s = 6
         else:
             s = 4
-        if gp_is_rollover is not True:
+        if gp_is_rollover is not True and not (gp_val > 20 and gp_is_rollover is None):
             notes.append(f"GP co-invest {gp_val}% → {s}/10")
         scores.append(s)
 
