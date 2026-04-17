@@ -11,13 +11,9 @@ import { api } from "@/lib/api";
 import { cn, fmtDate } from "@/lib/utils";
 import type { DealQualitySummary } from "@/lib/types";
 
-/**
- * Data-quality panel shown at the top of the Overview tab.
- *
- * The single glance-able surface the user is looking for when they ask
- * "how much should I trust this dashboard right now?" Pulls from the
- * backend's quality_summary which is derived from the _provenance tree.
- */
+const POLL_INTERVAL = 5_000;
+const POLL_TIMEOUT = 5 * 60_000;
+
 export function QualityPanel({
   dealId,
   quality,
@@ -29,19 +25,55 @@ export function QualityPanel({
 }) {
   const router = useRouter();
   const [busy, setBusy] = React.useState<"extract" | "verify" | null>(null);
-  // Collapsed by default — the trust bar + action buttons are the
-  // primary signal; the counter grid is noise until the operator
-  // asks for it.
   const [expanded, setExpanded] = React.useState(false);
+  const pollRef = React.useRef<ReturnType<typeof setInterval> | null>(null);
+
+  React.useEffect(() => {
+    return () => {
+      if (pollRef.current) clearInterval(pollRef.current);
+    };
+  }, []);
+
+  function startPolling(kind: "extract" | "verify", beforeTs: string | null) {
+    if (pollRef.current) clearInterval(pollRef.current);
+    const tsField = kind === "extract" ? "last_extracted_at" : "last_verified_at";
+    const start = Date.now();
+
+    pollRef.current = setInterval(async () => {
+      if (Date.now() - start > POLL_TIMEOUT) {
+        if (pollRef.current) clearInterval(pollRef.current);
+        pollRef.current = null;
+        setBusy(null);
+        toast.info("Still running — refresh manually when ready.");
+        return;
+      }
+      try {
+        const res = await api.get<{ summary: DealQualitySummary }>(`/api/deals/${dealId}/quality`);
+        const newTs = (res.summary as Record<string, unknown>)?.[tsField] as string | null;
+        if (newTs && newTs !== beforeTs) {
+          if (pollRef.current) clearInterval(pollRef.current);
+          pollRef.current = null;
+          setBusy(null);
+          toast.success(kind === "extract" ? "Extraction complete" : "Verification complete", {
+            description: `Trust score: ${computeTrust(res.summary)}%`,
+          });
+          router.refresh();
+        }
+      } catch {
+        // network blip — keep polling
+      }
+    }, POLL_INTERVAL);
+  }
 
   async function runExtract() {
     setBusy("extract");
     try {
+      const beforeTs = quality?.last_extracted_at ?? null;
       await api.post(`/api/deals/${dealId}/extract`);
-      toast.success("Extraction started — running in background (~2-3 min). Refresh the page to see results.", { duration: 8000 });
+      toast.success("Extraction started — page will update automatically when done.", { duration: 5000 });
+      startPolling("extract", beforeTs);
     } catch (e) {
       toast.error("Extraction failed to start", { description: (e as { detail?: string })?.detail });
-    } finally {
       setBusy(null);
     }
   }
@@ -49,11 +81,12 @@ export function QualityPanel({
   async function runVerify() {
     setBusy("verify");
     try {
+      const beforeTs = quality?.last_verified_at ?? null;
       await api.post(`/api/deals/${dealId}/verify?auto_correct=true`);
-      toast.success("Verification started — running in background (~90s). Refresh the page in a couple minutes to see results.", { duration: 8000 });
+      toast.success("Verification started — page will update automatically when done.", { duration: 5000 });
+      startPolling("verify", beforeTs);
     } catch (e) {
       toast.error("Verification failed to start", { description: (e as { detail?: string })?.detail });
-    } finally {
       setBusy(null);
     }
   }
@@ -61,19 +94,9 @@ export function QualityPanel({
   const q = quality;
   const total = q?.total_fields ?? 0;
 
-  // Compute a single "trust score" 0-100. Verified = full credit, extracted
-  // = partial, conflicts subtract aggressively, wrong subtracts even more.
   const trust = React.useMemo(() => {
     if (!q || total === 0) return null;
-    const weighted =
-      q.verified * 1 +
-      q.calculated * 0.9 +
-      q.manual * 1 +
-      q.extracted * 0.6 +
-      q.unverifiable * 0.7;
-    const penalties = q.conflicting * 0.8 + q.wrong * 1.2;
-    const pct = Math.max(0, Math.min(100, Math.round(((weighted - penalties) / total) * 100)));
-    return pct;
+    return computeTrust(q);
   }, [q, total]);
 
   const docWarnings = React.useMemo(() => {
@@ -97,6 +120,8 @@ export function QualityPanel({
     : null;
   const stale = ageDays != null && ageDays >= 60;
 
+  const busyLabel = busy === "extract" ? "Extracting…" : busy === "verify" ? "Verifying…" : null;
+
   return (
     <Card elevated className="p-6">
       <div className="flex items-start justify-between gap-6 flex-wrap">
@@ -118,11 +143,13 @@ export function QualityPanel({
           <div>
             <h3 className="text-base font-semibold tracking-tight">Data integrity</h3>
             <p className="text-xs text-muted-foreground mt-0.5">
-              {total === 0
-                ? "No metrics extracted yet — upload an OM and run extraction."
-                : trust != null
-                  ? `Trust score ${trust}% — ${total} tracked field${total === 1 ? "" : "s"}`
-                  : ""}
+              {busyLabel
+                ? busyLabel
+                : total === 0
+                  ? "No metrics extracted yet — upload an OM and run extraction."
+                  : trust != null
+                    ? `Trust score ${trust}% — ${total} tracked field${total === 1 ? "" : "s"}`
+                    : ""}
             </p>
           </div>
         </div>
@@ -141,7 +168,6 @@ export function QualityPanel({
 
       {q && total > 0 && (
         <>
-          {/* Trust bar — always visible, the at-a-glance signal. */}
           {trust != null && (
             <div className="mt-5">
               <div className="h-1.5 rounded-full bg-muted overflow-hidden">
@@ -158,7 +184,6 @@ export function QualityPanel({
             </div>
           )}
 
-          {/* Toggle — show/hide the full breakdown */}
           <button
             type="button"
             onClick={() => setExpanded((v) => !v)}
@@ -172,7 +197,6 @@ export function QualityPanel({
 
           {expanded && (
             <>
-              {/* Counter grid */}
               <div className="mt-4 grid grid-cols-2 sm:grid-cols-4 gap-3">
                 <Counter
                   label="Verified"
@@ -189,7 +213,6 @@ export function QualityPanel({
                 <Counter label="Locked" value={q.locked} />
               </div>
 
-              {/* Timestamps + staleness */}
               <div className="mt-4 pt-4 border-t border-border/60 flex items-center gap-4 text-xs text-muted-foreground flex-wrap">
                 <span className="inline-flex items-center gap-1.5">
                   <Clock className="h-3 w-3" />
@@ -236,6 +259,19 @@ export function QualityPanel({
       )}
     </Card>
   );
+}
+
+function computeTrust(q: DealQualitySummary): number {
+  const total = q.total_fields ?? 0;
+  if (total === 0) return 0;
+  const weighted =
+    q.verified * 1 +
+    q.calculated * 0.9 +
+    q.manual * 1 +
+    q.extracted * 0.6 +
+    q.unverifiable * 0.7;
+  const penalties = q.conflicting * 0.8 + q.wrong * 1.2;
+  return Math.max(0, Math.min(100, Math.round(((weighted - penalties) / total) * 100)));
 }
 
 function Counter({
