@@ -361,9 +361,108 @@ def run_math_checks(metrics: dict) -> list[dict]:
                 })
     
     # ============================================
+    # 5b. CONSTRUCTION COST CHECKS
+    # ============================================
+
+    cc = metrics.get('construction_costs', {}) or {}
+    cc_total = _n(cc.get('total_project_cost'))
+    cc_hard = _n(cc.get('hard_costs_total'))
+    cc_land = _n(cc.get('land_cost_total'))
+    cc_soft = _n(cc.get('soft_costs_total'))
+    cc_contingency = _n(cc.get('contingency_total'))
+    cc_financing = _n(cc.get('financing_costs_total'))
+    cc_dev_fee = _n(cc.get('developer_fee_total'))
+    cc_reserves = _n(cc.get('reserves_total'))
+
+    # Per-unit cross-checks
+    if units and units > 0:
+        for label, total_key, per_unit_key in [
+            ('Total Cost', 'total_project_cost', 'total_project_cost_per_unit'),
+            ('Hard Costs', 'hard_costs_total', 'hard_costs_per_unit'),
+            ('Land Cost', 'land_cost_total', 'land_cost_per_unit'),
+            ('Soft Costs', 'soft_costs_total', 'soft_costs_per_unit'),
+        ]:
+            total_val = _n(cc.get(total_key))
+            per_unit_val = _n(cc.get(per_unit_key))
+            if total_val and per_unit_val:
+                calc = round(total_val / units)
+                diff_pct = abs(calc - per_unit_val) / per_unit_val * 100 if per_unit_val else 0
+                results.append({
+                    'check': f'{label}/Unit = {label} Total / Units',
+                    'status': 'pass' if diff_pct < 1 else ('warn' if diff_pct < 5 else 'fail'),
+                    'expected': _fmt_dollar(calc),
+                    'actual': _fmt_dollar(per_unit_val),
+                    'difference': f'{diff_pct:.1f}% off' if diff_pct > 0.1 else 'match',
+                    'formula': f'{_fmt_dollar(total_val)} / {units} units = {_fmt_dollar(calc)}',
+                })
+
+    # Sum of cost components vs total project cost
+    components = [c for c in [cc_hard, cc_land, cc_soft, cc_contingency, cc_financing, cc_dev_fee, cc_reserves] if c]
+    if len(components) >= 3 and (cc_total or total_cost):
+        comp_sum = sum(components)
+        ref_total = cc_total or total_cost
+        diff_pct = abs(comp_sum - ref_total) / ref_total * 100 if ref_total else 0
+        parts = []
+        if cc_hard: parts.append(f'Hard {_fmt_dollar(cc_hard)}')
+        if cc_land: parts.append(f'Land {_fmt_dollar(cc_land)}')
+        if cc_soft: parts.append(f'Soft {_fmt_dollar(cc_soft)}')
+        if cc_contingency: parts.append(f'Contingency {_fmt_dollar(cc_contingency)}')
+        if cc_financing: parts.append(f'Financing {_fmt_dollar(cc_financing)}')
+        if cc_dev_fee: parts.append(f'Dev Fee {_fmt_dollar(cc_dev_fee)}')
+        if cc_reserves: parts.append(f'Reserves {_fmt_dollar(cc_reserves)}')
+        results.append({
+            'check': 'Cost Components ≈ Total Project Cost',
+            'status': 'pass' if diff_pct < 5 else ('warn' if diff_pct < 15 else 'fail'),
+            'expected': _fmt_dollar(ref_total),
+            'actual': _fmt_dollar(comp_sum),
+            'difference': f'{diff_pct:.1f}% off ({_fmt_dollar(ref_total - comp_sum)} unaccounted)' if diff_pct > 1 else 'match',
+            'formula': ' + '.join(parts) + f' = {_fmt_dollar(comp_sum)}',
+        })
+
+    # Construction costs total should match deal_structure total_project_cost
+    if cc_total and total_cost:
+        diff_pct = abs(cc_total - total_cost) / total_cost * 100 if total_cost else 0
+        results.append({
+            'check': 'Construction Total = Deal Structure Total Cost',
+            'status': 'pass' if diff_pct < 1 else ('warn' if diff_pct < 5 else 'fail'),
+            'expected': _fmt_dollar(total_cost),
+            'actual': _fmt_dollar(cc_total),
+            'difference': f'{diff_pct:.1f}% off' if diff_pct > 0.1 else 'match',
+            'formula': f'construction_costs.total ({_fmt_dollar(cc_total)}) vs deal_structure.total ({_fmt_dollar(total_cost)})',
+        })
+
+    # Hard costs per sqft cross-check
+    cc_hard_psf = _n(cc.get('hard_costs_per_sqft'))
+    if cc_hard and sqft and sqft > 0 and cc_hard_psf:
+        calc_psf = round(cc_hard / sqft)
+        diff = abs(calc_psf - cc_hard_psf)
+        results.append({
+            'check': 'Hard Costs/SF = Hard Costs / Total SF',
+            'status': 'pass' if diff < 2 else ('warn' if diff < 10 else 'fail'),
+            'expected': f'${calc_psf}/SF',
+            'actual': f'${cc_hard_psf:.0f}/SF',
+            'difference': f'${diff:.0f}/SF off' if diff > 1 else 'match',
+            'formula': f'{_fmt_dollar(cc_hard)} / {sqft:,.0f} SF = ${calc_psf}/SF',
+        })
+
+    # Contingency percentage cross-check
+    cc_cont_pct = _n(cc.get('contingency_pct'))
+    if cc_contingency and cc_hard and cc_hard > 0 and cc_cont_pct:
+        calc_pct = round(cc_contingency / cc_hard * 100, 1)
+        diff = abs(calc_pct - cc_cont_pct)
+        results.append({
+            'check': 'Contingency % = Contingency / Hard Costs',
+            'status': 'pass' if diff < 0.5 else ('warn' if diff < 2 else 'fail'),
+            'expected': f'{calc_pct}%',
+            'actual': f'{cc_cont_pct}%',
+            'difference': f'{diff:.1f}pp off' if diff > 0.1 else 'match',
+            'formula': f'{_fmt_dollar(cc_contingency)} / {_fmt_dollar(cc_hard)} = {calc_pct}%',
+        })
+
+    # ============================================
     # 6. INTERNAL CONSISTENCY CHECKS
     # ============================================
-    
+
     # Sources = Uses check (if we have both)
     sources = _n(ds.get('total_equity_required', 0)) + _n(ds.get('debt_amount', 0))
     hard = _n(fp.get('hard_costs'))

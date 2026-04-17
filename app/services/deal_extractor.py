@@ -438,6 +438,11 @@ async def extract_metrics_from_docs(doc_texts: list[dict], doc_paths: list[str] 
         return metrics
 
 
+def _now_iso() -> str:
+    from datetime import datetime, timezone
+    return datetime.now(timezone.utc).isoformat()
+
+
 def _safe_num(val):
     """Safely convert to float, returns None if not possible."""
     if val is None:
@@ -593,41 +598,67 @@ def _post_process_metrics(metrics: dict):
         except (ValueError, TypeError):
             pass
 
-    # Construction costs: calculate per-unit figures from totals if AI missed them
+    # Construction costs: cross-fill from financial_projections FIRST,
+    # then calculate per-unit figures. Order matters — per-unit calcs
+    # need the totals to already be populated.
     cc = metrics.get("construction_costs", {}) or {}
-    if units and units > 0:
-        if cc.get("total_project_cost") and not cc.get("total_project_cost_per_unit"):
-            cc["total_project_cost_per_unit"] = round(_safe_num(cc["total_project_cost"]) / units)
-        elif total_cost and not cc.get("total_project_cost_per_unit"):
-            cc["total_project_cost_per_unit"] = round(total_cost / units)
-        if cc.get("hard_costs_total") and not cc.get("hard_costs_per_unit"):
-            cc["hard_costs_per_unit"] = round(_safe_num(cc["hard_costs_total"]) / units)
-        if cc.get("land_cost_total") and not cc.get("land_cost_per_unit"):
-            cc["land_cost_per_unit"] = round(_safe_num(cc["land_cost_total"]) / units)
-        if cc.get("soft_costs_total") and not cc.get("soft_costs_per_unit"):
-            cc["soft_costs_per_unit"] = round(_safe_num(cc["soft_costs_total"]) / units)
 
-    sqft_val = _safe_num(sqft)
-    if sqft_val and sqft_val > 0:
-        if cc.get("hard_costs_total") and not cc.get("hard_costs_per_sqft"):
-            cc["hard_costs_per_sqft"] = round(_safe_num(cc["hard_costs_total"]) / sqft_val)
-
-    # Cross-fill from financial_projections if construction_costs is empty
+    # Step 1: Cross-fill totals from financial_projections if missing
     if not cc.get("hard_costs_total") and fp.get("hard_costs"):
         cc["hard_costs_total"] = fp["hard_costs"]
     if not cc.get("land_cost_total") and fp.get("land_cost"):
         cc["land_cost_total"] = fp["land_cost"]
     if not cc.get("soft_costs_total") and fp.get("soft_costs"):
         cc["soft_costs_total"] = fp["soft_costs"]
+    if not cc.get("contingency_total") and fp.get("contingency"):
+        cc["contingency_total"] = fp["contingency"]
     if not cc.get("total_project_cost") and total_cost:
         cc["total_project_cost"] = total_cost
 
-    # Contingency as percentage of hard costs
+    # Step 2: Calculate per-unit and per-sqft figures from totals
+    prov = dict(metrics.get("_provenance") or {})
+
+    def _calc_per_unit(total_key: str, per_unit_key: str):
+        total_val = _safe_num(cc.get(total_key))
+        if total_val and units and units > 0 and not cc.get(per_unit_key):
+            cc[per_unit_key] = round(total_val / units)
+            prov[f"construction_costs.{per_unit_key}"] = {
+                "source": "calculated",
+                "status": "calculated",
+                "extracted_at": _now_iso(),
+                "verification_note": f"{total_key} (${total_val:,.0f}) / unit_count ({units})",
+            }
+
+    _calc_per_unit("total_project_cost", "total_project_cost_per_unit")
+    _calc_per_unit("hard_costs_total", "hard_costs_per_unit")
+    _calc_per_unit("land_cost_total", "land_cost_per_unit")
+    _calc_per_unit("soft_costs_total", "soft_costs_per_unit")
+
+    sqft_val = _safe_num(sqft)
+    if sqft_val and sqft_val > 0:
+        hc = _safe_num(cc.get("hard_costs_total"))
+        if hc and not cc.get("hard_costs_per_sqft"):
+            cc["hard_costs_per_sqft"] = round(hc / sqft_val)
+            prov["construction_costs.hard_costs_per_sqft"] = {
+                "source": "calculated",
+                "status": "calculated",
+                "extracted_at": _now_iso(),
+                "verification_note": f"hard_costs_total (${hc:,.0f}) / total_sqft ({sqft_val:,.0f})",
+            }
+
+    # Step 3: Contingency as percentage of hard costs
     cont = _safe_num(cc.get("contingency_total"))
     hard = _safe_num(cc.get("hard_costs_total"))
     if cont and hard and hard > 0 and not cc.get("contingency_pct"):
         cc["contingency_pct"] = round(cont / hard * 100, 1)
+        prov["construction_costs.contingency_pct"] = {
+            "source": "calculated",
+            "status": "calculated",
+            "extracted_at": _now_iso(),
+            "verification_note": f"contingency (${cont:,.0f}) / hard_costs (${hard:,.0f}) × 100",
+        }
 
+    metrics["_provenance"] = prov
     metrics["construction_costs"] = cc
     metrics["deal_structure"] = ds
     metrics["project_details"] = pd_
