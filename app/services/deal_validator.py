@@ -139,7 +139,13 @@ def validate_deal_metrics(metrics: dict, property_type: str | None = None) -> li
 
     # === STRUCTURE CHECKS ===
     gp_coinvest = _num(ds.get('gp_equity_coinvest_pct'))
-    if gp_coinvest is not None and gp_coinvest < 5:
+    gp_is_rollover = ds.get('gp_coinvest_is_rollover')
+
+    if gp_is_rollover is True:
+        flags.append({'severity': 'yellow', 'category': 'Alignment',
+                      'message': f'GP co-invest of {gp_coinvest or "?"}% appears to be rolled-over equity from a prior phase — not new cash from the sponsor. '
+                                 'True GP alignment requires the sponsor\'s own capital at risk. Verify what portion is actual GP money.'})
+    elif gp_coinvest is not None and gp_coinvest < 5:
         flags.append({'severity': 'red', 'category': 'Alignment',
                       'message': f'GP co-invest is only {gp_coinvest}%. Strong sponsors invest 5-10%+ alongside LPs.'})
     elif gp_coinvest and gp_coinvest >= 10:

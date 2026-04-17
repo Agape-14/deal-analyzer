@@ -146,8 +146,15 @@ def score_structure(metrics: dict) -> tuple[int, str]:
         except (ValueError, TypeError):
             gp_val = None
 
+    gp_is_rollover = _safe_get(metrics, "deal_structure", "gp_coinvest_is_rollover")
+
     if gp_val is not None:
-        if gp_val >= 10:
+        if gp_is_rollover is True:
+            # Rolled-over equity from prior investors/phases is NOT true
+            # GP skin-in-the-game. Cap the score regardless of percentage.
+            s = 4
+            notes.append(f"GP co-invest {gp_val}% (rolled equity, not new GP cash) → {s}/10")
+        elif gp_val >= 10:
             s = 10
         elif gp_val >= 5:
             s = 8
@@ -155,8 +162,9 @@ def score_structure(metrics: dict) -> tuple[int, str]:
             s = 6
         else:
             s = 4
+        if gp_is_rollover is not True:
+            notes.append(f"GP co-invest {gp_val}% → {s}/10")
         scores.append(s)
-        notes.append(f"GP co-invest {gp_val}% → {s}/10")
 
     if total_fee_drag is not None:
         if total_fee_drag <= 5:
@@ -388,8 +396,13 @@ def score_sponsor(metrics: dict) -> tuple[int, str]:
         except (ValueError, TypeError):
             pass
 
+    gp_is_rollover = _safe_get(metrics, "deal_structure", "gp_coinvest_is_rollover")
+
     if gp_coinvest is not None:
-        if gp_coinvest >= 10:
+        if gp_is_rollover is True:
+            s = 3
+            notes.append(f"GP co-invest {gp_coinvest}% (rolled equity, not new GP cash) → {s}/10")
+        elif gp_coinvest >= 10:
             s = 10
         elif gp_coinvest >= 5:
             s = 8
@@ -397,8 +410,9 @@ def score_sponsor(metrics: dict) -> tuple[int, str]:
             s = 5
         else:
             s = 3
+        if gp_is_rollover is not True:
+            notes.append(f"GP co-invest {gp_coinvest}% → {s}/10")
         scores.append(s)
-        notes.append(f"GP co-invest {gp_coinvest}% → {s}/10")
 
     avg = round(sum(scores) / len(scores)) if scores else 5
     if not notes:
