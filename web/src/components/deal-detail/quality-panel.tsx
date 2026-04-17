@@ -36,7 +36,6 @@ export function QualityPanel({
 
   function startPolling(kind: "extract" | "verify", beforeTs: string | null) {
     if (pollRef.current) clearInterval(pollRef.current);
-    const tsField = kind === "extract" ? "last_extracted_at" : "last_verified_at";
     const start = Date.now();
 
     pollRef.current = setInterval(async () => {
@@ -49,7 +48,7 @@ export function QualityPanel({
       }
       try {
         const res = await api.get<{ summary: DealQualitySummary }>(`/api/deals/${dealId}/quality`);
-        const newTs = (res.summary as Record<string, unknown>)?.[tsField] as string | null;
+        const newTs = kind === "extract" ? res.summary?.last_extracted_at : res.summary?.last_verified_at;
         if (newTs && newTs !== beforeTs) {
           if (pollRef.current) clearInterval(pollRef.current);
           pollRef.current = null;
