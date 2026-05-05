@@ -34,6 +34,7 @@ from app.auth import (
     session_secret,
 )
 from app.rate_limit import describe_policies
+from app.services.pipeline_runner import start_pipeline_runner, stop_pipeline_runner
 
 
 # ----------------------------- logging setup ----------------------------- #
@@ -67,7 +68,11 @@ async def lifespan(app: FastAPI):
         log.info("[auth] enabled for user '%s'", auth.get("username"))
     else:
         log.warning("[auth] %s", auth.get("message"))
-    yield
+    pipeline_task = start_pipeline_runner()
+    try:
+        yield
+    finally:
+        await stop_pipeline_runner(pipeline_task)
 
 
 app = FastAPI(title="Kenyon Investment Dashboard", version="1.0.0", lifespan=lifespan)
