@@ -2,6 +2,7 @@ fastapi
 uvicorn
 sqlalchemy[asyncio]
 aiosqlite
+asyncpg
 pymupdf
 anthropic
 openpyxl
