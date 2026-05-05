@@ -1,4 +1,3 @@
-import os
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
@@ -75,7 +74,7 @@ async def portfolio_summary(db: AsyncSession = Depends(get_db)):
     """Get portfolio-level summary stats."""
     result = await db.execute(
         select(Investment)
-        .options(selectinload(Investment.distributions))
+        .options(selectinload(Investment.distributions), selectinload(Investment.deal))
     )
     investments = result.scalars().all()
 
@@ -84,16 +83,29 @@ async def portfolio_summary(db: AsyncSession = Depends(get_db)):
     total_exit_proceeds = 0
     active_count = 0
     exited_count = 0
+    status_counts: dict[str, int] = {}
+    sponsor_exposure: dict[str, float] = {}
+    property_type_exposure: dict[str, float] = {}
 
     for inv in investments:
-        total_invested += inv.amount_invested or 0
-        for d in inv.distributions:
-            total_distributions += d.amount or 0
-        if inv.status == "active":
+        invested = inv.amount_invested or 0
+        total_invested += invested
+        for dist in inv.distributions:
+            total_distributions += dist.amount or 0
+
+        status = inv.status or "active"
+        status_counts[status] = status_counts.get(status, 0) + 1
+        if status == "active":
             active_count += 1
-        elif inv.status == "exited":
+        elif status == "exited":
             exited_count += 1
             total_exit_proceeds += inv.exit_amount or 0
+
+        sponsor = inv.sponsor_name or "Unassigned"
+        sponsor_exposure[sponsor] = sponsor_exposure.get(sponsor, 0) + invested
+
+        property_type = inv.deal.property_type if inv.deal else "standalone"
+        property_type_exposure[property_type or "unknown"] = property_type_exposure.get(property_type or "unknown", 0) + invested
 
     total_returned = total_distributions + total_exit_proceeds
     overall_multiple = round(total_returned / total_invested, 2) if total_invested > 0 else 0
@@ -109,40 +121,46 @@ async def portfolio_summary(db: AsyncSession = Depends(get_db)):
         "active_investments": active_count,
         "exited_investments": exited_count,
         "total_investments": len(investments),
+        "status_counts": status_counts,
+        "allocation": {
+            "by_sponsor": _exposure_rows(sponsor_exposure, total_invested),
+            "by_property_type": _exposure_rows(property_type_exposure, total_invested),
+        },
     }
 
 
 @router.post("/")
 async def create_investment(data: InvestmentCreate, db: AsyncSession = Depends(get_db)):
     """Create a new investment."""
-    # If deal_id provided, auto-populate from deal
+    # If deal_id is provided, use one eager-loaded query so async SQLAlchemy never lazy-loads relationships.
     if data.deal_id:
-        deal_result = await db.execute(select(Deal).where(Deal.id == data.deal_id))
+        deal_result = await db.execute(
+            select(Deal)
+            .options(selectinload(Deal.developer))
+            .where(Deal.id == data.deal_id)
+        )
         deal = deal_result.scalar_one_or_none()
-        if deal:
-            if not data.project_name:
-                data.project_name = deal.project_name
-            if not data.sponsor_name and deal.developer:
-                deal_result2 = await db.execute(
-                    select(Deal).options(selectinload(Deal.developer)).where(Deal.id == data.deal_id)
-                )
-                deal2 = deal_result2.scalar_one_or_none()
-                if deal2 and deal2.developer:
-                    data.sponsor_name = deal2.developer.name
-            # Pull from metrics
-            m = deal.metrics or {}
-            ds = m.get('deal_structure', {}) or {}
-            tr = m.get('target_returns', {}) or {}
-            if not data.preferred_return and ds.get('preferred_return'):
-                data.preferred_return = ds['preferred_return']
-            if not data.projected_irr:
-                data.projected_irr = tr.get('net_irr') or tr.get('target_irr')
-            if not data.projected_equity_multiple:
-                data.projected_equity_multiple = tr.get('net_equity_multiple') or tr.get('target_equity_multiple')
-            if not data.investment_class and ds.get('investment_class'):
-                data.investment_class = ds['investment_class']
-            if not data.hold_period_years and ds.get('hold_period_years'):
-                data.hold_period_years = ds['hold_period_years']
+        if not deal:
+            raise HTTPException(status_code=404, detail="Linked deal not found")
+
+        if not data.project_name:
+            data.project_name = deal.project_name
+        if not data.sponsor_name and deal.developer:
+            data.sponsor_name = deal.developer.name
+
+        m = deal.metrics or {}
+        ds = m.get("deal_structure", {}) or {}
+        tr = m.get("target_returns", {}) or {}
+        if data.preferred_return is None and ds.get("preferred_return") is not None:
+            data.preferred_return = ds["preferred_return"]
+        if data.projected_irr is None:
+            data.projected_irr = tr.get("net_irr") or tr.get("target_irr")
+        if data.projected_equity_multiple is None:
+            data.projected_equity_multiple = tr.get("net_equity_multiple") or tr.get("target_equity_multiple")
+        if not data.investment_class and ds.get("investment_class"):
+            data.investment_class = ds["investment_class"]
+        if data.hold_period_years is None and ds.get("hold_period_years") is not None:
+            data.hold_period_years = ds["hold_period_years"]
 
     inv = Investment(**data.model_dump())
     db.add(inv)
@@ -230,16 +248,28 @@ async def delete_distribution(investment_id: int, dist_id: int, db: AsyncSession
 
 # ===== Helpers =====
 
+def _exposure_rows(values: dict[str, float], total: float) -> list[dict]:
+    """Return sorted allocation rows with percentage of invested capital."""
+    rows = []
+    for name, amount in values.items():
+        rows.append({
+            "name": name,
+            "amount": amount,
+            "percent": round((amount / total) * 100, 1) if total > 0 else 0,
+        })
+    return sorted(rows, key=lambda row: row["amount"], reverse=True)
+
+
 def _serialize_investment(inv: Investment) -> dict:
     """Serialize investment with calculated metrics."""
     total_distributions = sum(d.amount for d in inv.distributions) if inv.distributions else 0
     exit_amount = inv.exit_amount or 0
     total_returned = total_distributions + exit_amount
     invested = inv.amount_invested or 0
-    
+
     # Actual equity multiple
     actual_multiple = round(total_returned / invested, 2) if invested > 0 else 0
-    
+
     # Actual cash-on-cash (annual distributions / invested)
     actual_coc = 0
     if invested > 0 and inv.investment_date and inv.distributions:
