@@ -5,6 +5,7 @@ import { ScoreBreakdown } from "@/components/deal-detail/score-breakdown";
 import { ValidationFlagsPanel } from "@/components/deal-detail/validation-flags";
 import { MetricsSection } from "@/components/deal-detail/metrics-section";
 import { QualityPanel } from "@/components/deal-detail/quality-panel";
+import { SourceCitations } from "@/components/deal-detail/source-citations";
 import type { DealDetail } from "@/lib/types";
 import { fmtMoney, fmtMultiple, fmtPct } from "@/lib/utils";
 
@@ -77,6 +78,8 @@ export function OverviewTab({ deal }: { deal: DealDetail }) {
         </Card>
         <ScoreBreakdown scores={deal.scores ?? {}} />
       </div>
+
+      <SourceCitations deal={deal} />
 
       <ValidationFlagsPanel flags={deal.metrics?.validation_flags} />
 
