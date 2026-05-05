@@ -4,6 +4,7 @@ import Link from "next/link";
 import { ArrowLeft, MapPin, Building2, Sparkles, FileDown } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { BigScoreRing } from "@/components/deal-detail/score-ring";
+import { ScoreQualityBadge } from "@/components/deal-detail/score-quality-badge";
 import { FadeIn } from "@/components/motion";
 import { cn, fmtMoney, fmtMultiple, fmtPct } from "@/lib/utils";
 import type { DealDetail } from "@/lib/types";
@@ -18,6 +19,7 @@ const STATUS_STYLES: Record<string, string> = {
 
 export function DealHero({ deal }: { deal: DealDetail }) {
   const locationBits = [deal.city, deal.state].filter(Boolean).join(", ") || deal.location;
+  const visibleScore = deal.overall_score ?? deal.scores?.provisional_overall ?? null;
 
   return (
     <FadeIn>
@@ -79,11 +81,12 @@ export function DealHero({ deal }: { deal: DealDetail }) {
           <div className="flex flex-col items-center lg:items-end gap-4">
             {/* 96px ring on phones, 128px on tablet+ */}
             <div className="sm:hidden">
-              <BigScoreRing value={deal.overall_score} size={96} />
+              <BigScoreRing value={visibleScore} size={96} />
             </div>
             <div className="hidden sm:block">
-              <BigScoreRing value={deal.overall_score} size={128} />
+              <BigScoreRing value={visibleScore} size={128} />
             </div>
+            <ScoreQualityBadge gate={deal.scores?.data_quality} />
             <div className="flex items-center gap-2">
               <Button size="sm" variant="secondary">
                 <Sparkles className="h-4 w-4" />
