@@ -11,12 +11,13 @@ import {
   Sparkles,
   Clock,
   Check,
+  Target,
 } from "lucide-react";
 import type { DealStatus, DealSummary } from "@/lib/types";
 import { DealCard } from "@/components/deal-card";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
-import { cn } from "@/lib/utils";
+import { cn, fmtMoney, fmtMultiple, fmtPct } from "@/lib/utils";
 
 type SortKey = "score" | "irr" | "multiple" | "recent" | "name";
 
@@ -25,7 +26,7 @@ const SORTS: Array<{ key: SortKey; label: string; icon: React.ComponentType<{ cl
   { key: "irr", label: "Target IRR", icon: TrendingUp },
   { key: "multiple", label: "Multiple", icon: ArrowDownUp },
   { key: "recent", label: "Most recent", icon: Clock },
-  { key: "name", label: "Name (A–Z)", icon: CircleDot },
+  { key: "name", label: "Name (A-Z)", icon: CircleDot },
 ];
 
 const STATUSES: Array<{ key: DealStatus | "all"; label: string }> = [
@@ -37,13 +38,6 @@ const STATUSES: Array<{ key: DealStatus | "all"; label: string }> = [
   { key: "passed", label: "Passed" },
 ];
 
-/**
- * Client-side filter/sort UI over a server-fetched deal list.
- *
- * We do the filtering locally because dashboards feel broken when each
- * pill-click round-trips the server. If the list grows past a few hundred
- * we'll switch to URL-driven params + a paginated API.
- */
 export function DealGrid({ deals }: { deals: DealSummary[] }) {
   const [query, setQuery] = React.useState("");
   const [status, setStatus] = React.useState<DealStatus | "all">("all");
@@ -82,23 +76,23 @@ export function DealGrid({ deals }: { deals: DealSummary[] }) {
   }, [deals, query, status, sort]);
 
   const activeSort = SORTS.find((s) => s.key === sort)!;
+  const focusDeal = filtered[0] ?? null;
+  const visibleExposure = filtered.reduce((sum, deal) => sum + (deal.minimum_investment ?? 0), 0);
 
   return (
     <div>
-      {/* Toolbar */}
-      <div className="mb-6 flex flex-col md:flex-row md:items-center gap-3">
-        <div className="relative flex-1 max-w-md">
+      <div className="mb-6 flex flex-col xl:flex-row xl:items-center xl:justify-between gap-3">
+        <div className="relative w-full xl:max-w-[440px]">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground pointer-events-none" />
           <Input
             value={query}
             onChange={(e) => setQuery(e.target.value)}
-            placeholder="Filter by project, sponsor, city…"
+            placeholder="Filter by project, sponsor, city..."
             className="pl-9"
           />
         </div>
 
         <div className="flex items-center gap-2 flex-wrap">
-          {/* Status pills */}
           <div className="flex items-center gap-1 p-1 rounded-lg bg-secondary/40 border border-border/70 relative">
             {STATUSES.map((s) => {
               const active = status === s.key;
@@ -124,7 +118,6 @@ export function DealGrid({ deals }: { deals: DealSummary[] }) {
             })}
           </div>
 
-          {/* Sort */}
           <div className="relative">
             <Button
               size="sm"
@@ -149,7 +142,6 @@ export function DealGrid({ deals }: { deals: DealSummary[] }) {
                     <button
                       key={s.key}
                       onMouseDown={(e) => {
-                        // mouseDown so the click fires before the blur handler above
                         e.preventDefault();
                         setSort(s.key);
                         setSortOpen(false);
@@ -173,40 +165,118 @@ export function DealGrid({ deals }: { deals: DealSummary[] }) {
         </div>
       </div>
 
-      {/* Result count */}
-      <div className="mb-3 text-xs text-muted-foreground">
-        {filtered.length} of {deals.length} deal{deals.length === 1 ? "" : "s"}
-        {query && (
-          <>
-            {" "}
-            matching <span className="text-foreground">&ldquo;{query}&rdquo;</span>
-          </>
-        )}
+      <div className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_320px] xl:items-start">
+        <div>
+          <div className="mb-3 flex items-center justify-between gap-3 text-xs text-muted-foreground">
+            <span>
+              {filtered.length} of {deals.length} deal{deals.length === 1 ? "" : "s"}
+              {query && (
+                <>
+                  {" "}
+                  matching <span className="text-foreground">&quot;{query}&quot;</span>
+                </>
+              )}
+            </span>
+            <span className="hidden sm:inline tabular-nums">
+              Visible exposure: <span className="text-foreground font-medium">{fmtMoney(visibleExposure)}</span>
+            </span>
+          </div>
+
+          <motion.div layout className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+            <AnimatePresence mode="popLayout">
+              {filtered.map((deal) => (
+                <motion.div
+                  key={deal.id}
+                  layout
+                  initial={{ opacity: 0, scale: 0.95, y: 10 }}
+                  animate={{ opacity: 1, scale: 1, y: 0 }}
+                  exit={{ opacity: 0, scale: 0.95 }}
+                  transition={{ duration: 0.22, ease: [0.22, 1, 0.36, 1] }}
+                >
+                  <DealCard deal={deal} />
+                </motion.div>
+              ))}
+            </AnimatePresence>
+          </motion.div>
+
+          {filtered.length === 0 && (
+            <div className="py-16 text-center text-sm text-muted-foreground">
+              No deals match your filters.
+            </div>
+          )}
+        </div>
+
+        <FocusPanel deal={focusDeal} visibleExposure={visibleExposure} />
+      </div>
+    </div>
+  );
+}
+
+function FocusPanel({
+  deal,
+  visibleExposure,
+}: {
+  deal: DealSummary | null;
+  visibleExposure: number;
+}) {
+  return (
+    <aside className="rounded-xl border border-border/80 bg-card/70 p-5 shadow-[0_0_0_1px_hsl(var(--border))_inset,0_20px_40px_-24px_hsl(0_0%_0%/0.7)] xl:sticky xl:top-[92px]">
+      <div className="flex items-center justify-between gap-3">
+        <div>
+          <div className="text-[11px] uppercase tracking-[0.12em] text-muted-foreground">Focus</div>
+          <h2 className="mt-1 text-sm font-semibold tracking-tight">
+            {deal ? "Top visible deal" : "No visible deals"}
+          </h2>
+        </div>
+        <div className="grid h-9 w-9 place-items-center rounded-lg bg-primary/10 text-primary ring-1 ring-primary/20">
+          <Target className="h-4 w-4" />
+        </div>
       </div>
 
-      {/* Grid — each card animates in/out via layout + AnimatePresence */}
-      <motion.div layout className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
-        <AnimatePresence mode="popLayout">
-          {filtered.map((deal) => (
-            <motion.div
-              key={deal.id}
-              layout
-              initial={{ opacity: 0, scale: 0.95, y: 10 }}
-              animate={{ opacity: 1, scale: 1, y: 0 }}
-              exit={{ opacity: 0, scale: 0.95 }}
-              transition={{ duration: 0.22, ease: [0.22, 1, 0.36, 1] }}
-            >
-              <DealCard deal={deal} />
-            </motion.div>
-          ))}
-        </AnimatePresence>
-      </motion.div>
+      {deal ? (
+        <>
+          <div className="mt-5 rounded-lg border border-border/70 bg-background/45 p-4">
+            <div className="flex items-start justify-between gap-3">
+              <div className="min-w-0">
+                <div className="truncate text-base font-semibold tracking-tight">{deal.project_name}</div>
+                <div className="mt-1 truncate text-xs text-muted-foreground">{deal.developer_name}</div>
+              </div>
+              <div className="rounded-full bg-warning/15 px-2 py-1 text-xs font-semibold tabular-nums text-warning ring-1 ring-warning/30">
+                {deal.overall_score == null ? "-" : deal.overall_score.toFixed(1)}
+              </div>
+            </div>
+            <div className="mt-4 grid grid-cols-3 gap-3">
+              <MiniMetric label="IRR" value={fmtPct(deal.target_irr)} />
+              <MiniMetric label="Multiple" value={fmtMultiple(deal.target_equity_multiple)} />
+              <MiniMetric label="Min" value={fmtMoney(deal.minimum_investment)} />
+            </div>
+          </div>
 
-      {filtered.length === 0 && (
-        <div className="py-16 text-center text-sm text-muted-foreground">
-          No deals match your filters.
+          <div className="mt-4 space-y-3 text-xs">
+            <div className="flex items-center justify-between gap-3">
+              <span className="text-muted-foreground">Visible exposure</span>
+              <span className="font-medium tabular-nums text-foreground">{fmtMoney(visibleExposure)}</span>
+            </div>
+            <div className="flex items-center justify-between gap-3">
+              <span className="text-muted-foreground">Status</span>
+              <span className="font-medium capitalize text-foreground">{deal.status}</span>
+            </div>
+          </div>
+        </>
+      ) : (
+        <div className="mt-5 rounded-lg border border-dashed border-border p-4 text-sm text-muted-foreground">
+          Adjust the filters to bring deals back into view.
         </div>
       )}
+    </aside>
+  );
+}
+
+function MiniMetric({ label, value }: { label: string; value: string }) {
+  return (
+    <div>
+      <div className="text-[10px] uppercase tracking-wider text-muted-foreground">{label}</div>
+      <div className="mt-1 text-sm font-semibold tabular-nums tracking-tight">{value}</div>
     </div>
   );
 }
