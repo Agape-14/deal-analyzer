@@ -4,6 +4,7 @@ import { Card } from "@/components/ui/card";
 import { ScoreBreakdown } from "@/components/deal-detail/score-breakdown";
 import { ValidationFlagsPanel } from "@/components/deal-detail/validation-flags";
 import { MetricsSection } from "@/components/deal-detail/metrics-section";
+import { AuditTrail } from "@/components/deal-detail/audit-trail";
 import { QualityPanel } from "@/components/deal-detail/quality-panel";
 import { PipelineTimeline } from "@/components/deal-detail/pipeline-timeline";
 import { SourceCitations } from "@/components/deal-detail/source-citations";
@@ -82,6 +83,7 @@ export function OverviewTab({ deal }: { deal: DealDetail }) {
       </div>
 
       <SourceCitations deal={deal} />
+      <AuditTrail deal={deal} />
 
       <ValidationFlagsPanel flags={deal.metrics?.validation_flags} />
 
