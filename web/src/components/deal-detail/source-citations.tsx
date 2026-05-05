@@ -1,5 +1,6 @@
 "use client";
 
+import type { ReactNode } from "react";
 import { AlertTriangle, Calculator, CheckCircle2, FileText, HelpCircle, Lock, Sparkles } from "lucide-react";
 import { Card } from "@/components/ui/card";
 import { cn, fmtDate, fmtMoney, fmtMultiple, fmtPct } from "@/lib/utils";
@@ -143,7 +144,7 @@ function CitationRow({
   );
 }
 
-function MobileLabel({ children }: { children: React.ReactNode }) {
+function MobileLabel({ children }: { children: ReactNode }) {
   return <div className="mb-1 text-[10px] uppercase tracking-[0.12em] text-muted-foreground md:hidden">{children}</div>;
 }
 
