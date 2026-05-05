@@ -5,6 +5,7 @@ import { StatCard } from "@/components/stat-card";
 import { FadeIn } from "@/components/motion";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
+import { NeedsReviewPanel } from "@/components/needs-review-panel";
 import { PipelineWidgets, type PipelineSummary } from "@/components/pipeline-widgets";
 import { fmtMoney } from "@/lib/utils";
 import Link from "next/link";
@@ -39,7 +40,7 @@ export default async function Home() {
             <h1 className="text-display tracking-tight">Deal Pipeline</h1>
             <p className="text-sm text-muted-foreground mt-1.5 max-w-xl">
               {deals.length
-                ? `${deals.length} deal${deals.length === 1 ? "" : "s"} across your sponsors. Upload offering memos to score them automatically.`
+                ? `${deals.length} deal${deals.length === 1 ? "" : "s"} across your sponsors. Upload offering memos to extract, verify, and score them automatically.`
                 : "Upload your first offering memo to start analyzing deals."}
             </p>
           </div>
@@ -57,6 +58,8 @@ export default async function Home() {
           <StatCard label="Avg Score" value={0} format="score" />
         </div>
       )}
+
+      {!error && deals.length > 0 && <NeedsReviewPanel deals={deals} />}
 
       {/* Deals */}
       {error ? (
