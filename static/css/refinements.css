@@ -1,0 +1,103 @@
+/* Focus, spacing, and mobile refinements layered on top of style.css. */
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.btn:disabled,
+.btn[disabled] {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.deal-card,
+.investment-card,
+.dev-card,
+.stat-card,
+.portfolio-card {
+  will-change: transform;
+}
+
+.deal-card:hover,
+.investment-card:hover,
+.dev-card:hover {
+  transform: translateY(-1px);
+}
+
+.toolbar {
+  align-items: stretch;
+}
+
+.toolbar .form-input {
+  min-height: 34px;
+}
+
+.deal-card-title,
+.inv-card-name,
+.dev-card-name {
+  overflow-wrap: anywhere;
+}
+
+.portfolio-card {
+  min-height: 92px;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+}
+
+.portfolio-card-value,
+.inv-metric-val,
+.deal-metric-value {
+  font-variant-numeric: tabular-nums;
+}
+
+.inv-status-badge,
+.badge {
+  line-height: 1.2;
+}
+
+.chat-bubble {
+  white-space: pre-wrap;
+}
+
+@media (max-width: 768px) {
+  body {
+    overflow: auto;
+  }
+
+  .app-container,
+  .main-content {
+    min-height: 100vh;
+    height: auto;
+  }
+
+  .content-header {
+    position: static;
+    min-height: 48px;
+  }
+
+  .toolbar {
+    display: grid;
+    grid-template-columns: 1fr;
+  }
+
+  .toolbar .search-input,
+  .toolbar select.form-input {
+    width: 100%;
+    max-width: none;
+  }
+
+  .portfolio-cards {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .portfolio-card {
+    min-height: 82px;
+  }
+
+  .tabs {
+    margin-left: -10px;
+    margin-right: -10px;
+    padding-left: 10px;
+  }
+}
