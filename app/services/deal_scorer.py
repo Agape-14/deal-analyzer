@@ -1,4 +1,11 @@
-"""Score a deal based on extracted metrics. Returns category scores and overall weighted score."""
+"""Score a deal based on extracted metrics.
+
+The raw model score is only published as `overall` after confidence gates pass.
+Until then it is retained as `provisional_overall` so users can see direction
+without mistaking unverified extraction output for an investment-ready score.
+"""
+
+from app.services.confidence import assess_data_quality
 
 
 def _safe_get(metrics: dict, *keys, default=None):
@@ -44,19 +51,19 @@ def score_returns(metrics: dict) -> tuple[int, str]:
     notes = []
     if irr:
         label = "Net IRR" if net_irr else "IRR"
-        notes.append(f"{label} {irr}% → {irr_score}/10")
+        notes.append(f"{label} {irr}% -> {irr_score}/10")
     if gross_irr and net_irr:
         fee_drag = gross_irr - net_irr
         notes.append(f"Fee drag: {fee_drag:.1f}%")
     if em:
         label = "Net Equity Multiple" if net_em else "Equity Multiple"
-        notes.append(f"{label} {em}x → {em_score}/10")
+        notes.append(f"{label} {em}x -> {em_score}/10")
     if coc:
-        notes.append(f"Cash-on-Cash {coc}% → {coc_score}/10")
+        notes.append(f"Cash-on-Cash {coc}% -> {coc_score}/10")
     if dist_yield:
         notes.append(f"Distribution yield {dist_yield}%")
     if not notes:
-        notes.append("No return metrics found — scored neutral")
+        notes.append("No return metrics found - scored neutral")
 
     return avg, "; ".join(notes)
 
@@ -75,26 +82,26 @@ def score_market(metrics: dict) -> tuple[int, str]:
         # 1-2% is normal/conservative, 3%+ is strong growth market
         s = _score_range(rent_growth, [(4, 10), (3, 8), (2, 7), (1, 5), (0, 3)])
         scores.append(s)
-        notes.append(f"Rent growth {rent_growth}% → {s}/10")
+        notes.append(f"Rent growth {rent_growth}% -> {s}/10")
 
     if job_growth is not None:
         s = _score_range(job_growth, [(4, 10), (3, 8), (2, 6), (1, 4), (0, 2)])
         scores.append(s)
-        notes.append(f"Job growth {job_growth}% → {s}/10")
+        notes.append(f"Job growth {job_growth}% -> {s}/10")
 
     if vacancy is not None:
         s = _score_range(100 - vacancy, [(97, 10), (95, 8), (93, 6), (90, 4)])
         scores.append(s)
-        notes.append(f"Vacancy {vacancy}% → {s}/10")
+        notes.append(f"Vacancy {vacancy}% -> {s}/10")
 
     if walk is not None:
         s = _score_range(walk, [(90, 10), (70, 8), (50, 6), (30, 4)])
         scores.append(s)
-        notes.append(f"Walk score {walk} → {s}/10")
+        notes.append(f"Walk score {walk} -> {s}/10")
 
     avg = round(sum(scores) / len(scores)) if scores else 5
     if not notes:
-        notes.append("Limited market data — scored neutral")
+        notes.append("Limited market data - scored neutral")
     return avg, "; ".join(notes)
 
 
@@ -113,7 +120,7 @@ def score_structure(metrics: dict) -> tuple[int, str]:
     if pref is not None:
         s = _score_range(pref, [(10, 10), (8, 8), (7, 6), (6, 4), (0, 2)])
         scores.append(s)
-        notes.append(f"Pref return {pref}% → {s}/10")
+        notes.append(f"Pref return {pref}% -> {s}/10")
 
     if asset_mgmt is not None:
         if asset_mgmt <= 1.0:
@@ -125,7 +132,7 @@ def score_structure(metrics: dict) -> tuple[int, str]:
         else:
             s = 3
         scores.append(s)
-        notes.append(f"Asset mgmt fee {asset_mgmt}% → {s}/10")
+        notes.append(f"Asset mgmt fee {asset_mgmt}% -> {s}/10")
 
     if acq_fee is not None:
         if acq_fee <= 1.0:
@@ -137,7 +144,7 @@ def score_structure(metrics: dict) -> tuple[int, str]:
         else:
             s = 3
         scores.append(s)
-        notes.append(f"Acquisition fee {acq_fee}% → {s}/10")
+        notes.append(f"Acquisition fee {acq_fee}% -> {s}/10")
 
     # GP co-invest scoring (prefer gp_equity_coinvest_pct)
     gp_val = gp_coinvest_pct
@@ -153,7 +160,7 @@ def score_structure(metrics: dict) -> tuple[int, str]:
 
     if gp_val is not None:
         if gp_is_rollover is True:
-            # Rolled equity — score based on actual GP cash at risk if known
+            # Rolled equity - score based on actual GP cash at risk if known
             if gp_cash and total_equity and total_equity > 0:
                 real_pct = gp_cash / total_equity * 100
                 if real_pct >= 5:
@@ -162,14 +169,14 @@ def score_structure(metrics: dict) -> tuple[int, str]:
                     s = 5
                 else:
                     s = 3
-                notes.append(f"GP co-invest {gp_val}% (rolled equity) but ${gp_cash:,.0f} actual cash ({real_pct:.1f}%) → {s}/10")
+                notes.append(f"GP co-invest {gp_val}% (rolled equity) but ${gp_cash:,.0f} actual cash ({real_pct:.1f}%) -> {s}/10")
             else:
                 s = 4
-                notes.append(f"GP co-invest {gp_val}% (rolled equity, not new GP cash) → {s}/10")
+                notes.append(f"GP co-invest {gp_val}% (rolled equity, not new GP cash) -> {s}/10")
         elif gp_val > 20 and gp_is_rollover is None:
-            # Suspiciously high, unconfirmed — moderate score
+            # Suspiciously high, unconfirmed - moderate score
             s = 6
-            notes.append(f"GP co-invest {gp_val}% (unconfirmed source — may be rolled equity) → {s}/10")
+            notes.append(f"GP co-invest {gp_val}% (unconfirmed source - may be rolled equity) -> {s}/10")
         elif gp_val >= 10:
             s = 10
         elif gp_val >= 5:
@@ -179,7 +186,7 @@ def score_structure(metrics: dict) -> tuple[int, str]:
         else:
             s = 4
         if gp_is_rollover is not True and not (gp_val > 20 and gp_is_rollover is None):
-            notes.append(f"GP co-invest {gp_val}% → {s}/10")
+            notes.append(f"GP co-invest {gp_val}% -> {s}/10")
         scores.append(s)
 
     if total_fee_drag is not None:
@@ -192,11 +199,11 @@ def score_structure(metrics: dict) -> tuple[int, str]:
         else:
             s = 3
         scores.append(s)
-        notes.append(f"Total fee drag {total_fee_drag}% → {s}/10")
+        notes.append(f"Total fee drag {total_fee_drag}% -> {s}/10")
 
     avg = round(sum(scores) / len(scores)) if scores else 5
     if not notes:
-        notes.append("Limited structure data — scored neutral")
+        notes.append("Limited structure data - scored neutral")
     return avg, "; ".join(notes)
 
 
@@ -225,7 +232,7 @@ def score_risk(metrics: dict) -> tuple[int, str]:
         else:
             s = 2
         scores.append(s)
-        notes.append(f"LTV {ltv}% → {s}/10")
+        notes.append(f"LTV {ltv}% -> {s}/10")
 
     if entitlement:
         ent_str = str(entitlement).lower()
@@ -236,18 +243,18 @@ def score_risk(metrics: dict) -> tuple[int, str]:
         else:
             s = 3
         scores.append(s)
-        notes.append(f"Entitlements: {entitlement} → {s}/10")
+        notes.append(f"Entitlements: {entitlement} -> {s}/10")
 
     if ai_risk is not None:
         try:
             scores.append(int(ai_risk))
-            notes.append(f"AI risk assessment → {ai_risk}/10")
+            notes.append(f"AI risk assessment -> {ai_risk}/10")
         except (ValueError, TypeError):
             pass
 
     avg = round(sum(scores) / len(scores)) if scores else 5
     if not notes:
-        notes.append("Limited risk data — scored neutral")
+        notes.append("Limited risk data - scored neutral")
     return avg, "; ".join(notes)
 
 
@@ -274,7 +281,7 @@ def score_financials(metrics: dict) -> tuple[int, str]:
         else:
             s = 3
         scores.append(s)
-        notes.append(f"Cap rate spread {spread:+.1f}% → {s}/10")
+        notes.append(f"Cap rate spread {spread:+.1f}% -> {s}/10")
 
     if occupancy is not None:
         if occupancy <= 92:
@@ -286,7 +293,7 @@ def score_financials(metrics: dict) -> tuple[int, str]:
         else:
             s = 3  # Aggressive
         scores.append(s)
-        notes.append(f"Occupancy assumption {occupancy}% → {s}/10")
+        notes.append(f"Occupancy assumption {occupancy}% -> {s}/10")
 
     if rent_growth is not None:
         if rent_growth <= 2:
@@ -298,28 +305,28 @@ def score_financials(metrics: dict) -> tuple[int, str]:
         else:
             s = 3
         scores.append(s)
-        notes.append(f"Rent growth assumption {rent_growth}% → {s}/10")
+        notes.append(f"Rent growth assumption {rent_growth}% -> {s}/10")
 
     if expense_ratio is not None:
         # Lower expense ratio = better operations. New construction
         # typically runs 25-35%, stabilized multifamily 35-50%.
         # Only flag as suspicious if below 15% (likely missing costs).
         if expense_ratio < 15:
-            s = 4  # Unrealistically low — probably missing expenses
+            s = 4  # Unrealistically low - probably missing expenses
         elif expense_ratio <= 30:
-            s = 9  # Excellent — new construction or very efficient ops
+            s = 9  # Excellent - new construction or very efficient ops
         elif expense_ratio <= 40:
-            s = 8  # Good — well-managed
+            s = 8  # Good - well-managed
         elif expense_ratio <= 50:
             s = 6  # Average
         else:
-            s = 4  # High — operational concerns
+            s = 4  # High - operational concerns
         scores.append(s)
-        notes.append(f"Expense ratio {expense_ratio}% → {s}/10")
+        notes.append(f"Expense ratio {expense_ratio}% -> {s}/10")
 
     avg = round(sum(scores) / len(scores)) if scores else 5
     if not notes:
-        notes.append("Limited financial data — scored neutral")
+        notes.append("Limited financial data - scored neutral")
     return avg, "; ".join(notes)
 
 
@@ -345,7 +352,7 @@ def score_underwriting(metrics: dict) -> tuple[int, str]:
         else:
             s = 2
         scores.append(s)
-        notes.append(f"Break-even occupancy {beo}% → {s}/10")
+        notes.append(f"Break-even occupancy {beo}% -> {s}/10")
 
     if dscr is not None:
         if dscr >= 1.5:
@@ -359,7 +366,7 @@ def score_underwriting(metrics: dict) -> tuple[int, str]:
         else:
             s = 2
         scores.append(s)
-        notes.append(f"DSCR {dscr}x → {s}/10")
+        notes.append(f"DSCR {dscr}x -> {s}/10")
 
     if yoc is not None and entry_cap is not None:
         spread = yoc - entry_cap
@@ -374,11 +381,11 @@ def score_underwriting(metrics: dict) -> tuple[int, str]:
         else:
             s = 2
         scores.append(s)
-        notes.append(f"Yield on cost {yoc}% vs entry cap {entry_cap}% → {s}/10")
+        notes.append(f"Yield on cost {yoc}% vs entry cap {entry_cap}% -> {s}/10")
 
     avg = round(sum(scores) / len(scores)) if scores else 5
     if not notes:
-        notes.append("Limited underwriting data — scored neutral")
+        notes.append("Limited underwriting data - scored neutral")
     return avg, "; ".join(notes)
 
 
@@ -405,7 +412,7 @@ def score_sponsor(metrics: dict) -> tuple[int, str]:
             else:
                 s = 2
             scores.append(s)
-            notes.append(f"Full-cycle deals: {fc} → {s}/10")
+            notes.append(f"Full-cycle deals: {fc} -> {s}/10")
         except (ValueError, TypeError):
             pass
 
@@ -422,7 +429,7 @@ def score_sponsor(metrics: dict) -> tuple[int, str]:
     if gp_coinvest is not None:
         if gp_is_rollover is True:
             s = 3
-            notes.append(f"GP co-invest {gp_coinvest}% (rolled equity, not new GP cash) → {s}/10")
+            notes.append(f"GP co-invest {gp_coinvest}% (rolled equity, not new GP cash) -> {s}/10")
         elif gp_coinvest >= 10:
             s = 10
         elif gp_coinvest >= 5:
@@ -432,16 +439,21 @@ def score_sponsor(metrics: dict) -> tuple[int, str]:
         else:
             s = 3
         if gp_is_rollover is not True:
-            notes.append(f"GP co-invest {gp_coinvest}% → {s}/10")
+            notes.append(f"GP co-invest {gp_coinvest}% -> {s}/10")
         scores.append(s)
 
     avg = round(sum(scores) / len(scores)) if scores else 5
     if not notes:
-        notes.append("Limited sponsor data — scored neutral")
+        notes.append("Limited sponsor data - scored neutral")
     return avg, "; ".join(notes)
 
 
-def score_deal(metrics: dict) -> dict:
+def score_deal(
+    metrics: dict,
+    *,
+    math_checks: list[dict] | None = None,
+    require_verified: bool = True,
+) -> dict:
     """Score a deal across all categories. Returns scores dict."""
     returns_score, returns_notes = score_returns(metrics)
     market_score, market_notes = score_market(metrics)
@@ -451,8 +463,9 @@ def score_deal(metrics: dict) -> dict:
     underwriting_score, underwriting_notes = score_underwriting(metrics)
     sponsor_score, sponsor_notes = score_sponsor(metrics)
 
-    # Weighted average (weights sum to 100)
-    overall = round(
+    # Weighted average (weights sum to 100). This is the analytical score,
+    # but it remains provisional until data-quality gates pass.
+    provisional_overall = round(
         returns_score * 0.20
         + market_score * 0.15
         + structure_score * 0.15
@@ -463,8 +476,17 @@ def score_deal(metrics: dict) -> dict:
         1
     )
 
+    data_quality = assess_data_quality(
+        metrics,
+        math_checks=math_checks,
+        require_verified=require_verified,
+    )
+    overall = provisional_overall if data_quality.get("can_score") else None
+
     return {
         "overall": overall,
+        "provisional_overall": provisional_overall,
+        "data_quality": data_quality,
         "returns": {"score": returns_score, "weight": 20, "notes": returns_notes},
         "market": {"score": market_score, "weight": 15, "notes": market_notes},
         "structure": {"score": structure_score, "weight": 15, "notes": structure_notes},
