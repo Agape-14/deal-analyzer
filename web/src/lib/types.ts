@@ -16,6 +16,8 @@ export interface DealSummary {
   minimum_investment: number | null;
   notes: string;
   created_at: string;
+  quality?: DataQualityGate;
+  scores?: Partial<DealScores>;
 }
 
 export interface Developer {
@@ -167,6 +169,30 @@ export interface DealQualitySummary {
   last_extracted_at: string | null;
   last_verified_at?: string | null;
   confidence?: number | null;
+  data_quality?: DataQualityGate;
+}
+
+export interface DataQualityGate {
+  stage: string;
+  can_score: boolean;
+  confidence_score: number;
+  verified_at?: string | null;
+  critical_summary?: {
+    total: number;
+    missing: number;
+    unverified: number;
+    conflicted: number;
+    bad: number;
+    verified: number;
+  };
+  math_summary?: {
+    pass: number;
+    fail: number;
+    warn: number;
+    info: number;
+    total: number;
+    blocking?: Array<{ check?: string; difference?: string; formula?: string }>;
+  };
 }
 
 export interface ValidationFlag {
@@ -182,7 +208,9 @@ export interface ScoreCategory {
 }
 
 export interface DealScores {
-  overall: number;
+  overall: number | null;
+  provisional_overall?: number;
+  data_quality?: DataQualityGate;
   returns: ScoreCategory;
   market: ScoreCategory;
   structure: ScoreCategory;
@@ -192,7 +220,7 @@ export interface DealScores {
   sponsor: ScoreCategory;
 }
 
-/** The full metrics blob. All fields optional — the backend fills them
+/** The full metrics blob. All fields optional â€” the backend fills them
  * progressively via AI extraction. Kept as nullable to match reality. */
 export interface DealMetrics {
   deal_structure?: Record<string, unknown>;
@@ -219,9 +247,15 @@ export interface DealDetail extends DealSummary {
       totals?: Record<string, number>;
     };
     _extraction_history?: Array<{ at: string; changes: string[]; doc_count: number; conflicts: string[] }>;
+    _data_quality?: DataQualityGate;
+    _math_checks?: {
+      checked_at?: string;
+      summary?: DataQualityGate["math_summary"];
+      results?: Array<Record<string, unknown>>;
+    };
   };
   scores: Partial<DealScores>;
-  quality?: DealQualitySummary;
+  quality?: DealQualitySummary | DataQualityGate;
   lat?: number | null;
   lng?: number | null;
 }
