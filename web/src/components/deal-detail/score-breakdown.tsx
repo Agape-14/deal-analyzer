@@ -2,6 +2,7 @@
 
 import { motion } from "framer-motion";
 import { Card } from "@/components/ui/card";
+import { ScoreQualityBadge } from "@/components/deal-detail/score-quality-badge";
 import { cn } from "@/lib/utils";
 import type { DealScores, ScoreCategory } from "@/lib/types";
 
@@ -32,20 +33,27 @@ export function ScoreBreakdown({ scores }: { scores: Partial<DealScores> }) {
     );
   }
 
+  const visibleOverall = typeof scores.overall === "number" ? scores.overall : scores.provisional_overall;
+
   return (
     <Card elevated className="p-6">
-      <div className="flex items-center justify-between mb-5">
+      <div className="flex items-start justify-between gap-4 mb-5">
         <div>
           <h3 className="text-base font-semibold tracking-tight">Score breakdown</h3>
           <p className="text-xs text-muted-foreground mt-0.5">
             Weighted composite of 7 analyst categories.
           </p>
+          <div className="mt-2">
+            <ScoreQualityBadge gate={scores.data_quality} />
+          </div>
         </div>
-        {typeof scores.overall === "number" && (
+        {typeof visibleOverall === "number" && (
           <div className="text-right">
-            <div className="text-[10px] uppercase tracking-[0.12em] text-muted-foreground">Overall</div>
+            <div className="text-[10px] uppercase tracking-[0.12em] text-muted-foreground">
+              {typeof scores.overall === "number" ? "Overall" : "Provisional"}
+            </div>
             <div className="text-2xl font-semibold tabular-nums leading-none mt-1">
-              {scores.overall.toFixed(1)}
+              {visibleOverall.toFixed(1)}
             </div>
           </div>
         )}
