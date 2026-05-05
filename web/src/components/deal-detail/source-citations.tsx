@@ -3,6 +3,7 @@
 import type { ReactNode } from "react";
 import { AlertTriangle, Calculator, CheckCircle2, FileText, HelpCircle, Lock, Sparkles } from "lucide-react";
 import { Card } from "@/components/ui/card";
+import { FieldReviewAction } from "@/components/deal-detail/field-review-action";
 import { cn, fmtDate, fmtMoney, fmtMultiple, fmtPct } from "@/lib/utils";
 import type { DealDetail, FieldProvenance } from "@/lib/types";
 
@@ -60,7 +61,7 @@ export function SourceCitations({ deal }: { deal: DealDetail }) {
         </div>
         <div className="divide-y divide-border/60">
           {rows.map(({ field, value, prov }) => (
-            <CitationRow key={field.path} field={field} value={value} provenance={prov} />
+            <CitationRow key={field.path} field={field} value={value} provenance={prov} dealId={deal.id} />
           ))}
         </div>
       </div>
@@ -72,10 +73,12 @@ function CitationRow({
   field,
   value,
   provenance,
+  dealId,
 }: {
   field: CitationField;
   value: unknown;
   provenance?: FieldProvenance;
+  dealId: number;
 }) {
   const status = provenance?.status ?? (value == null ? "missing" : "extracted");
   const statusUi = statusStyle(status, Boolean(provenance?.conflict?.length));
@@ -122,14 +125,17 @@ function CitationRow({
 
       <div>
         <MobileLabel>Status</MobileLabel>
-        <div
-          className={cn(
-            "inline-flex items-center gap-1.5 rounded-full px-2 py-1 text-[11px] font-medium ring-1",
-            statusUi.className,
-          )}
-        >
-          <statusUi.Icon className="h-3 w-3" />
-          {statusUi.label}
+        <div className="flex flex-wrap items-center gap-1.5">
+          <div
+            className={cn(
+              "inline-flex items-center gap-1.5 rounded-full px-2 py-1 text-[11px] font-medium ring-1",
+              statusUi.className,
+            )}
+          >
+            <statusUi.Icon className="h-3 w-3" />
+            {statusUi.label}
+          </div>
+          <FieldReviewAction dealId={dealId} path={field.path} value={value} provenance={provenance} />
         </div>
         <div className="mt-1.5 space-y-0.5 text-[11px] text-muted-foreground">
           {provenance?.verified_at && <div>Verified {fmtDate(provenance.verified_at)}</div>}
