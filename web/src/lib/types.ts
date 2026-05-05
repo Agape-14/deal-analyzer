@@ -16,7 +16,7 @@ export interface DealSummary {
   minimum_investment: number | null;
   notes: string;
   created_at: string;
-  quality?: DataQualityGate;
+  quality?: DealQualitySummary | DataQualityGate;
   scores?: Partial<DealScores>;
 }
 
@@ -220,7 +220,7 @@ export interface DealScores {
   sponsor: ScoreCategory;
 }
 
-/** The full metrics blob. All fields optional â€” the backend fills them
+/** The full metrics blob. All fields optional — the backend fills them
  * progressively via AI extraction. Kept as nullable to match reality. */
 export interface DealMetrics {
   deal_structure?: Record<string, unknown>;
@@ -255,7 +255,6 @@ export interface DealDetail extends DealSummary {
     };
   };
   scores: Partial<DealScores>;
-  quality?: DealQualitySummary | DataQualityGate;
   lat?: number | null;
   lng?: number | null;
 }
