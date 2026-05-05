@@ -14,6 +14,11 @@ else:
     os.makedirs(DB_DIR, exist_ok=True)
     DATABASE_URL = f"sqlite+aiosqlite:///{os.path.join(DB_DIR, 'deal_analyzer.db')}"
 
+if DATABASE_URL.startswith("postgres://"):
+    DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql+asyncpg://", 1)
+elif DATABASE_URL.startswith("postgresql://") and "+asyncpg" not in DATABASE_URL:
+    DATABASE_URL = DATABASE_URL.replace("postgresql://", "postgresql+asyncpg://", 1)
+
 engine = create_async_engine(DATABASE_URL, echo=False)
 async_session = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
 
@@ -34,7 +39,7 @@ async def init_db():
     """Create tables and apply schema patches.
 
     When an `alembic_version` table exists the database is under real
-    migration control — we leave it alone and `alembic upgrade head` is
+    migration control -- we leave it alone and `alembic upgrade head` is
     expected to have already run (or will be run out-of-band). The
     legacy `create_all` + ALTER-if-missing path remains as a fallback
     for developers running against a blank SQLite file without invoking
@@ -76,7 +81,7 @@ def _apply_schema_patches(sync_conn) -> None:
             null_sql = "" if col.nullable else " NOT NULL"
             default = ""
             if col.default is not None:
-                # Only support scalar SQL defaults here — JSON/dict defaults
+                # Only support scalar SQL defaults here -- JSON/dict defaults
                 # are populated by the model layer on insert, which is fine.
                 try:
                     arg = col.default.arg
