@@ -33,6 +33,64 @@ ASSET_CLASS_PROFILES: dict[str, dict] = {
     "other":        {**DEFAULT_PROFILE},
 }
 
+BENCHMARK_RANGES: dict[str, dict[str, tuple[float, float, str]]] = {
+    "multifamily": {
+        "total_project_cost_per_unit": (150_000, 750_000, "$/unit"),
+        "hard_costs_per_unit": (100_000, 550_000, "$/unit"),
+        "land_cost_per_unit": (10_000, 180_000, "$/unit"),
+        "avg_rent_per_unit": (800, 6_000, "$/mo"),
+        "entry_cap_rate": (3.0, 8.5, "%"),
+        "exit_cap_rate": (3.25, 9.5, "%"),
+        "interest_rate": (4.0, 12.0, "%"),
+    },
+    "development": {
+        "total_project_cost_per_unit": (200_000, 950_000, "$/unit"),
+        "hard_costs_per_unit": (125_000, 700_000, "$/unit"),
+        "land_cost_per_unit": (15_000, 250_000, "$/unit"),
+        "avg_rent_per_unit": (900, 7_500, "$/mo"),
+        "entry_cap_rate": (3.0, 8.5, "%"),
+        "exit_cap_rate": (3.25, 9.5, "%"),
+        "interest_rate": (4.0, 12.0, "%"),
+    },
+    "office": {
+        "entry_cap_rate": (4.5, 11.0, "%"),
+        "exit_cap_rate": (5.0, 12.0, "%"),
+        "interest_rate": (4.0, 12.0, "%"),
+    },
+    "retail": {
+        "entry_cap_rate": (4.5, 10.5, "%"),
+        "exit_cap_rate": (5.0, 11.5, "%"),
+        "interest_rate": (4.0, 12.0, "%"),
+    },
+    "industrial": {
+        "entry_cap_rate": (3.5, 8.5, "%"),
+        "exit_cap_rate": (4.0, 9.5, "%"),
+        "interest_rate": (4.0, 12.0, "%"),
+    },
+    "hospitality": {
+        "entry_cap_rate": (6.0, 13.0, "%"),
+        "exit_cap_rate": (6.5, 14.0, "%"),
+        "interest_rate": (4.0, 12.5, "%"),
+    },
+    "land": {
+        "interest_rate": (4.0, 14.0, "%"),
+    },
+    "mixed-use": {
+        "total_project_cost_per_unit": (175_000, 900_000, "$/unit"),
+        "hard_costs_per_unit": (115_000, 650_000, "$/unit"),
+        "land_cost_per_unit": (15_000, 230_000, "$/unit"),
+        "avg_rent_per_unit": (850, 7_000, "$/mo"),
+        "entry_cap_rate": (3.5, 9.5, "%"),
+        "exit_cap_rate": (4.0, 10.5, "%"),
+        "interest_rate": (4.0, 12.0, "%"),
+    },
+    "other": {
+        "entry_cap_rate": (3.0, 12.0, "%"),
+        "exit_cap_rate": (3.0, 13.0, "%"),
+        "interest_rate": (4.0, 13.0, "%"),
+    },
+}
+
 
 def _profile_for(property_type: str | None) -> dict:
     key = (property_type or "").strip().lower()
@@ -47,7 +105,7 @@ def validate_deal_metrics(metrics: dict, property_type: str | None = None) -> li
     ``property_type`` adjusts the thresholds that vary by asset class
     (IRR aggressive cutoff, expense ratio floor, occupancy cap, DSCR band,
     LTV band, BEO band). When not provided, defaults to stabilized
-    multifamily — which matches the original hardcoded behavior.
+    multifamily - which matches the original hardcoded behavior.
     """
     flags = []
     profile = _profile_for(property_type)
@@ -147,12 +205,12 @@ def validate_deal_metrics(metrics: dict, property_type: str | None = None) -> li
     if gp_is_rollover is True:
         cash_note = f' GP cash at risk: ${gp_cash:,.0f}.' if gp_cash else ' GP actual cash at risk: unknown.'
         flags.append({'severity': 'yellow', 'category': 'Alignment',
-                      'message': f'GP co-invest of {gp_coinvest or "?"}% appears to be rolled-over equity / land basis / deferred fees — not new cash from the sponsor.{cash_note} '
+                      'message': f'GP co-invest of {gp_coinvest or "?"}% appears to be rolled-over equity / land basis / deferred fees - not new cash from the sponsor.{cash_note} '
                                  'True alignment requires the sponsor\'s own capital at risk.'})
     elif gp_coinvest is not None and gp_coinvest > 20 and gp_is_rollover is None:
         # Suspiciously high GP co-invest without rollover analysis
         flags.append({'severity': 'yellow', 'category': 'Alignment',
-                      'message': f'GP co-invest of {gp_coinvest}% is unusually high. Verify this is actual GP cash — '
+                      'message': f'GP co-invest of {gp_coinvest}% is unusually high. Verify this is actual GP cash - '
                                  'not rolled equity from a prior phase, land contribution, or deferred fees.'})
     elif gp_coinvest is not None and gp_coinvest < 5:
         flags.append({'severity': 'red', 'category': 'Alignment',
@@ -199,7 +257,7 @@ def validate_deal_metrics(metrics: dict, property_type: str | None = None) -> li
                       'message': f'DSCR of {dscr}x is too thin. Minimum should be 1.25x.'})
     elif dscr and dscr < profile["dscr_green"] - 0.1:
         flags.append({'severity': 'yellow', 'category': 'Underwriting',
-                      'message': f'DSCR of {dscr}x is adequate but not comfortable. Prefer ≥{profile["dscr_green"]}x for this asset class.'})
+                      'message': f'DSCR of {dscr}x is adequate but not comfortable. Prefer >={profile["dscr_green"]}x for this asset class.'})
     elif dscr and dscr >= profile["dscr_green"]:
         flags.append({'severity': 'green', 'category': 'Underwriting',
                       'message': f'DSCR of {dscr}x is strong. Good debt service coverage.'})
@@ -221,7 +279,7 @@ def validate_deal_metrics(metrics: dict, property_type: str | None = None) -> li
         spread = exit_cap - entry_cap
         if spread < 0:
             flags.append({'severity': 'red', 'category': 'Underwriting',
-                          'message': f'Exit cap ({exit_cap}%) is BELOW entry cap ({entry_cap}%). Sponsor assumes cap rate compression — very risky.'})
+                          'message': f'Exit cap ({exit_cap}%) is BELOW entry cap ({entry_cap}%). Sponsor assumes cap rate compression - very risky.'})
         elif spread < 0.25:
             flags.append({'severity': 'yellow', 'category': 'Underwriting',
                           'message': f'Exit cap ({exit_cap}%) is only {spread * 100:.0f}bps above entry ({entry_cap}%). Conservative sponsors add 50-100bps.'})
@@ -293,10 +351,12 @@ def validate_deal_metrics(metrics: dict, property_type: str | None = None) -> li
     total_fee = _num(tr.get('total_fee_drag'))
     if total_fee and total_fee > 15:
         flags.append({'severity': 'red', 'category': 'Fees',
-                      'message': f'Total fee drag is {total_fee}% of equity. That is very high — industry standard is 5-10%.'})
+                      'message': f'Total fee drag is {total_fee}% of equity. That is very high - industry standard is 5-10%.'})
     elif total_fee and total_fee > 10:
         flags.append({'severity': 'yellow', 'category': 'Fees',
                       'message': f'Total fee drag is {total_fee}% of equity. Above average but may be acceptable for complex deals.'})
+
+    _add_benchmark_flags(flags, metrics, property_type)
 
     return flags
 
@@ -309,3 +369,111 @@ def _num(val):
         return float(val)
     except (TypeError, ValueError):
         return None
+
+
+def _add_benchmark_flags(flags: list[dict], metrics: dict, property_type: str | None) -> None:
+    """Add market sanity checks for extracted values that are often misread."""
+    asset_key = (property_type or "").strip().lower()
+    ranges = {**BENCHMARK_RANGES["other"], **BENCHMARK_RANGES.get(asset_key, BENCHMARK_RANGES["multifamily"])}
+
+    sections = {
+        "deal_structure": metrics.get("deal_structure", {}) or {},
+        "construction_costs": metrics.get("construction_costs", {}) or {},
+        "financial_projections": metrics.get("financial_projections", {}) or {},
+        "underwriting_checks": metrics.get("underwriting_checks", {}) or {},
+    }
+
+    checks = [
+        ("construction_costs", "total_project_cost_per_unit", "Total project cost per unit"),
+        ("construction_costs", "hard_costs_per_unit", "Hard cost per unit"),
+        ("construction_costs", "land_cost_per_unit", "Land cost per unit"),
+        ("financial_projections", "avg_rent_per_unit", "Average rent per unit"),
+        ("financial_projections", "entry_cap_rate", "Entry cap rate"),
+        ("financial_projections", "exit_cap_rate", "Exit cap rate"),
+        ("deal_structure", "interest_rate", "Interest rate"),
+    ]
+
+    for section, key, label in checks:
+        value = _num(sections.get(section, {}).get(key))
+        bounds = ranges.get(key)
+        if value is None or bounds is None:
+            continue
+        low, high, unit = bounds
+        if value < low or value > high:
+            flags.append({
+                "severity": _benchmark_severity(value, low, high),
+                "category": "Benchmark",
+                "message": (
+                    f"{label} of {_fmt_benchmark(value, unit)} is outside the expected "
+                    f"{asset_key or 'deal'} benchmark range ({_fmt_benchmark(low, unit)}-"
+                    f"{_fmt_benchmark(high, unit)}). Verify the source page and units."
+                ),
+            })
+
+    # Cross-field benchmarks catch values that are individually plausible but
+    # suspicious together.
+    cc = sections["construction_costs"]
+    fp = sections["financial_projections"]
+    uc = sections["underwriting_checks"]
+    ds = sections["deal_structure"]
+
+    total_cost = _num(cc.get("total_project_cost_per_unit"))
+    hard_cost = _num(cc.get("hard_costs_per_unit"))
+    land_cost = _num(cc.get("land_cost_per_unit"))
+    if total_cost and hard_cost and hard_cost > total_cost:
+        flags.append({
+            "severity": "red",
+            "category": "Benchmark",
+            "message": (
+                f"Hard cost per unit (${hard_cost:,.0f}) exceeds total project cost per unit "
+                f"(${total_cost:,.0f}). This is likely a unit or extraction error."
+            ),
+        })
+    if total_cost and land_cost and land_cost > total_cost * 0.6:
+        flags.append({
+            "severity": "yellow",
+            "category": "Benchmark",
+            "message": (
+                f"Land cost per unit (${land_cost:,.0f}) is more than 60% of total project "
+                f"cost per unit (${total_cost:,.0f}). Confirm land basis and total cost units."
+            ),
+        })
+
+    entry_cap = _num(fp.get("entry_cap_rate"))
+    yoc = _num(uc.get("yield_on_cost"))
+    if entry_cap and yoc and yoc - entry_cap > 4:
+        flags.append({
+            "severity": "yellow",
+            "category": "Benchmark",
+            "message": (
+                f"Yield on cost ({yoc}%) is {yoc - entry_cap:.1f}% above entry cap "
+                f"({entry_cap}%). That may be possible, but should be traced to NOI and cost assumptions."
+            ),
+        })
+
+    ltv = _num(ds.get("ltv"))
+    dscr = _num(uc.get("dscr"))
+    if ltv and dscr and ltv >= 70 and dscr < 1.35:
+        flags.append({
+            "severity": "red",
+            "category": "Benchmark",
+            "message": (
+                f"LTV ({ltv}%) and DSCR ({dscr}x) are both tight. Recheck loan amount, NOI, "
+                "interest rate, and amortization before relying on the score."
+            ),
+        })
+
+
+def _benchmark_severity(value: float, low: float, high: float) -> str:
+    span = max(high - low, 1)
+    if value < low - span * 0.35 or value > high + span * 0.35:
+        return "red"
+    return "yellow"
+
+
+def _fmt_benchmark(value: float, unit: str) -> str:
+    if unit.startswith("$"):
+        return f"${value:,.0f}{unit[1:]}"
+    if unit == "%":
+        return f"{value:.1f}%"
+    return f"{value:g}{unit}"
