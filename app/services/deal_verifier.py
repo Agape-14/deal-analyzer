@@ -1,7 +1,7 @@
 """
-Deal Verification Engine — Second-pass AI audit of extracted metrics.
+Deal Verification Engine â€” Second-pass AI audit of extracted metrics.
 
-Pattern: Extract → Verify → Flag discrepancies
+Pattern: Extract â†’ Verify â†’ Flag discrepancies
 - Sends the extracted metrics + original document back to AI
 - AI checks EVERY value against the source
 - Flags: CONFIRMED, WRONG, UNVERIFIABLE, CALCULATED (with recalc check)
@@ -28,11 +28,11 @@ You will receive:
 Your task: Go through EVERY non-null extracted value and verify it against the source material. Use BOTH the page images AND the extracted text. If a value appears in the extracted text, that counts as confirmation even if the specific page image is not shown.
 
 For EACH field, determine:
-- "confirmed" — The value matches what's in the source (from images OR text). Use this liberally: if the extracted text contains the same number, it's confirmed.
-- "wrong" — The extracted value does NOT match what's in the document. Provide the CORRECT value.
-- "unverifiable" — You cannot find this data point in ANY of the provided material (images AND text). Only use this as a last resort — search the extracted text thoroughly before marking unverifiable.
-- "calculated" — This is a derived/calculated value (e.g. price_per_unit = cost / units). Verify the math is correct and mark as "calculated" if math checks out.
-- "missing" — The value is null but you CAN see this data in the documents. Provide the correct value.
+- "confirmed" â€” The value matches what's in the source (from images OR text). Use this liberally: if the extracted text contains the same number, it's confirmed.
+- "wrong" â€” The extracted value does NOT match what's in the document. Provide the CORRECT value.
+- "unverifiable" â€” You cannot find this data point in ANY of the provided material (images AND text). Only use this as a last resort â€” search the extracted text thoroughly before marking unverifiable.
+- "calculated" â€” This is a derived/calculated value (e.g. price_per_unit = cost / units). Verify the math is correct and mark as "calculated" if math checks out.
+- "missing" â€” The value is null but you CAN see this data in the documents. Provide the correct value.
 
 Return a JSON object with this structure:
 {
@@ -89,15 +89,18 @@ Return a JSON object with this structure:
 
 IMPORTANT RULES:
 1. Return ONLY valid JSON
-2. Check EVERY non-null field — do not skip any
+2. Check EVERY non-null field â€” do not skip any
 3. For calculated fields, show your math step by step
 4. If you find data in the images or text that was NOT extracted, include it in missing_data
 5. Be especially careful with: unit counts (market rate vs total), dollar amounts, percentages, fee structures
 6. Double-check all division calculations (price/unit, price/sqft, etc.)
 7. Flag ANY inconsistency, even small ones
 8. confidence_score: 0-100 based on how much you could verify
-9. PREFER "confirmed" over "unverifiable" — if the extracted text contains a matching value, confirm it. Only mark "unverifiable" when neither images NOR text contain the data point.
-10. For risk scores (1-10 ratings) that the AI assigned during extraction, mark as "calculated" not "unverifiable" — these are AI assessments, not document data points.
+9. PREFER "confirmed" over "unverifiable" â€” if the extracted text contains a matching value, confirm it. Only mark "unverifiable" when neither images NOR text contain the data point.
+10. For risk scores (1-10 ratings) that the AI assigned during extraction, mark as "calculated" not "unverifiable" â€” these are AI assessments, not document data points.
+
+11. For every confirmed, wrong, calculated, or missing value, include the best available citation in `source`: page number when visible, document name when known, and a short quote or formula. Do not use vague sources like "document states" without the quote or math.
+12. A value from extracted text is source-backed only when you can quote the nearby text. If you cannot quote or calculate support for a value, mark it unverifiable or lower the confidence score.
 
 HERE ARE THE EXTRACTED METRICS TO VERIFY:
 """
@@ -133,7 +136,7 @@ def _parse_json_defensively(text: str) -> dict:
             return json.loads(candidate)
         except json.JSONDecodeError:
             # Last-resort: drop trailing commas before a closing
-            # bracket/brace — Claude occasionally emits them.
+            # bracket/brace â€” Claude occasionally emits them.
             import re
             scrubbed = re.sub(r",(\s*[}\]])", r"\1", candidate)
             try:
@@ -151,11 +154,11 @@ def _parse_json_defensively(text: str) -> dict:
     )
 
 
-# Groups of metric sections audited together — kept small so each
+# Groups of metric sections audited together â€” kept small so each
 # verify call stays well under Anthropic's input-tokens-per-minute
 # ceiling AND under the output-tokens cap we set per call. Early
 # attempts paired deal_structure + target_returns but that combo
-# hit ~45 fields × ~400 output-tokens = 18K which tripped the
+# hit ~45 fields Ã— ~400 output-tokens = 18K which tripped the
 # per-call max_tokens ceiling. One section per group is the
 # conservative default; we only pair small sections.
 VERIFY_SECTION_GROUPS: list[list[str]] = [
@@ -167,7 +170,7 @@ VERIFY_SECTION_GROUPS: list[list[str]] = [
     ["sponsor_evaluation", "risk_assessment"],
 ]
 # Max PDF pages per verify call. Each page at 150 DPI JPEG is ~50-100KB
-# base64. 15 pages × 100KB = 1.5MB of image data per chunk, well under
+# base64. 15 pages Ã— 100KB = 1.5MB of image data per chunk, well under
 # Anthropic's request size limit. More pages = more fields confirmed
 # instead of "unverifiable".
 VERIFY_MAX_PAGES = 15
@@ -235,14 +238,14 @@ async def _verify_sections(
 
     # Include full extracted text from all docs so the verifier can
     # cross-reference values even from pages not included as images.
-    # This is the #1 fix for "unverifiable" counts — the text covers
+    # This is the #1 fix for "unverifiable" counts â€” the text covers
     # 100% of pages while images only cover VERIFY_MAX_PAGES.
     if doc_texts:
-        # Send full document text — the verifier needs the same view
+        # Send full document text â€” the verifier needs the same view
         # of the document as the extractor to confirm values. Truncating
         # caused the verifier to mark fields "unverifiable" simply
         # because the relevant text was cut off.
-        text_block = "\n\nFULL EXTRACTED TEXT FROM DOCUMENTS (search this thoroughly to verify values — data may appear anywhere in the document):\n"
+        text_block = "\n\nFULL EXTRACTED TEXT FROM DOCUMENTS (search this thoroughly to verify values â€” data may appear anywhere in the document):\n"
         for dt in doc_texts:
             text_block += f"\n===== {dt.get('filename', 'document')} =====\n"
             text_block += (dt.get("text", "") or "")
@@ -256,7 +259,7 @@ async def _verify_sections(
         for fname, page_num, total, b64 in rendered_pages:
             content_blocks.append({
                 "type": "text",
-                "text": f"Document '{fname}' — Page {page_num} of {total}:",
+                "text": f"Document '{fname}' â€” Page {page_num} of {total}:",
             })
             content_blocks.append({
                 "type": "image",
@@ -309,8 +312,8 @@ async def _verify_sections(
 async def verify_deal_metrics(deal, db) -> dict:
     """Run second-pass verification on extracted metrics.
 
-    Verification is split into multiple smaller Anthropic calls — one
-    per group of tightly-related metric sections — so we stay under
+    Verification is split into multiple smaller Anthropic calls â€” one
+    per group of tightly-related metric sections â€” so we stay under
     Anthropic's per-minute input-tokens rate limit on non-enterprise
     tiers. A single monolithic call with all ~100 fields and 10 PDF
     pages was hitting 429s. Per-chunk calls are short (8-15s each)
@@ -323,7 +326,7 @@ async def verify_deal_metrics(deal, db) -> dict:
 
     Returns:
         Verification results dict with audit trail (audit_results,
-        missing_data, summary) — same shape as before, regardless of
+        missing_data, summary) â€” same shape as before, regardless of
         how many underlying calls ran.
     """
     api_key = os.environ.get("ANTHROPIC_API_KEY")
@@ -342,21 +345,26 @@ async def verify_deal_metrics(deal, db) -> dict:
     # Render pages once up-front so each chunk reuses the same b64 data.
     rendered = _render_pdf_pages_to_b64(doc_paths, VERIFY_MAX_PAGES) if doc_paths else []
 
-    # Collect full extracted text from all docs — sent alongside
+    # Collect full extracted text from all docs â€” sent alongside
     # images so the verifier can confirm values from pages that
     # aren't included as images. Dramatically reduces "unverifiable."
-    doc_texts = [
-        {"filename": d.filename, "text": d.extracted_text or ""}
-        for d in deal.documents
-        if d.extracted_text
-    ]
+    doc_texts = []
+    for d in deal.documents:
+        text = (d.extracted_text or "").strip()
+        quality = d.extraction_quality or {}
+        if (
+            text
+            and not text.startswith("Error extracting text:")
+            and not (isinstance(quality, dict) and quality.get("error"))
+        ):
+            doc_texts.append({"filename": d.filename, "text": text})
 
     # Decide which section groups actually have something to audit.
     groups_to_run: list[list[str]] = []
     for group in VERIFY_SECTION_GROUPS:
         if any(metrics.get(s) for s in group):
             groups_to_run.append(group)
-    # Any sections the metrics have that we didn't plan for — fold
+    # Any sections the metrics have that we didn't plan for â€” fold
     # them into their own group so nothing is silently skipped.
     planned = {s for g in VERIFY_SECTION_GROUPS for s in g}
     extra_sections = [
@@ -370,7 +378,7 @@ async def verify_deal_metrics(deal, db) -> dict:
     if extra_sections:
         groups_to_run.append(extra_sections)
 
-    # Run chunks in PARALLEL — each chunk is independent (same PDF
+    # Run chunks in PARALLEL â€” each chunk is independent (same PDF
     # pages, different metric sections). Sequential took 5+ min
     # (sum of all chunk durations); parallel takes ~90-100s (limited
     # by the slowest chunk). Anthropic's rate limits on the Build
@@ -421,7 +429,7 @@ def apply_corrections(metrics: dict, verification: dict) -> tuple[dict, list[str
 
     Also stashes the previous extracted value on the provenance tree
     under `_provenance[<path>].previous_value` so the UI can show
-    "corrected from X → Y" and offer a revert.
+    "corrected from X â†’ Y" and offer a revert.
     """
     changes = []
     prov = dict(metrics.get("_provenance") or {})
@@ -452,7 +460,7 @@ def apply_corrections(metrics: dict, verification: dict) -> tuple[dict, list[str
                 pre = metrics[section].get(field, old_val)
                 metrics[section][field] = new_val
                 changes.append(
-                    f"CORRECTED {section}.{field}: {pre} → {new_val} "
+                    f"CORRECTED {section}.{field}: {pre} â†’ {new_val} "
                     f"(Source: {result.get('source', 'verification')})"
                 )
                 # Stash previous value + correction metadata on
