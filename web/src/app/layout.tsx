@@ -1,6 +1,7 @@
 import type { Metadata, Viewport } from "next";
 import { Inter, JetBrains_Mono } from "next/font/google";
 import "./globals.css";
+import "./refinements.css";
 import { Suspense } from "react";
 import { AppShell } from "@/components/app-shell";
 import { CommandPalette } from "@/components/command-palette";
@@ -22,7 +23,7 @@ const mono = JetBrains_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Kenyon — Deal Analyzer",
+  title: "Kenyon - Deal Analyzer",
   description: "Institutional-grade real estate deal analysis and portfolio tracking.",
 };
 
