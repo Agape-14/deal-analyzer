@@ -30,6 +30,11 @@ app.include_router(chat.router, prefix="/api/chat", tags=["chat"])
 app.include_router(investments.router, prefix="/api/investments", tags=["investments"])
 
 
+@app.get("/health")
+async def health_check():
+    return {"status": "ok", "service": "deal-analyzer"}
+
+
 @app.get("/")
 async def index(request: Request):
     return templates.TemplateResponse("index.html", {"request": request})
