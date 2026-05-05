@@ -34,7 +34,7 @@ export function QualityPanel({
     };
   }, []);
 
-  function startPolling(kind: "extract" | "verify", beforeTs: string | null) {
+  function startPolling(kind: "extract" | "verify", beforeTs: string | null, onComplete?: () => void) {
     if (pollRef.current) clearInterval(pollRef.current);
     const start = Date.now();
 
@@ -43,7 +43,7 @@ export function QualityPanel({
         if (pollRef.current) clearInterval(pollRef.current);
         pollRef.current = null;
         setBusy(null);
-        toast.info("Still running — refresh manually when ready.");
+        toast.info("Still running - refresh manually when ready.");
         return;
       }
       try {
@@ -52,6 +52,12 @@ export function QualityPanel({
         if (newTs && newTs !== beforeTs) {
           if (pollRef.current) clearInterval(pollRef.current);
           pollRef.current = null;
+
+          if (onComplete) {
+            onComplete();
+            return;
+          }
+
           setBusy(null);
           toast.success(kind === "extract" ? "Extraction complete" : "Verification complete", {
             description: `Trust score: ${computeTrust(res.summary)}%`,
@@ -59,7 +65,7 @@ export function QualityPanel({
           router.refresh();
         }
       } catch {
-        // network blip — keep polling
+        // network blip - keep polling
       }
     }, POLL_INTERVAL);
   }
@@ -67,25 +73,35 @@ export function QualityPanel({
   async function runExtract() {
     setBusy("extract");
     try {
-      const beforeTs = quality?.last_extracted_at ?? null;
+      const beforeExtractTs = quality?.last_extracted_at ?? null;
+      const beforeVerifyTs = quality?.last_verified_at ?? null;
       await api.post(`/api/deals/${dealId}/extract`);
-      toast.success("Extraction started — page will update automatically when done.", { duration: 5000 });
-      startPolling("extract", beforeTs);
+      toast.success("Pipeline started - extraction will verify against docs automatically.", { duration: 5000 });
+      startPolling("extract", beforeExtractTs, () => {
+        void runVerify(beforeVerifyTs, true);
+      });
     } catch (e) {
-      toast.error("Extraction failed to start", { description: (e as { detail?: string })?.detail });
+      toast.error("Pipeline failed to start", { description: (e as { detail?: string })?.detail });
       setBusy(null);
     }
   }
 
-  async function runVerify() {
+  async function runVerify(beforeTsOverride?: string | null, automatic = false) {
     setBusy("verify");
     try {
-      const beforeTs = quality?.last_verified_at ?? null;
+      const beforeTs = beforeTsOverride ?? quality?.last_verified_at ?? null;
       await api.post(`/api/deals/${dealId}/verify?auto_correct=true`);
-      toast.success("Verification started — page will update automatically when done.", { duration: 5000 });
+      toast.success(
+        automatic
+          ? "Verification started automatically - page will update when scoring is ready."
+          : "Verification retry started - page will update automatically when done.",
+        { duration: 5000 },
+      );
       startPolling("verify", beforeTs);
     } catch (e) {
-      toast.error("Verification failed to start", { description: (e as { detail?: string })?.detail });
+      toast.error(automatic ? "Automatic verification failed to start" : "Verification failed to start", {
+        description: (e as { detail?: string })?.detail,
+      });
       setBusy(null);
     }
   }
@@ -107,7 +123,7 @@ export function QualityPanel({
         out.push(`${d.filename}: only ${eq.quality_score}% of pages yielded usable text`);
       }
       if (eq.empty_pages?.length) {
-        out.push(`${d.filename}: ${eq.empty_pages.length} page${eq.empty_pages.length === 1 ? "" : "s"} empty (p.${eq.empty_pages.slice(0, 5).join(", ")}${eq.empty_pages.length > 5 ? "…" : ""})`);
+        out.push(`${d.filename}: ${eq.empty_pages.length} page${eq.empty_pages.length === 1 ? "" : "s"} empty (p.${eq.empty_pages.slice(0, 5).join(", ")}${eq.empty_pages.length > 5 ? "..." : ""})`);
       }
     }
     return out;
@@ -119,7 +135,7 @@ export function QualityPanel({
     : null;
   const stale = ageDays != null && ageDays >= 60;
 
-  const busyLabel = busy === "extract" ? "Extracting…" : busy === "verify" ? "Verifying…" : null;
+  const busyLabel = busy === "extract" ? "Extracting..." : busy === "verify" ? "Verifying..." : null;
 
   return (
     <Card elevated className="p-6">
@@ -145,22 +161,22 @@ export function QualityPanel({
               {busyLabel
                 ? busyLabel
                 : total === 0
-                  ? "No metrics extracted yet — upload an OM and run extraction."
+                  ? "No metrics extracted yet - upload an OM and run the pipeline."
                   : trust != null
-                    ? `Trust score ${trust}% — ${total} tracked field${total === 1 ? "" : "s"}`
+                    ? `Trust score ${trust}% - ${total} tracked field${total === 1 ? "" : "s"}`
                     : ""}
             </p>
           </div>
         </div>
 
         <div className="flex items-center gap-2">
-          <Button size="sm" variant="secondary" onClick={runExtract} disabled={busy !== null}>
+          <Button size="sm" onClick={runExtract} disabled={busy !== null}>
             {busy === "extract" ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />}
-            Re-extract
+            Re-run pipeline
           </Button>
-          <Button size="sm" onClick={runVerify} disabled={busy !== null}>
+          <Button size="sm" variant="secondary" onClick={() => void runVerify()} disabled={busy !== null}>
             {busy === "verify" ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Sparkles className="h-3.5 w-3.5" />}
-            Verify against docs
+            Retry verification
           </Button>
         </div>
       </div>
@@ -201,7 +217,7 @@ export function QualityPanel({
                   label="Verified"
                   value={q.verified}
                   color="text-success"
-                  hint={q.verified === 0 ? "Click Verify against docs" : undefined}
+                  hint={q.verified === 0 ? "Run pipeline to verify" : undefined}
                 />
                 <Counter label="Extracted" value={q.extracted} />
                 <Counter label="Calculated" value={q.calculated} />
@@ -226,7 +242,7 @@ export function QualityPanel({
                     <ShieldCheck className="h-3 w-3" />
                     Last verified: <span className="text-foreground">{fmtDate(q.last_verified_at)}</span>
                     {typeof q.confidence === "number" && (
-                      <span className="text-muted-foreground">· {q.confidence}% confidence</span>
+                      <span className="text-muted-foreground">- {q.confidence}% confidence</span>
                     )}
                   </span>
                 )}
@@ -235,7 +251,7 @@ export function QualityPanel({
               {stale && (
                 <div className="mt-3 inline-flex items-center gap-2 rounded-md bg-warning/10 text-warning ring-1 ring-warning/30 px-2.5 py-1 text-xs">
                   <AlertTriangle className="h-3 w-3" />
-                  Metrics are {ageDays}+ days old — re-extract if newer documents are available.
+                  Metrics are {ageDays}+ days old - re-run the pipeline if newer documents are available.
                 </div>
               )}
             </>
