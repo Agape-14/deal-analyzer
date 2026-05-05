@@ -8,6 +8,7 @@ import { AuditTrail } from "@/components/deal-detail/audit-trail";
 import { QualityPanel } from "@/components/deal-detail/quality-panel";
 import { PipelineTimeline } from "@/components/deal-detail/pipeline-timeline";
 import { SourceCitations } from "@/components/deal-detail/source-citations";
+import { UploadCompleteness } from "@/components/deal-detail/upload-completeness";
 import type { DealDetail } from "@/lib/types";
 import { fmtMoney, fmtMultiple, fmtPct } from "@/lib/utils";
 
@@ -35,6 +36,7 @@ export function OverviewTab({ deal }: { deal: DealDetail }) {
     <div className="space-y-6">
       <QualityPanel dealId={deal.id} quality={deal.quality} documents={deal.documents ?? []} />
       <PipelineTimeline deal={deal} />
+      <UploadCompleteness deal={deal} />
 
       {/* 2-column: snapshot + scores */}
       <div className="grid grid-cols-1 lg:grid-cols-[1.2fr_1fr] gap-6 items-stretch">
