@@ -7,6 +7,7 @@ from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from fastapi.requests import Request
+from fastapi.responses import HTMLResponse
 from contextlib import asynccontextmanager
 from app.database import init_db
 from app.routers import developers, deals, chat, investments
@@ -37,4 +38,10 @@ async def health_check():
 
 @app.get("/")
 async def index(request: Request):
-    return templates.TemplateResponse("index.html", {"request": request})
+    template = templates.env.get_template("index.html")
+    html = template.render(request=request)
+    html = html.replace(
+        "</head>",
+        '  <link rel="stylesheet" href="/static/css/refinements.css">\n</head>',
+    )
+    return HTMLResponse(html)
