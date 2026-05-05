@@ -2,8 +2,9 @@
 
 import Link from "next/link";
 import { motion } from "framer-motion";
-import { ArrowUpRight, MapPin, ShieldAlert, ShieldCheck } from "lucide-react";
+import { ArrowUpRight, MapPin } from "lucide-react";
 import { Card } from "@/components/ui/card";
+import { ScoreQualityBadge } from "@/components/deal-detail/score-quality-badge";
 import { cn, fmtMultiple, fmtMoney, fmtPct } from "@/lib/utils";
 import type { DataQualityGate, DealQualitySummary, DealSummary } from "@/lib/types";
 
@@ -65,8 +66,8 @@ function ScoreRing({ value }: { value: number | null }) {
 
 export function DealCard({ deal }: { deal: DealSummary }) {
   const locationBits = [deal.city, deal.state].filter(Boolean).join(", ") || deal.location || "";
-  const qualityStage = getQualityStage(deal.quality) || deal.scores?.data_quality?.stage;
-  const isVerified = qualityStage === "verified";
+  const qualityGate = getQualityGate(deal.quality) || deal.scores?.data_quality;
+  const visibleScore = deal.overall_score ?? deal.scores?.provisional_overall ?? null;
 
   return (
     <Link href={`/deals/${deal.id}`} className="block group outline-none">
@@ -88,7 +89,7 @@ export function DealCard({ deal }: { deal: DealSummary }) {
               )}
             </div>
           </div>
-          <ScoreRing value={deal.overall_score} />
+          <ScoreRing value={visibleScore} />
         </div>
 
         <div className="mt-5 grid grid-cols-3 gap-3">
@@ -107,17 +108,7 @@ export function DealCard({ deal }: { deal: DealSummary }) {
             >
               {deal.status}
             </span>
-            <span
-              className={cn(
-                "inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-medium uppercase tracking-wider",
-                isVerified
-                  ? "bg-success/15 text-success ring-1 ring-success/30"
-                  : "bg-warning/15 text-warning ring-1 ring-warning/30",
-              )}
-            >
-              {isVerified ? <ShieldCheck className="h-3 w-3" /> : <ShieldAlert className="h-3 w-3" />}
-              {isVerified ? "Verified" : "Needs verify"}
-            </span>
+            <ScoreQualityBadge gate={qualityGate} size="sm" />
           </div>
           <ArrowUpRight className="h-4 w-4 text-muted-foreground group-hover:text-foreground group-hover:translate-x-0.5 group-hover:-translate-y-0.5 transition-transform" />
         </div>
@@ -126,10 +117,10 @@ export function DealCard({ deal }: { deal: DealSummary }) {
   );
 }
 
-function getQualityStage(quality: DealQualitySummary | DataQualityGate | undefined): string | undefined {
+function getQualityGate(quality: DealQualitySummary | DataQualityGate | undefined): DataQualityGate | undefined {
   if (!quality) return undefined;
-  if ("stage" in quality) return quality.stage;
-  return quality.data_quality?.stage;
+  if ("stage" in quality) return quality;
+  return quality.data_quality;
 }
 
 function Stat({ label, value }: { label: string; value: string }) {
