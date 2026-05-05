@@ -12,6 +12,9 @@ import {
   Clock,
   Check,
   Target,
+  ClipboardCheck,
+  Upload,
+  GitCompareArrows,
 } from "lucide-react";
 import type { DealStatus, DealSummary } from "@/lib/types";
 import { DealCard } from "@/components/deal-card";
@@ -165,7 +168,7 @@ export function DealGrid({ deals }: { deals: DealSummary[] }) {
         </div>
       </div>
 
-      <div className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_320px] xl:items-start">
+      <div className="grid gap-6 xl:grid-cols-[minmax(360px,0.95fr)_minmax(300px,0.72fr)_minmax(300px,0.72fr)] 2xl:grid-cols-[minmax(420px,0.95fr)_minmax(340px,0.72fr)_minmax(340px,0.72fr)] xl:items-start">
         <div>
           <div className="mb-3 flex items-center justify-between gap-3 text-xs text-muted-foreground">
             <span>
@@ -182,7 +185,7 @@ export function DealGrid({ deals }: { deals: DealSummary[] }) {
             </span>
           </div>
 
-          <motion.div layout className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+          <motion.div layout className="grid grid-cols-1 2xl:grid-cols-2 gap-4">
             <AnimatePresence mode="popLayout">
               {filtered.map((deal) => (
                 <motion.div
@@ -207,6 +210,7 @@ export function DealGrid({ deals }: { deals: DealSummary[] }) {
         </div>
 
         <FocusPanel deal={focusDeal} visibleExposure={visibleExposure} />
+        <NextActionsPanel deal={focusDeal} dealCount={filtered.length} />
       </div>
     </div>
   );
@@ -278,5 +282,69 @@ function MiniMetric({ label, value }: { label: string; value: string }) {
       <div className="text-[10px] uppercase tracking-wider text-muted-foreground">{label}</div>
       <div className="mt-1 text-sm font-semibold tabular-nums tracking-tight">{value}</div>
     </div>
+  );
+}
+
+function NextActionsPanel({
+  deal,
+  dealCount,
+}: {
+  deal: DealSummary | null;
+  dealCount: number;
+}) {
+  const actions = deal
+    ? [
+        {
+          icon: Upload,
+          label: "Upload latest memo",
+          detail: "Keep scoring current before comparing.",
+        },
+        {
+          icon: ClipboardCheck,
+          label: "Review extraction",
+          detail: "Confirm IRR, multiple, and min investment.",
+        },
+        {
+          icon: GitCompareArrows,
+          label: "Compare alternatives",
+          detail: dealCount > 1 ? "Use score and risk deltas." : "Add another deal to unlock a real comparison.",
+        },
+      ]
+    : [
+        {
+          icon: Upload,
+          label: "Add a deal",
+          detail: "Upload an offering memo to populate the pipeline.",
+        },
+      ];
+
+  return (
+    <aside className="rounded-xl border border-border/80 bg-card/70 p-5 shadow-[0_0_0_1px_hsl(var(--border))_inset,0_20px_40px_-24px_hsl(0_0%_0%/0.7)] xl:sticky xl:top-[92px]">
+      <div className="flex items-center justify-between gap-3">
+        <div>
+          <div className="text-[11px] uppercase tracking-[0.12em] text-muted-foreground">Workflow</div>
+          <h2 className="mt-1 text-sm font-semibold tracking-tight">Next actions</h2>
+        </div>
+        <div className="grid h-9 w-9 place-items-center rounded-lg bg-success/10 text-success ring-1 ring-success/30">
+          <ClipboardCheck className="h-4 w-4" />
+        </div>
+      </div>
+
+      <div className="mt-5 space-y-3">
+        {actions.map((action) => (
+          <div key={action.label} className="rounded-lg border border-border/70 bg-background/40 p-3">
+            <div className="flex items-start gap-3">
+              <div className="mt-0.5 grid h-7 w-7 shrink-0 place-items-center rounded-md bg-muted text-muted-foreground">
+                <action.icon className="h-3.5 w-3.5" />
+              </div>
+              <div className="min-w-0">
+                <div className="text-sm font-medium tracking-tight">{action.label}</div>
+                <div className="mt-1 text-xs leading-relaxed text-muted-foreground">{action.detail}</div>
+              </div>
+            </div>
+          </div>
+        ))}
+      </div>
+    </aside>
   );
 }
