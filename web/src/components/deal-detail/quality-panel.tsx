@@ -9,10 +9,12 @@ import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { api } from "@/lib/api";
 import { cn, fmtDate } from "@/lib/utils";
-import type { DealQualitySummary } from "@/lib/types";
+import type { DataQualityGate, DealQualitySummary } from "@/lib/types";
 
 const POLL_INTERVAL = 5_000;
 const POLL_TIMEOUT = 5 * 60_000;
+
+type QualityPanelValue = DealQualitySummary | DataQualityGate | undefined;
 
 export function QualityPanel({
   dealId,
@@ -20,7 +22,7 @@ export function QualityPanel({
   documents,
 }: {
   dealId: number;
-  quality: DealQualitySummary | undefined;
+  quality: QualityPanelValue;
   documents: Array<{ filename: string; extraction_quality?: { quality_score: number | null; ocr_pages: number; empty_pages: number[] } | null }>;
 }) {
   const router = useRouter();
@@ -67,7 +69,7 @@ export function QualityPanel({
   async function runExtract() {
     setBusy("extract");
     try {
-      const beforeExtractTs = quality?.last_extracted_at ?? null;
+      const beforeExtractTs = isQualitySummary(quality) ? quality.last_extracted_at : null;
       await api.post(`/api/deals/${dealId}/extract`);
       toast.success("Pipeline started - verification and scoring will run automatically.", { duration: 5000 });
       startPolling(beforeExtractTs);
@@ -77,7 +79,7 @@ export function QualityPanel({
     }
   }
 
-  const q = quality;
+  const q = isQualitySummary(quality) ? quality : undefined;
   const total = q?.total_fields ?? 0;
 
   const trust = React.useMemo(() => {
@@ -239,6 +241,10 @@ export function QualityPanel({
       )}
     </Card>
   );
+}
+
+function isQualitySummary(value: QualityPanelValue): value is DealQualitySummary {
+  return Boolean(value && "total_fields" in value && typeof value.total_fields === "number");
 }
 
 function computeTrust(q: DealQualitySummary): number {
