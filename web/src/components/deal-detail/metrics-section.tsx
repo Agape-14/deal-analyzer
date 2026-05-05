@@ -4,6 +4,7 @@ import * as React from "react";
 import { Card } from "@/components/ui/card";
 import { IntegrityBadge } from "@/components/deal-detail/integrity-badge";
 import { ConflictPicker } from "@/components/deal-detail/conflict-picker";
+import { FieldReviewAction } from "@/components/deal-detail/field-review-action";
 import { cn, fmtMoney, fmtPct } from "@/lib/utils";
 import type { FieldProvenance } from "@/lib/types";
 
@@ -97,7 +98,7 @@ function MetricRow({
   // instead of overflowing the narrow value column. Threshold is 40
   // characters — short enough to catch "75/25 Class B/Class A after
   // 100% of Class B equity is repaid (Tier 5)" (~70 chars) while
-  // keeping \$39.3M / 13.0% / 1.50x on compact rows.
+  // keeping $39.3M / 13.0% / 1.50x on compact rows.
   const isLong =
     (typeof value === "string" && value.length > 40) ||
     formatted.length > 40;
@@ -110,6 +111,7 @@ function MetricRow({
         <dt className="text-[10px] uppercase tracking-[0.1em] text-muted-foreground mb-1 flex items-center gap-1.5">
           {label}
           <IntegrityBadge provenance={provenance} compact dealId={dealId} path={path} />
+          <FieldReviewAction dealId={dealId} path={path} value={value} provenance={provenance} />
         </dt>
         <dd className="text-sm leading-relaxed text-foreground/90">{formatted}</dd>
       </div>
@@ -125,7 +127,8 @@ function MetricRow({
     >
       <dt className="text-xs text-muted-foreground truncate flex items-center gap-1.5">
         <span className="truncate">{label}</span>
-        <IntegrityBadge provenance={provenance} compact />
+        <IntegrityBadge provenance={provenance} compact dealId={dealId} path={path} />
+        <FieldReviewAction dealId={dealId} path={path} value={value} provenance={provenance} />
       </dt>
       <dd className="flex items-center gap-2 shrink-0">
         <span className="text-sm text-right font-medium tabular-nums">{formatted}</span>
