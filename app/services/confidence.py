@@ -71,6 +71,13 @@ def assess_data_quality(
     require_verified: bool = True,
 ) -> dict[str, Any]:
     metrics = metrics or {}
+    if math_checks is None and metrics:
+        try:
+            from app.services.math_checker import run_math_checks
+
+            math_checks = run_math_checks(metrics)
+        except Exception:
+            math_checks = []
     provenance = metrics.get("_provenance") or {}
     verification = metrics.get("_verification") or {}
     verified_at = verification.get("verified_at")
