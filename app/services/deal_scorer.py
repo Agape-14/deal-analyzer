@@ -451,7 +451,7 @@ def score_sponsor(metrics: dict) -> tuple[int, str]:
 def score_deal(
     metrics: dict,
     *,
-    math_checks: list[dict] | None = None,
+    math_checks=None,
     require_verified: bool = True,
 ) -> dict:
     """Score a deal across all categories. Returns scores dict."""
