@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { motion } from "framer-motion";
-import { ArrowUpRight, MapPin } from "lucide-react";
+import { ArrowUpRight, MapPin, ShieldAlert, ShieldCheck } from "lucide-react";
 import { Card } from "@/components/ui/card";
 import { cn, fmtMultiple, fmtMoney, fmtPct } from "@/lib/utils";
 import type { DealSummary } from "@/lib/types";
@@ -19,7 +19,7 @@ function ScoreRing({ value }: { value: number | null }) {
   if (value == null) {
     return (
       <div className="h-12 w-12 rounded-full border border-dashed border-border grid place-items-center text-muted-foreground text-[10px]">
-        —
+        â€”
       </div>
     );
   }
@@ -65,6 +65,8 @@ function ScoreRing({ value }: { value: number | null }) {
 
 export function DealCard({ deal }: { deal: DealSummary }) {
   const locationBits = [deal.city, deal.state].filter(Boolean).join(", ") || deal.location || "";
+  const qualityStage = deal.quality?.stage || deal.scores?.data_quality?.stage;
+  const isVerified = qualityStage === "verified";
 
   return (
     <Link href={`/deals/${deal.id}`} className="block group outline-none">
@@ -77,10 +79,10 @@ export function DealCard({ deal }: { deal: DealSummary }) {
             <h3 className="text-base font-semibold tracking-tight truncate">{deal.project_name}</h3>
             <div className="mt-1 flex items-center gap-1.5 text-xs text-muted-foreground">
               <MapPin className="h-3 w-3" />
-              <span className="truncate">{locationBits || "—"}</span>
+              <span className="truncate">{locationBits || "â€”"}</span>
               {deal.developer_name && (
                 <>
-                  <span className="opacity-40">·</span>
+                  <span className="opacity-40">Â·</span>
                   <span className="truncate">{deal.developer_name}</span>
                 </>
               )}
@@ -96,14 +98,27 @@ export function DealCard({ deal }: { deal: DealSummary }) {
         </div>
 
         <div className="mt-5 flex items-center justify-between">
-          <span
-            className={cn(
-              "px-2 py-0.5 rounded-full text-[10px] uppercase tracking-wider font-medium",
-              STATUS_STYLES[deal.status] ?? STATUS_STYLES.reviewing,
-            )}
-          >
-            {deal.status}
-          </span>
+          <div className="flex min-w-0 items-center gap-2">
+            <span
+              className={cn(
+                "px-2 py-0.5 rounded-full text-[10px] uppercase tracking-wider font-medium",
+                STATUS_STYLES[deal.status] ?? STATUS_STYLES.reviewing,
+              )}
+            >
+              {deal.status}
+            </span>
+            <span
+              className={cn(
+                "inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-medium uppercase tracking-wider",
+                isVerified
+                  ? "bg-success/15 text-success ring-1 ring-success/30"
+                  : "bg-warning/15 text-warning ring-1 ring-warning/30",
+              )}
+            >
+              {isVerified ? <ShieldCheck className="h-3 w-3" /> : <ShieldAlert className="h-3 w-3" />}
+              {isVerified ? "Verified" : "Needs verify"}
+            </span>
+          </div>
           <ArrowUpRight className="h-4 w-4 text-muted-foreground group-hover:text-foreground group-hover:translate-x-0.5 group-hover:-translate-y-0.5 transition-transform" />
         </div>
       </Card>
