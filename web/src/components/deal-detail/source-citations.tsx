@@ -23,9 +23,10 @@ const CITATION_FIELDS = [
 ] as const;
 
 type CitationField = (typeof CITATION_FIELDS)[number];
+type CitationMetrics = Record<string, unknown> & { _provenance?: Record<string, FieldProvenance> };
 
 export function SourceCitations({ deal }: { deal: DealDetail }) {
-  const metrics = deal.metrics ?? {};
+  const metrics = (deal.metrics ?? {}) as CitationMetrics;
   const provenance = metrics._provenance ?? {};
 
   const rows = CITATION_FIELDS.map((field) => {
@@ -174,7 +175,7 @@ function statusStyle(status: string, hasConflict: boolean) {
   }
 }
 
-function getMetricValue(metrics: Record<string, unknown>, path: string): unknown {
+function getMetricValue(metrics: CitationMetrics, path: string): unknown {
   let current: unknown = metrics;
   for (const part of path.split(".")) {
     if (!current || typeof current !== "object") return null;
