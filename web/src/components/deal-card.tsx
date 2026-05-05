@@ -5,7 +5,7 @@ import { motion } from "framer-motion";
 import { ArrowUpRight, MapPin, ShieldAlert, ShieldCheck } from "lucide-react";
 import { Card } from "@/components/ui/card";
 import { cn, fmtMultiple, fmtMoney, fmtPct } from "@/lib/utils";
-import type { DealSummary } from "@/lib/types";
+import type { DataQualityGate, DealQualitySummary, DealSummary } from "@/lib/types";
 
 const STATUS_STYLES: Record<string, string> = {
   reviewing: "bg-muted/60 text-muted-foreground",
@@ -19,7 +19,7 @@ function ScoreRing({ value }: { value: number | null }) {
   if (value == null) {
     return (
       <div className="h-12 w-12 rounded-full border border-dashed border-border grid place-items-center text-muted-foreground text-[10px]">
-        â€”
+        -
       </div>
     );
   }
@@ -65,7 +65,7 @@ function ScoreRing({ value }: { value: number | null }) {
 
 export function DealCard({ deal }: { deal: DealSummary }) {
   const locationBits = [deal.city, deal.state].filter(Boolean).join(", ") || deal.location || "";
-  const qualityStage = deal.quality?.stage || deal.scores?.data_quality?.stage;
+  const qualityStage = getQualityStage(deal.quality) || deal.scores?.data_quality?.stage;
   const isVerified = qualityStage === "verified";
 
   return (
@@ -79,10 +79,10 @@ export function DealCard({ deal }: { deal: DealSummary }) {
             <h3 className="text-base font-semibold tracking-tight truncate">{deal.project_name}</h3>
             <div className="mt-1 flex items-center gap-1.5 text-xs text-muted-foreground">
               <MapPin className="h-3 w-3" />
-              <span className="truncate">{locationBits || "â€”"}</span>
+              <span className="truncate">{locationBits || "-"}</span>
               {deal.developer_name && (
                 <>
-                  <span className="opacity-40">Â·</span>
+                  <span className="opacity-40">·</span>
                   <span className="truncate">{deal.developer_name}</span>
                 </>
               )}
@@ -124,6 +124,12 @@ export function DealCard({ deal }: { deal: DealSummary }) {
       </Card>
     </Link>
   );
+}
+
+function getQualityStage(quality: DealQualitySummary | DataQualityGate | undefined): string | undefined {
+  if (!quality) return undefined;
+  if ("stage" in quality) return quality.stage;
+  return quality.data_quality?.stage;
 }
 
 function Stat({ label, value }: { label: string; value: string }) {
