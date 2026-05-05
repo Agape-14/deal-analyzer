@@ -1,0 +1,88 @@
+/* Production UI refinements layered after globals.css. */
+html {
+  text-size-adjust: 100%;
+}
+
+body {
+  min-width: 320px;
+  overflow-x: hidden;
+}
+
+main,
+.min-w-0 {
+  min-width: 0;
+}
+
+button:disabled,
+[aria-disabled="true"] {
+  cursor: not-allowed;
+  opacity: 0.62;
+}
+
+input,
+textarea,
+select,
+button {
+  font: inherit;
+}
+
+a[href^="/deals/"] {
+  height: 100%;
+}
+
+a[href^="/deals/"] > * {
+  height: 100%;
+  transition:
+    transform 180ms ease,
+    border-color 180ms ease,
+    box-shadow 180ms ease,
+    background-color 180ms ease;
+}
+
+a[href^="/deals/"]:hover > * {
+  transform: translateY(-1px);
+}
+
+a[href^="/deals/"] h3,
+[data-radix-dialog-content] h1,
+[data-radix-dialog-content] h2,
+[data-radix-dialog-content] h3 {
+  overflow-wrap: anywhere;
+}
+
+.tabular-nums,
+[data-figure] {
+  font-variant-numeric: tabular-nums;
+}
+
+.text-display,
+h1,
+h2 {
+  text-wrap: balance;
+}
+
+p {
+  text-wrap: pretty;
+}
+
+@media (max-width: 768px) {
+  html,
+  body {
+    min-height: 100%;
+    overflow-y: auto;
+  }
+
+  [data-radix-popper-content-wrapper] {
+    max-width: calc(100vw - 1rem);
+  }
+
+  main > div {
+    padding-left: 1rem;
+    padding-right: 1rem;
+  }
+
+  form,
+  [role="dialog"] {
+    max-width: calc(100vw - 1rem);
+  }
+}
