@@ -5,6 +5,7 @@ import { ScoreBreakdown } from "@/components/deal-detail/score-breakdown";
 import { ValidationFlagsPanel } from "@/components/deal-detail/validation-flags";
 import { MetricsSection } from "@/components/deal-detail/metrics-section";
 import { QualityPanel } from "@/components/deal-detail/quality-panel";
+import { PipelineTimeline } from "@/components/deal-detail/pipeline-timeline";
 import { SourceCitations } from "@/components/deal-detail/source-citations";
 import type { DealDetail } from "@/lib/types";
 import { fmtMoney, fmtMultiple, fmtPct } from "@/lib/utils";
@@ -32,6 +33,7 @@ export function OverviewTab({ deal }: { deal: DealDetail }) {
   return (
     <div className="space-y-6">
       <QualityPanel dealId={deal.id} quality={deal.quality} documents={deal.documents ?? []} />
+      <PipelineTimeline deal={deal} />
 
       {/* 2-column: snapshot + scores */}
       <div className="grid grid-cols-1 lg:grid-cols-[1.2fr_1fr] gap-6 items-stretch">
