@@ -28,7 +28,7 @@ export default async function Home() {
   const totalValue = deals.reduce((a, d) => a + (d.minimum_investment ?? 0), 0);
 
   return (
-    <div className="w-full max-w-[1320px] px-6 md:px-10 xl:px-12 py-8 md:py-12">
+    <div className="w-full px-6 md:px-10 xl:px-12 2xl:px-14 py-8 md:py-12">
       {/* Hero */}
       <FadeIn>
         <div className="flex flex-col md:flex-row md:items-end md:justify-between gap-4 mb-8">
