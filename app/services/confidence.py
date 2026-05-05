@@ -6,12 +6,10 @@ that policy in one place so scoring, quality endpoints, and the UI all explain
 the same answer.
 """
 
-from __future__ import annotations
-
-from typing import Any
+from typing import Any, Dict, List, Optional, Tuple
 
 
-CRITICAL_FIELDS: tuple[tuple[str, str], ...] = (
+CRITICAL_FIELDS = (
     ("deal_structure.minimum_investment", "Minimum investment"),
     ("deal_structure.total_equity_required", "Total equity required"),
     ("deal_structure.total_project_cost", "Total project cost"),
@@ -25,14 +23,15 @@ CRITICAL_FIELDS: tuple[tuple[str, str], ...] = (
     ("financial_projections.stabilized_noi", "Stabilized NOI"),
     ("financial_projections.avg_rent_per_unit", "Average rent"),
     ("financial_projections.occupancy_assumption", "Occupancy assumption"),
-)
+)  # type: Tuple[Tuple[str, str], ...]
 
 VERIFIED_STATUSES = {"confirmed", "calculated"}
 BAD_STATUSES = {"wrong", "missing", "unverifiable"}
 
 
-def _get_path(data: dict[str, Any], path: str) -> Any:
-    cur: Any = data
+def _get_path(data, path):
+    # type: (Dict[str, Any], str) -> Any
+    cur = data  # type: Any
     for part in path.split("."):
         if not isinstance(cur, dict):
             return None
@@ -40,7 +39,8 @@ def _get_path(data: dict[str, Any], path: str) -> Any:
     return cur
 
 
-def _present(value: Any) -> bool:
+def _present(value):
+    # type: (Any) -> bool
     if value is None:
         return False
     if isinstance(value, str):
@@ -48,12 +48,13 @@ def _present(value: Any) -> bool:
     return value != []
 
 
-def summarize_math_checks(checks: list[dict[str, Any]] | None) -> dict[str, Any]:
+def summarize_math_checks(checks):
+    # type: (Optional[List[Dict[str, Any]]]) -> Dict[str, Any]
     checks = checks or []
     summary = {"pass": 0, "fail": 0, "warn": 0, "info": 0, "total": len(checks), "blocking": []}
     for check in checks:
         status = str((check or {}).get("status") or "").lower()
-        if status in summary:
+        if status in ("pass", "fail", "warn", "info"):
             summary[status] += 1
         if status == "fail":
             summary["blocking"].append({
@@ -64,12 +65,8 @@ def summarize_math_checks(checks: list[dict[str, Any]] | None) -> dict[str, Any]
     return summary
 
 
-def assess_data_quality(
-    metrics: dict[str, Any] | None,
-    math_checks: list[dict[str, Any]] | None = None,
-    *,
-    require_verified: bool = True,
-) -> dict[str, Any]:
+def assess_data_quality(metrics, math_checks=None, require_verified=True):
+    # type: (Optional[Dict[str, Any]], Optional[List[Dict[str, Any]]], bool) -> Dict[str, Any]
     metrics = metrics or {}
     if math_checks is None and metrics:
         try:
@@ -83,7 +80,7 @@ def assess_data_quality(
     verified_at = verification.get("verified_at")
     verification_confidence = verification.get("confidence")
 
-    critical: list[dict[str, Any]] = []
+    critical = []  # type: List[Dict[str, Any]]
     missing = 0
     unverified = 0
     conflicted = 0
