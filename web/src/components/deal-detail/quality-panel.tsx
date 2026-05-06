@@ -80,12 +80,17 @@ export function QualityPanel({
   }
 
   const q = isQualitySummary(quality) ? quality : undefined;
+  const gate = q?.data_quality ?? (isDataQualityGate(quality) ? quality : undefined);
   const total = q?.total_fields ?? 0;
 
   const trust = React.useMemo(() => {
+    if (gate) return Math.max(0, Math.min(100, Math.round(gate.confidence_score ?? 0)));
     if (!q || total === 0) return null;
-    return computeTrust(q);
-  }, [q, total]);
+    return computeProvenanceTrust(q);
+  }, [gate, q, total]);
+
+  const gateTone = gate ? gateToneClass(gate, trust) : null;
+  const statusText = gate ? gateLabel(gate.stage) : null;
 
   const docWarnings = React.useMemo(() => {
     const out: string[] = [];
@@ -117,26 +122,35 @@ export function QualityPanel({
           <div
             className={cn(
               "h-10 w-10 rounded-lg grid place-items-center ring-1",
-              trust == null
-                ? "bg-muted ring-border text-muted-foreground"
-                : trust >= 80
-                  ? "bg-success/15 ring-success/30 text-success"
-                  : trust >= 60
-                    ? "bg-warning/15 ring-warning/30 text-warning"
-                    : "bg-destructive/15 ring-destructive/30 text-destructive",
+              gateTone?.icon ?? (
+                trust == null
+                  ? "bg-muted ring-border text-muted-foreground"
+                  : trust >= 80
+                    ? "bg-success/15 ring-success/30 text-success"
+                    : trust >= 60
+                      ? "bg-warning/15 ring-warning/30 text-warning"
+                      : "bg-destructive/15 ring-destructive/30 text-destructive"
+              ),
             )}
           >
             <ShieldCheck className="h-5 w-5" />
           </div>
           <div>
-            <h3 className="text-base font-semibold tracking-tight">Data integrity</h3>
+            <div className="flex items-center gap-2 flex-wrap">
+              <h3 className="text-base font-semibold tracking-tight">Data integrity</h3>
+              {gate && statusText && (
+                <span className={cn("rounded-md px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.12em] ring-1", gateTone?.badge)}>
+                  {statusText}
+                </span>
+              )}
+            </div>
             <p className="text-xs text-muted-foreground mt-0.5">
               {busyLabel
                 ? busyLabel
-                : total === 0
+                : total === 0 && !gate
                   ? "No metrics extracted yet - upload an OM and run the pipeline."
                   : trust != null
-                    ? `Trust score ${trust}% - ${total} tracked field${total === 1 ? "" : "s"}`
+                    ? `${gate ? "Gate confidence" : "Trust score"} ${trust}%${total ? ` - ${total} tracked field${total === 1 ? "" : "s"}` : ""}`
                     : ""}
             </p>
           </div>
@@ -148,7 +162,7 @@ export function QualityPanel({
         </Button>
       </div>
 
-      {q && total > 0 && (
+      {(q || gate) && (total > 0 || trust != null) && (
         <>
           {trust != null && (
             <div className="mt-5">
@@ -156,7 +170,7 @@ export function QualityPanel({
                 <motion.div
                   className={cn(
                     "h-full rounded-full",
-                    trust >= 80 ? "bg-success" : trust >= 60 ? "bg-warning" : "bg-destructive",
+                    gateTone?.bar ?? (trust >= 80 ? "bg-success" : trust >= 60 ? "bg-warning" : "bg-destructive"),
                   )}
                   initial={{ width: 0 }}
                   animate={{ width: `${trust}%` }}
@@ -166,18 +180,27 @@ export function QualityPanel({
             </div>
           )}
 
-          <button
-            type="button"
-            onClick={() => setExpanded((v) => !v)}
-            className="mt-4 inline-flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors"
-          >
-            <ChevronDown
-              className={cn("h-3.5 w-3.5 transition-transform", expanded && "rotate-180")}
-            />
-            {expanded ? "Hide breakdown" : "Show breakdown"}
-          </button>
+          {gate?.math_summary?.fail ? (
+            <div className="mt-3 inline-flex items-center gap-2 rounded-md bg-destructive/10 text-destructive ring-1 ring-destructive/30 px-2.5 py-1 text-xs">
+              <AlertTriangle className="h-3 w-3" />
+              {gate.math_summary.fail} failed math check{gate.math_summary.fail === 1 ? "" : "s"} must be resolved before the score is trusted.
+            </div>
+          ) : null}
 
-          {expanded && (
+          {q && (
+            <button
+              type="button"
+              onClick={() => setExpanded((v) => !v)}
+              className="mt-4 inline-flex items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground transition-colors"
+            >
+              <ChevronDown
+                className={cn("h-3.5 w-3.5 transition-transform", expanded && "rotate-180")}
+              />
+              {expanded ? "Hide breakdown" : "Show breakdown"}
+            </button>
+          )}
+
+          {q && expanded && (
             <>
               <div className="mt-4 grid grid-cols-2 sm:grid-cols-4 gap-3">
                 <Counter
@@ -247,7 +270,11 @@ function isQualitySummary(value: QualityPanelValue): value is DealQualitySummary
   return Boolean(value && "total_fields" in value && typeof value.total_fields === "number");
 }
 
-function computeTrust(q: DealQualitySummary): number {
+function isDataQualityGate(value: QualityPanelValue): value is DataQualityGate {
+  return Boolean(value && "confidence_score" in value && typeof value.confidence_score === "number");
+}
+
+function computeProvenanceTrust(q: DealQualitySummary): number {
   const total = q.total_fields ?? 0;
   if (total === 0) return 0;
   const weighted =
@@ -258,6 +285,32 @@ function computeTrust(q: DealQualitySummary): number {
     q.unverifiable * 0.7;
   const penalties = q.conflicting * 0.8 + q.wrong * 1.2;
   return Math.max(0, Math.min(100, Math.round(((weighted - penalties) / total) * 100)));
+}
+
+function gateLabel(stage: string): string {
+  return stage.replace(/_/g, " ");
+}
+
+function gateToneClass(gate: DataQualityGate, trust: number | null) {
+  if (!gate.can_score || gate.stage === "math_failed" || gate.stage === "conflicting" || gate.stage === "insufficient_source") {
+    return {
+      icon: "bg-destructive/15 ring-destructive/30 text-destructive",
+      badge: "bg-destructive/10 text-destructive ring-destructive/30",
+      bar: "bg-destructive",
+    };
+  }
+  if (gate.stage === "needs_review" || gate.stage === "provisional" || (trust ?? 0) < 80) {
+    return {
+      icon: "bg-warning/15 ring-warning/30 text-warning",
+      badge: "bg-warning/10 text-warning ring-warning/30",
+      bar: "bg-warning",
+    };
+  }
+  return {
+    icon: "bg-success/15 ring-success/30 text-success",
+    badge: "bg-success/10 text-success ring-success/30",
+    bar: "bg-success",
+  };
 }
 
 function Counter({
