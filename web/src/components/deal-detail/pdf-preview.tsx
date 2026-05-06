@@ -3,15 +3,15 @@
 import * as React from "react";
 import { Dialog, DialogContent, DialogTitle, DialogDescription } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
-import { Download, ExternalLink, Eye } from "lucide-react";
+import { Download, ExternalLink, Eye, Table } from "lucide-react";
 import type { DealDocument } from "@/lib/types";
 
 /**
  * Inline PDF viewer modal. Uses the browser's native PDF rendering
  * (via `<iframe>`), which means no extra client bundle weight (pdf.js
  * is several hundred KB) and works on every evergreen browser +
- * mobile Safari. The fallback links out when inline rendering isn't
- * supported.
+ * mobile Safari. Spreadsheets are shown as extracted/downloadable files
+ * because browsers do not render XLSX inline reliably.
  */
 export function PdfPreviewDialog({
   doc,
@@ -24,6 +24,7 @@ export function PdfPreviewDialog({
 }) {
   if (!doc) return null;
   const url = `/api/deals/documents/${doc.id}/file`;
+  const isPdf = doc.filename.toLowerCase().endsWith(".pdf");
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -35,7 +36,7 @@ export function PdfPreviewDialog({
           <div className="min-w-0">
             <DialogTitle className="truncate">{doc.filename}</DialogTitle>
             <DialogDescription className="text-[11px] mt-0.5">
-              {doc.page_count} page{doc.page_count === 1 ? "" : "s"}
+              {doc.page_count} {docUnit(doc.filename, doc.page_count)}
               {" · "}
               {doc.doc_type.replace(/_/g, " ")}
             </DialogDescription>
@@ -59,20 +60,32 @@ export function PdfPreviewDialog({
           </div>
         </div>
 
-        <div className="flex-1 bg-black/30 min-h-0">
-          {/* Browser-native PDF viewer. `#toolbar=1` shows Chrome's
-              page nav + download; other browsers ignore unknown hashes. */}
-          <iframe
-            src={`${url}#toolbar=1&view=FitH`}
-            title={doc.filename}
-            className="w-full h-full border-0"
-          />
-          {/* Hidden <noscript>-style fallback — if the iframe is blocked,
-              the user still sees a link they can follow. */}
-          <div className="sr-only">
-            <a href={url}>Open {doc.filename}</a>
+        {isPdf ? (
+          <div className="flex-1 bg-black/30 min-h-0">
+            {/* Browser-native PDF viewer. `#toolbar=1` shows Chrome's
+                page nav + download; other browsers ignore unknown hashes. */}
+            <iframe
+              src={`${url}#toolbar=1&view=FitH`}
+              title={doc.filename}
+              className="w-full h-full border-0"
+            />
+            <div className="sr-only">
+              <a href={url}>Open {doc.filename}</a>
+            </div>
           </div>
-        </div>
+        ) : (
+          <div className="flex-1 min-h-0 grid place-items-center bg-muted/20 p-8 text-center">
+            <div>
+              <div className="mx-auto grid h-12 w-12 place-items-center rounded-lg bg-primary/10 text-primary ring-1 ring-primary/25">
+                <Table className="h-5 w-5" />
+              </div>
+              <div className="mt-4 text-sm font-medium">Spreadsheet extracted</div>
+              <p className="mt-1 max-w-sm text-xs leading-5 text-muted-foreground">
+                The workbook has been converted into sheet text for analysis. Use Open or Download to inspect the original file.
+              </p>
+            </div>
+          </div>
+        )}
       </DialogContent>
     </Dialog>
   );
@@ -101,4 +114,10 @@ export function PreviewButton({
       <Eye className="h-3.5 w-3.5" />
     </button>
   );
+}
+
+function docUnit(filename: string, count: number): string {
+  const lower = filename.toLowerCase();
+  const singular = lower.endsWith(".xlsx") || lower.endsWith(".xlsm") || lower.endsWith(".xls") || lower.endsWith(".csv") ? "sheet" : "page";
+  return count === 1 ? singular : `${singular}s`;
 }
