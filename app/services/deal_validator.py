@@ -121,18 +121,47 @@ def validate_deal_metrics(metrics: dict, property_type: str | None = None) -> li
     gross_irr = _num(tr.get('gross_irr'))
     net_irr = _num(tr.get('net_irr'))
     target_irr = _num(tr.get('target_irr'))
+    net_equity_multiple = _num(tr.get('net_equity_multiple'))
+    target_equity_multiple = _num(tr.get('target_equity_multiple'))
+    target_cash_on_cash = _num(tr.get('target_cash_on_cash'))
+    distribution_yield = _num(tr.get('distribution_yield'))
 
-    # Fee drag only makes sense when gross and net are computed on the
-    # SAME scenario (e.g. both sale-scenario IRRs, or both hold-
-    # scenario cash-on-cash). OMs commonly quote "Gross IRR 21%"
-    # (hypothetical sale) alongside "Net cash-on-cash 12%" (hold),
-    # and blindly subtracting them produces a nonsense "fee drag"
-    # number that accuses the sponsor of eating returns. Only emit
-    # the flag when we can prove we're comparing like-for-like:
-    #
-    # 1. primary_strategy is "sale" (both IRRs are sale-scenario), or
-    # 2. sale_scenario has its own gross/net pair, or
-    # 3. hold_scenario has its own gross/net pair.
+    _add_canonical_alias_flags(flags, [
+        {
+            "label": "Target IRR",
+            "canonical_label": "Net IRR",
+            "canonical_path": "target_returns.net_irr",
+            "alias_path": "target_returns.target_irr",
+            "canonical_value": net_irr,
+            "alias_value": target_irr,
+            "unit": "%",
+            "tolerance": 0.25,
+            "message": "Target IRR must match investor Net IRR. Cash-on-cash or distribution yield should remain separate.",
+        },
+        {
+            "label": "Equity multiple",
+            "canonical_label": "Net equity multiple",
+            "canonical_path": "target_returns.net_equity_multiple",
+            "alias_path": "target_returns.target_equity_multiple",
+            "canonical_value": net_equity_multiple,
+            "alias_value": target_equity_multiple,
+            "unit": "x",
+            "tolerance": 0.02,
+            "message": "Target equity multiple must match investor Net Equity Multiple when both are present.",
+        },
+        {
+            "label": "Cash-on-cash",
+            "canonical_label": "Distribution yield",
+            "canonical_path": "target_returns.target_cash_on_cash",
+            "alias_path": "target_returns.distribution_yield",
+            "canonical_value": target_cash_on_cash,
+            "alias_value": distribution_yield,
+            "unit": "%",
+            "tolerance": 0.25,
+            "message": "Cash-on-cash and distribution yield are the same periodic yield concept unless the source explicitly separates scenarios.",
+        },
+    ])
+
     primary_strategy = (tr.get('primary_strategy') or '').lower()
     sale_scenario = tr.get('sale_scenario') or {}
     hold_scenario = tr.get('hold_scenario') or {}
@@ -159,8 +188,6 @@ def validate_deal_metrics(metrics: dict, property_type: str | None = None) -> li
             flags.append({'severity': 'red', 'category': 'Returns',
                           'message': f'Fee drag is {fee_drag:.1f}% ({scenario_label}: gross {scenario_gross}% vs net {scenario_net}%). Sponsor fees are eating too much.'})
     elif gross_irr and net_irr:
-        # We have both but can't confirm they're the same scenario.
-        # Mention the spread as context, not as an accusation.
         spread = gross_irr - net_irr
         if spread > 5:
             flags.append({'severity': 'yellow', 'category': 'Returns',
@@ -170,15 +197,13 @@ def validate_deal_metrics(metrics: dict, property_type: str | None = None) -> li
         flags.append({'severity': 'yellow', 'category': 'Returns',
                       'message': 'Cannot determine if quoted IRR is gross or net. Always ask for NET (to investor) returns.'})
 
-    # IRR reasonableness (threshold varies by asset class)
     irr = net_irr or target_irr
     irr_cap = profile["irr_aggressive"]
     if irr and irr > irr_cap:
         flags.append({'severity': 'yellow', 'category': 'Returns',
                       'message': f'Target IRR of {irr}% is very aggressive for this asset class (typical cap {irr_cap}%).'})
 
-    # Equity multiple check
-    em = _num(tr.get('net_equity_multiple') or tr.get('target_equity_multiple'))
+    em = net_equity_multiple or target_equity_multiple
     hold = _num(ds.get('hold_period_years'))
     if em and hold and hold > 0:
         implied_annual = ((em - 1) / hold) * 100
@@ -186,7 +211,6 @@ def validate_deal_metrics(metrics: dict, property_type: str | None = None) -> li
             flags.append({'severity': 'yellow', 'category': 'Returns',
                           'message': f'Equity multiple implies ~{implied_annual:.1f}% annual return but IRR shows {irr}%. Numbers may be inconsistent.'})
 
-    # Preferred return check
     pref = _num(ds.get('preferred_return'))
     if pref and pref < 6:
         flags.append({'severity': 'yellow', 'category': 'Structure',
@@ -195,23 +219,17 @@ def validate_deal_metrics(metrics: dict, property_type: str | None = None) -> li
         flags.append({'severity': 'yellow', 'category': 'Structure',
                       'message': f'Preferred return of {pref}% is unusually high. Verify it is actually achievable.'})
 
-    # === STRUCTURE CHECKS ===
     gp_coinvest = _num(ds.get('gp_equity_coinvest_pct'))
     gp_is_rollover = ds.get('gp_coinvest_is_rollover')
-
     gp_cash = _num(ds.get('gp_cash_at_risk'))
-    gp_desc = ds.get('gp_coinvest_description') or ''
 
     if gp_is_rollover is True:
         cash_note = f' GP cash at risk: ${gp_cash:,.0f}.' if gp_cash else ' GP actual cash at risk: unknown.'
         flags.append({'severity': 'yellow', 'category': 'Alignment',
-                      'message': f'GP co-invest of {gp_coinvest or "?"}% appears to be rolled-over equity / land basis / deferred fees - not new cash from the sponsor.{cash_note} '
-                                 'True alignment requires the sponsor\'s own capital at risk.'})
+                      'message': f'GP co-invest of {gp_coinvest or "?"}% appears to be rolled-over equity / land basis / deferred fees - not new cash from the sponsor.{cash_note} True alignment requires the sponsor\'s own capital at risk.'})
     elif gp_coinvest is not None and gp_coinvest > 20 and gp_is_rollover is None:
-        # Suspiciously high GP co-invest without rollover analysis
         flags.append({'severity': 'yellow', 'category': 'Alignment',
-                      'message': f'GP co-invest of {gp_coinvest}% is unusually high. Verify this is actual GP cash - '
-                                 'not rolled equity from a prior phase, land contribution, or deferred fees.'})
+                      'message': f'GP co-invest of {gp_coinvest}% is unusually high. Verify this is actual GP cash - not rolled equity from a prior phase, land contribution, or deferred fees.'})
     elif gp_coinvest is not None and gp_coinvest < 5:
         flags.append({'severity': 'red', 'category': 'Alignment',
                       'message': f'GP co-invest is only {gp_coinvest}%. Strong sponsors invest 5-10%+ alongside LPs.'})
@@ -219,7 +237,6 @@ def validate_deal_metrics(metrics: dict, property_type: str | None = None) -> li
         flags.append({'severity': 'green', 'category': 'Alignment',
                       'message': f'GP co-invest of {gp_coinvest}% shows strong alignment. Sponsor has skin in the game.'})
 
-    # Fee analysis
     acq_fee = _num(ds.get('fees_acquisition'))
     am_fee = _num(ds.get('fees_asset_mgmt'))
     if acq_fee and acq_fee > 3:
@@ -229,7 +246,6 @@ def validate_deal_metrics(metrics: dict, property_type: str | None = None) -> li
         flags.append({'severity': 'yellow', 'category': 'Fees',
                       'message': f'Asset management fee of {am_fee}% is above market (1-1.5% typical).'})
 
-    # LTV check (asset-class aware)
     ltv = _num(ds.get('ltv'))
     if ltv and ltv > profile["ltv_red"]:
         flags.append({'severity': 'red', 'category': 'Leverage',
@@ -238,7 +254,6 @@ def validate_deal_metrics(metrics: dict, property_type: str | None = None) -> li
         flags.append({'severity': 'yellow', 'category': 'Leverage',
                       'message': f'LTV of {ltv}% is moderate for this asset class. Watch debt service.'})
 
-    # === UNDERWRITING CHECKS ===
     beo = _num(uc.get('break_even_occupancy'))
     if beo and beo > profile["beo_red"]:
         flags.append({'severity': 'red', 'category': 'Underwriting',
@@ -250,7 +265,6 @@ def validate_deal_metrics(metrics: dict, property_type: str | None = None) -> li
         flags.append({'severity': 'green', 'category': 'Underwriting',
                       'message': f'Break-even occupancy of {beo}% provides good downside protection.'})
 
-    # DSCR
     dscr = _num(uc.get('dscr'))
     if dscr and dscr < 1.2:
         flags.append({'severity': 'red', 'category': 'Underwriting',
@@ -262,7 +276,6 @@ def validate_deal_metrics(metrics: dict, property_type: str | None = None) -> li
         flags.append({'severity': 'green', 'category': 'Underwriting',
                       'message': f'DSCR of {dscr}x is strong. Good debt service coverage.'})
 
-    # Rent growth assumption
     rg = _num(fp.get('rent_growth_assumption'))
     mrg = _num(metrics.get('market_location', {}).get('market_rent_growth'))
     if rg and rg > 4:
@@ -272,7 +285,6 @@ def validate_deal_metrics(metrics: dict, property_type: str | None = None) -> li
         flags.append({'severity': 'red', 'category': 'Underwriting',
                       'message': f'Rent growth assumption ({rg}%) exceeds market growth ({mrg}%) by >{rg - mrg:.1f}%. Sponsor may be overly optimistic.'})
 
-    # Cap rate spread
     entry_cap = _num(fp.get('entry_cap_rate'))
     exit_cap = _num(fp.get('exit_cap_rate'))
     if entry_cap and exit_cap:
@@ -287,13 +299,11 @@ def validate_deal_metrics(metrics: dict, property_type: str | None = None) -> li
             flags.append({'severity': 'green', 'category': 'Underwriting',
                           'message': f'Exit cap ({exit_cap}%) is {spread * 100:.0f}bps above entry ({entry_cap}%). Conservative underwriting.'})
 
-    # Expense ratio (asset-class aware)
     exp_ratio = _num(fp.get('operating_expense_ratio'))
     if exp_ratio and exp_ratio < profile["opex_low"]:
         flags.append({'severity': 'yellow', 'category': 'Underwriting',
                       'message': f'Expense ratio of {exp_ratio}% is below the typical floor for this asset class (~{profile["opex_low"]}%). Expenses may be understated.'})
 
-    # Occupancy assumption (asset-class aware)
     occ = _num(fp.get('occupancy_assumption'))
     if occ and occ > profile["occ_red"]:
         flags.append({'severity': 'red', 'category': 'Underwriting',
@@ -302,7 +312,6 @@ def validate_deal_metrics(metrics: dict, property_type: str | None = None) -> li
         flags.append({'severity': 'yellow', 'category': 'Underwriting',
                       'message': f'Occupancy assumption of {occ}% is optimistic for this asset class. Budget for some vacancy.'})
 
-    # Yield on cost
     yoc = _num(uc.get('yield_on_cost'))
     if yoc and entry_cap:
         if yoc <= entry_cap:
@@ -312,13 +321,11 @@ def validate_deal_metrics(metrics: dict, property_type: str | None = None) -> li
             flags.append({'severity': 'green', 'category': 'Underwriting',
                           'message': f'Yield on cost ({yoc}%) exceeds entry cap ({entry_cap}%) by {yoc - entry_cap:.1f}%. Strong value creation.'})
 
-    # Interest rate sensitivity
     irs = uc.get('interest_rate_sensitivity')
     if irs and isinstance(irs, str) and 'negative' in irs.lower():
         flags.append({'severity': 'yellow', 'category': 'Underwriting',
                       'message': 'Interest rate sensitivity shows negative returns under stress. Review floating rate risk.'})
 
-    # === SPONSOR CHECKS ===
     full_cycle = _num(se.get('sponsor_full_cycle_deals'))
     if full_cycle is not None and full_cycle < 3:
         flags.append({'severity': 'red', 'category': 'Sponsor',
@@ -340,14 +347,12 @@ def validate_deal_metrics(metrics: dict, property_type: str | None = None) -> li
         flags.append({'severity': 'green', 'category': 'Alignment',
                       'message': f'Alignment score is {alignment}/10. Strong sponsor-LP alignment.'})
 
-    # Distribution yield check
-    dist_yield = _num(tr.get('distribution_yield'))
+    dist_yield = distribution_yield
     if dist_yield and dist_yield > 0 and pref:
         if dist_yield < pref:
             flags.append({'severity': 'yellow', 'category': 'Returns',
                           'message': f'Distribution yield ({dist_yield}%) is below preferred return ({pref}%). Distributions may accrue rather than pay current.'})
 
-    # Total fee drag
     total_fee = _num(tr.get('total_fee_drag'))
     if total_fee and total_fee > 15:
         flags.append({'severity': 'red', 'category': 'Fees',
@@ -369,6 +374,38 @@ def _num(val):
         return float(val)
     except (TypeError, ValueError):
         return None
+
+
+def _add_canonical_alias_flags(flags: list[dict], rules: list[dict]) -> None:
+    """Flag same-calculation fields that disagree before scoring relies on them."""
+    for rule in rules:
+        canonical = rule.get("canonical_value")
+        alias = rule.get("alias_value")
+        if canonical is None or alias is None:
+            continue
+        diff = abs(canonical - alias)
+        tolerance = float(rule.get("tolerance") or 0)
+        if diff <= tolerance:
+            continue
+        unit = rule.get("unit", "")
+        flags.append({
+            "severity": "red",
+            "category": "Data integrity",
+            "message": (
+                f"{rule['label']} conflict: {rule['canonical_label']} "
+                f"({rule['canonical_path']} = {_fmt_alias_value(canonical, unit)}) does not match "
+                f"{rule['alias_path']} ({_fmt_alias_value(alias, unit)}). "
+                f"{rule['message']}"
+            ),
+        })
+
+
+def _fmt_alias_value(value: float, unit: str) -> str:
+    if unit == "%":
+        return f"{value:.1f}%"
+    if unit == "x":
+        return f"{value:.2f}x"
+    return f"{value:g}{unit}"
 
 
 def _add_benchmark_flags(flags: list[dict], metrics: dict, property_type: str | None) -> None:
@@ -410,8 +447,6 @@ def _add_benchmark_flags(flags: list[dict], metrics: dict, property_type: str | 
                 ),
             })
 
-    # Cross-field benchmarks catch values that are individually plausible but
-    # suspicious together.
     cc = sections["construction_costs"]
     fp = sections["financial_projections"]
     uc = sections["underwriting_checks"]
