@@ -190,7 +190,7 @@ function statusStyle(status: string, hasConflict: boolean) {
     case "unverifiable":
       return { Icon: HelpCircle, label: "Unverifiable", className: "bg-muted text-muted-foreground ring-border" };
     case "calculated":
-      return { Icon: Calculator, label: "Calculated", className: "bg-chart-3/15 text-[hsl(var(--chart-3))] ring-[hsl(var(--chart-3))/.3" };
+      return { Icon: Calculator, label: "Calculated", className: "bg-chart-3/15 text-[hsl(var(--chart-3))] ring-[hsl(var(--chart-3))]/30" };
     case "manual":
       return { Icon: Lock, label: "Manual", className: "bg-primary/15 text-primary ring-primary/30" };
     case "missing":
