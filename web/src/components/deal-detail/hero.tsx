@@ -20,6 +20,9 @@ const STATUS_STYLES: Record<string, string> = {
 export function DealHero({ deal }: { deal: DealDetail }) {
   const locationBits = [deal.city, deal.state].filter(Boolean).join(", ") || deal.location;
   const visibleScore = deal.overall_score ?? deal.scores?.provisional_overall ?? null;
+  const tr = (deal.metrics?.target_returns ?? {}) as Record<string, unknown>;
+  const headlineIrr = asNum(tr.net_irr) ?? asNum(tr.target_irr) ?? deal.target_irr;
+  const headlineMultiple = asNum(tr.net_equity_multiple) ?? asNum(tr.target_equity_multiple) ?? deal.target_equity_multiple;
 
   return (
     <FadeIn>
@@ -70,8 +73,8 @@ export function DealHero({ deal }: { deal: DealDetail }) {
 
             {/* Key metrics row */}
             <div className="mt-6 grid grid-cols-2 sm:grid-cols-4 gap-6">
-              <Metric label="Target IRR" value={fmtPct(deal.target_irr)} />
-              <Metric label="Equity Multiple" value={fmtMultiple(deal.target_equity_multiple)} />
+              <Metric label="Target IRR" value={fmtPct(headlineIrr)} />
+              <Metric label="Equity Multiple" value={fmtMultiple(headlineMultiple)} />
               <Metric label="Min Investment" value={fmtMoney(deal.minimum_investment)} />
               <Metric label="Documents" value={String(deal.documents?.length ?? 0)} />
             </div>
@@ -113,4 +116,10 @@ function Metric({ label, value }: { label: string; value: string }) {
       <div className="text-xl font-semibold tabular-nums tracking-tight mt-1.5">{value}</div>
     </div>
   );
+}
+
+function asNum(v: unknown): number | null {
+  if (typeof v === "number" && !Number.isNaN(v)) return v;
+  if (typeof v === "string" && v.trim() !== "" && !Number.isNaN(Number(v))) return Number(v);
+  return null;
 }
