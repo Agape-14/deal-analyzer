@@ -10,7 +10,7 @@ import { ReviewQueue } from "@/components/deal-detail/review-queue";
 import { PipelineTimeline } from "@/components/deal-detail/pipeline-timeline";
 import { SourceCitations } from "@/components/deal-detail/source-citations";
 import { UploadCompleteness } from "@/components/deal-detail/upload-completeness";
-import type { DealDetail } from "@/lib/types";
+import type { DealDetail, FieldProvenance } from "@/lib/types";
 import { fmtMoney, fmtMultiple, fmtPct } from "@/lib/utils";
 
 const HERO_KEYS = [
@@ -22,6 +22,8 @@ const HERO_KEYS = [
   "ltv",
 ] as const;
 
+type ProvenanceMap = Record<string, FieldProvenance | undefined>;
+
 export function OverviewTab({ deal }: { deal: DealDetail }) {
   const tr = (deal.metrics?.target_returns ?? {}) as Record<string, unknown>;
   const ds = (deal.metrics?.deal_structure ?? {}) as Record<string, unknown>;
@@ -31,9 +33,9 @@ export function OverviewTab({ deal }: { deal: DealDetail }) {
   const uc = (deal.metrics?.underwriting_checks ?? {}) as Record<string, unknown>;
   const se = (deal.metrics?.sponsor_evaluation ?? {}) as Record<string, unknown>;
 
-  const provenance = deal.metrics?._provenance;
-  const headlineIrr = asNum(tr.net_irr) ?? asNum(tr.target_irr);
-  const headlineMultiple = asNum(tr.net_equity_multiple) ?? asNum(tr.target_equity_multiple);
+  const provenance = (deal.metrics?._provenance ?? {}) as ProvenanceMap;
+  const headlineIrr = pickTrustedNumber(tr, provenance, ["target_returns.net_irr", "target_returns.target_irr"]);
+  const headlineMultiple = pickTrustedNumber(tr, provenance, ["target_returns.net_equity_multiple", "target_returns.target_equity_multiple"]);
   const quality = deal.quality && deal.scores?.data_quality
     ? { ...deal.quality, data_quality: deal.scores.data_quality }
     : deal.quality ?? deal.scores?.data_quality;
@@ -142,6 +144,24 @@ function Stat({ label, value, sub, small }: { label: string; value: string; sub?
       </div>
     </div>
   );
+}
+
+function pickTrustedNumber(block: Record<string, unknown>, provenance: ProvenanceMap, paths: string[]): number | null {
+  const candidates = paths
+    .map((path) => ({ path, value: asNum(block[path.split(".").at(-1) ?? path]), provenance: provenance[path] }))
+    .filter((candidate) => candidate.value !== null);
+
+  if (candidates.length === 0) return null;
+  const clean = candidates.filter((candidate) => !isBadSource(candidate.provenance));
+  const reviewed = clean.find((candidate) => candidate.provenance?.locked || ["manual", "confirmed", "calculated"].includes(String(candidate.provenance?.status ?? "")));
+  return (reviewed ?? clean[0] ?? candidates[0]).value;
+}
+
+function isBadSource(provenance?: FieldProvenance): boolean {
+  if (!provenance) return false;
+  const status = String(provenance.status ?? "").toLowerCase();
+  const conflictCount = Array.isArray(provenance.conflict) ? provenance.conflict.length : 0;
+  return conflictCount > 1 || ["wrong", "missing", "unverifiable", "stale"].includes(status);
 }
 
 function asNum(v: unknown): number | null {
