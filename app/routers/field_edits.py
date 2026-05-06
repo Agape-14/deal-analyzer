@@ -1,7 +1,7 @@
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm.attributes import flag_modified
@@ -20,6 +20,10 @@ class FieldEditIn(BaseModel):
     path: str
     value: Optional[float | str | int | bool] = None
     lock: Optional[bool] = True
+
+
+class BatchFieldEditIn(BaseModel):
+    edits: list[FieldEditIn] = Field(..., min_length=1, max_length=25)
 
 
 class FieldLockIn(BaseModel):
@@ -54,6 +58,29 @@ async def edit_field(deal_id: int, data: FieldEditIn, db: AsyncSession = Depends
     _refresh_integrity(deal, metrics)
     await db.commit()
     return {"message": "Field updated", "path": data.path, "locked": bool(data.lock)}
+
+
+@router.post("/{deal_id}/fields/batch-edit")
+async def batch_edit_fields(deal_id: int, data: BatchFieldEditIn, db: AsyncSession = Depends(get_db)):
+    """Apply several user corrections, then rerun math/validation/scoring once."""
+    result = await db.execute(select(Deal).where(Deal.id == deal_id))
+    deal = result.scalar_one_or_none()
+    if not deal:
+        raise HTTPException(status_code=404, detail="Deal not found")
+
+    metrics = dict(deal.metrics or {})
+    changed: list[str] = []
+    seen: set[str] = set()
+    for edit in data.edits:
+        if edit.path in seen:
+            raise HTTPException(status_code=400, detail=f"Duplicate edit path: {edit.path}")
+        seen.add(edit.path)
+        metrics = mark_manual_edit(metrics, edit.path, edit.value, lock=bool(edit.lock))
+        changed.append(edit.path)
+
+    _refresh_integrity(deal, metrics)
+    await db.commit()
+    return {"message": "Fields updated", "paths": changed, "locked": True}
 
 
 @router.post("/{deal_id}/fields/lock")
