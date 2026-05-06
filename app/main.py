@@ -146,6 +146,33 @@ app.include_router(notifications_router.router, prefix="/api/notifications", tag
 app.include_router(admin_router.router, prefix="/api/admin", tags=["admin"])
 
 
+def _dedupe_document_routes() -> None:
+    """Keep the Excel-aware document handlers and remove legacy duplicates."""
+    preferred = {
+        ("/api/deals/{deal_id}/documents/upload", frozenset({"POST"})),
+        ("/api/deals/documents/{doc_id}/reprocess", frozenset({"POST"})),
+        ("/api/deals/documents/{doc_id}/file", frozenset({"GET"})),
+    }
+    seen_preferred: set[tuple[str, frozenset[str]]] = set()
+    routes = []
+    for route in app.router.routes:
+        methods = frozenset(getattr(route, "methods", set()) or set())
+        key = (getattr(route, "path", ""), methods)
+        if key in preferred:
+            endpoint_module = getattr(getattr(route, "endpoint", None), "__module__", "")
+            if endpoint_module == "app.routers.deal_uploads":
+                seen_preferred.add(key)
+                routes.append(route)
+            elif key not in seen_preferred:
+                routes.append(route)
+            continue
+        routes.append(route)
+    app.router.routes[:] = routes
+
+
+_dedupe_document_routes()
+
+
 @app.get("/api/healthz")
 async def healthz():
     """Liveness + configuration probe.
