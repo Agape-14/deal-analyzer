@@ -34,8 +34,8 @@ export function OverviewTab({ deal }: { deal: DealDetail }) {
   const se = (deal.metrics?.sponsor_evaluation ?? {}) as Record<string, unknown>;
 
   const provenance = (deal.metrics?._provenance ?? {}) as ProvenanceMap;
-  const headlineIrr = pickTrustedNumber(tr, provenance, ["target_returns.net_irr", "target_returns.target_irr"]);
-  const headlineMultiple = pickTrustedNumber(tr, provenance, ["target_returns.net_equity_multiple", "target_returns.target_equity_multiple"]);
+  const headlineIrr = pickTrustedNumber(tr, provenance, ["target_returns.target_irr", "target_returns.net_irr"]);
+  const headlineMultiple = pickTrustedNumber(tr, provenance, ["target_returns.target_equity_multiple", "target_returns.net_equity_multiple"]);
   const quality = deal.quality && deal.scores?.data_quality
     ? { ...deal.quality, data_quality: deal.scores.data_quality }
     : deal.quality ?? deal.scores?.data_quality;
