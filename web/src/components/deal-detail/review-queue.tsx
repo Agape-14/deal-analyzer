@@ -193,7 +193,9 @@ function ReviewRow({ item, index, dealId }: { item: ReviewItem; index: number; d
               {item.inputs.map((input) => (
                 <a
                   key={input.path}
-                  href={`#${sourceCitationId(input.path)}`}
+                  href={sourceHref(input.provenance, input.path)}
+                  target={input.provenance?.source_doc_id ? "_blank" : undefined}
+                  rel={input.provenance?.source_doc_id ? "noreferrer" : undefined}
                   className="rounded-md bg-muted/45 px-2 py-1 text-[11px] text-muted-foreground ring-1 ring-border/60 transition-colors hover:bg-muted hover:text-foreground"
                 >
                   {input.label}: <span className="text-foreground">{formatReviewValue(input.value, input.path)}</span>
@@ -247,20 +249,50 @@ function MathInputEditor({ dealId, inputs }: { dealId: number; inputs: ReviewInp
     }
   }
 
+  async function saveAll() {
+    setBusyPath("__all");
+    try {
+      await api.post(`/api/deals/${dealId}/fields/batch-edit`, {
+        edits: inputs.map((input) => ({
+          path: input.path,
+          value: parseDraftValue(drafts[input.path] ?? "", input.value),
+          lock: true,
+        })),
+      });
+      toast.success("Inputs saved and math checks rerun", { description: `${inputs.length} fields updated` });
+      router.refresh();
+    } catch (e) {
+      toast.error("Could not save inputs", { description: (e as { detail?: string })?.detail });
+    } finally {
+      setBusyPath(null);
+    }
+  }
+
   return (
     <div className="mt-3 rounded-lg border border-primary/25 bg-primary/5 p-3">
       <div className="mb-2 flex items-center justify-between gap-3">
         <div>
           <div className="text-xs font-semibold tracking-tight text-foreground">Resolve calculation</div>
-          <p className="mt-0.5 text-[11px] text-muted-foreground">Correct the wrong or missing inputs, then the pipeline will re-check the math.</p>
+          <p className="mt-0.5 text-[11px] text-muted-foreground">Correct the wrong or missing inputs, then save them together to rerun the math check once.</p>
         </div>
+        <Button size="sm" onClick={saveAll} disabled={busyPath !== null}>
+          {busyPath === "__all" ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <CheckCircle2 className="h-3.5 w-3.5" />}
+          Save all and rerun
+        </Button>
       </div>
       <div className="grid gap-2 lg:grid-cols-2">
         {inputs.map((input) => (
           <div key={input.path} className="rounded-md border border-border/70 bg-background/70 p-2">
             <div className="mb-1 flex items-center justify-between gap-2">
               <div className="text-[11px] font-medium text-muted-foreground">{input.label}</div>
-              <a href={`#${sourceCitationId(input.path)}`} className="text-[11px] text-primary hover:underline">source</a>
+              <a
+                href={sourceHref(input.provenance, input.path)}
+                target={input.provenance?.source_doc_id ? "_blank" : undefined}
+                rel={input.provenance?.source_doc_id ? "noreferrer" : undefined}
+                className="text-[11px] text-primary hover:underline"
+              >
+                source
+              </a>
             </div>
             <div className="flex items-center gap-2">
               <input
@@ -288,7 +320,7 @@ function ReviewActions({ item, dealId }: { item: ReviewItem; dealId: number }) {
   const [editing, setEditing] = React.useState(false);
   const [draft, setDraft] = React.useState(() => scalarToInput(item.value));
   const canEdit = Boolean(item.path);
-  const actionHref = item.actionHref ?? (item.path ? `#${sourceCitationId(item.path)}` : "#technical-details");
+  const actionHref = item.actionHref ?? (item.path ? sourceHref(item.provenance, item.path) : "#technical-details");
   const actionLabel = item.actionLabel ?? (item.kind === "math" ? "View sources" : "View source");
 
   async function saveValue(value: unknown, mode: "apply" | "save") {
@@ -330,7 +362,7 @@ function ReviewActions({ item, dealId }: { item: ReviewItem; dealId: number }) {
         <FieldReviewAction dealId={dealId} path={item.path} value={item.value} provenance={item.provenance} />
       ) : null}
       <Button size="sm" variant="outline" asChild>
-        <a href={actionHref}>{actionLabel}</a>
+        <a href={actionHref} target={item.provenance?.source_doc_id ? "_blank" : undefined} rel={item.provenance?.source_doc_id ? "noreferrer" : undefined}>{actionLabel}</a>
       </Button>
       {editing && item.path && (
         <div className="flex w-full items-center gap-2 md:w-auto">
@@ -387,7 +419,7 @@ function mathItems(gate: DataQualityGate | undefined, metrics: DealDetail["metri
       title: check.check || "Math check failed",
       detail: [check.difference, check.formula].filter(Boolean).join(" - ") || "A deterministic calculation does not match the extracted deal values.",
       inputs,
-      actionHref: config?.primaryPath ? `#${sourceCitationId(config.primaryPath)}` : "#technical-details",
+      actionHref: config?.primaryPath ? sourceHref(provenance[config.primaryPath], config.primaryPath) : "#technical-details",
       actionLabel: "View sources",
     };
   });
@@ -417,7 +449,7 @@ function flagItems(
         source: path ? sourceLabel(provenance[path]) : undefined,
         recommendedValue: alias?.value,
         recommendedLabel: alias?.label,
-        actionHref: path ? `#${sourceCitationId(path)}` : "#source-citations",
+        actionHref: path ? sourceHref(provenance[path], path) : "#source-citations",
         actionLabel: path ? "View source" : "Review sources",
       };
     });
@@ -446,7 +478,7 @@ function sourceItems(metrics: DealDetail["metrics"], provenance: Record<string, 
       value,
       provenance: prov,
       source: sourceLabel(prov),
-      actionHref: `#${sourceCitationId(field.path)}`,
+      actionHref: sourceHref(prov, field.path),
       actionLabel: "View source",
     });
   }
@@ -512,6 +544,14 @@ function sourceDetail(provenance: FieldProvenance): string {
 function sourceLabel(provenance?: FieldProvenance): string | undefined {
   if (!provenance?.source_doc_name) return undefined;
   return `${provenance.source_doc_name}${provenance.source_page ? ` p.${provenance.source_page}` : ""}`;
+}
+
+function sourceHref(provenance: FieldProvenance | undefined, path: string): string {
+  if (provenance?.source_doc_id) {
+    const page = provenance.source_page ? `#page=${provenance.source_page}` : "";
+    return `/api/deals/documents/${provenance.source_doc_id}/file${page}`;
+  }
+  return `#${sourceCitationId(path)}`;
 }
 
 function areaForFlag(flag: ValidationFlag, path?: string): ReviewArea {
