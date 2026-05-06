@@ -31,6 +31,8 @@ export function OverviewTab({ deal }: { deal: DealDetail }) {
   const se = (deal.metrics?.sponsor_evaluation ?? {}) as Record<string, unknown>;
 
   const provenance = deal.metrics?._provenance;
+  const headlineIrr = asNum(tr.net_irr) ?? asNum(tr.target_irr);
+  const headlineMultiple = asNum(tr.net_equity_multiple) ?? asNum(tr.target_equity_multiple);
 
   return (
     <div className="space-y-6">
@@ -45,8 +47,8 @@ export function OverviewTab({ deal }: { deal: DealDetail }) {
 
           {/* Returns & Structure */}
           <div className="grid grid-cols-4 gap-x-6 gap-y-4">
-            <Stat label="Target IRR" value={fmtPct(asNum(tr.target_irr), 1)} />
-            <Stat label="Equity Multiple" value={fmtMultiple(asNum(tr.target_equity_multiple))} />
+            <Stat label="Target IRR" value={fmtPct(headlineIrr, 1)} />
+            <Stat label="Equity Multiple" value={fmtMultiple(headlineMultiple)} />
             <Stat label="Cash-on-Cash" value={fmtPct(asNum(tr.target_cash_on_cash), 1)} />
             <Stat label="Hold Period" value={fmtYears(asNum(ds.hold_period_years))} />
             <Stat label="Pref Return" value={fmtPct(asNum(ds.preferred_return), 1)} />
