@@ -6,6 +6,7 @@ asyncpg
 pymupdf
 anthropic
 openpyxl
+xlrd
 python-multipart
 jinja2
 httpx
