@@ -8,8 +8,9 @@ from dataclasses import dataclass, field
 from typing import Any
 
 
-MAX_ROWS_PER_SHEET = 250
-MAX_COLS_PER_SHEET = 50
+MAX_SHEETS = 20
+MAX_ROWS_PER_SHEET = 150
+MAX_COLS_PER_SHEET = 40
 
 
 @dataclass
@@ -42,24 +43,23 @@ def _extract_xlsx(file_path: str) -> SpreadsheetExtractionResult:
     from openpyxl import load_workbook
 
     result = SpreadsheetExtractionResult()
-    values_wb = load_workbook(file_path, data_only=True, read_only=True)
-    formula_wb = load_workbook(file_path, data_only=False, read_only=True)
-    sheet_names = list(values_wb.sheetnames)
+    wb = load_workbook(file_path, data_only=True, read_only=True)
+    sheet_names = list(wb.sheetnames)[:MAX_SHEETS]
 
     text_parts: list[str] = []
-    for sheet_index, sheet_name in enumerate(sheet_names, 1):
-        values_ws = values_wb[sheet_name]
-        formula_ws = formula_wb[sheet_name]
-        rows, table_rows = _worksheet_rows(values_ws, formula_ws)
-        result.page_diagnostics.append(
-            {"page": sheet_index, "source": "spreadsheet", "chars": sum(len(r) for r in rows)}
-        )
-        if table_rows:
-            result.tables.append({"sheet": sheet_name, "rows": table_rows})
-        text_parts.append(_render_sheet(sheet_name, rows))
+    try:
+        for sheet_index, sheet_name in enumerate(sheet_names, 1):
+            ws = wb[sheet_name]
+            rows, table_rows = _worksheet_rows(ws)
+            result.page_diagnostics.append(
+                {"page": sheet_index, "source": "spreadsheet", "chars": sum(len(r) for r in rows)}
+            )
+            if table_rows:
+                result.tables.append({"sheet": sheet_name, "rows": table_rows})
+            text_parts.append(_render_sheet(sheet_name, rows))
+    finally:
+        wb.close()
 
-    values_wb.close()
-    formula_wb.close()
     result.page_count = len(sheet_names)
     result.text = "\n\n".join(part for part in text_parts if part.strip())
     result.quality_score = 100 if result.text.strip() else 0
@@ -77,7 +77,9 @@ def _extract_xls(file_path: str) -> SpreadsheetExtractionResult:
 
     book = xlrd.open_workbook(file_path)
     text_parts: list[str] = []
-    for sheet_index, sheet in enumerate(book.sheets(), 1):
+    sheet_count = min(book.nsheets, MAX_SHEETS)
+    for sheet_index in range(sheet_count):
+        sheet = book.sheet_by_index(sheet_index)
         rows: list[str] = []
         table_rows: list[list[Any]] = []
         max_rows = min(sheet.nrows, MAX_ROWS_PER_SHEET)
@@ -91,11 +93,11 @@ def _extract_xls(file_path: str) -> SpreadsheetExtractionResult:
         if table_rows:
             result.tables.append({"sheet": sheet.name, "rows": table_rows})
         result.page_diagnostics.append(
-            {"page": sheet_index, "source": "spreadsheet", "chars": sum(len(r) for r in rows)}
+            {"page": sheet_index + 1, "source": "spreadsheet", "chars": sum(len(r) for r in rows)}
         )
         text_parts.append(_render_sheet(sheet.name, rows))
 
-    result.page_count = book.nsheets
+    result.page_count = sheet_count
     result.text = "\n\n".join(part for part in text_parts if part.strip())
     result.quality_score = 100 if result.text.strip() else 0
     return result
@@ -123,21 +125,20 @@ def _extract_csv(file_path: str) -> SpreadsheetExtractionResult:
     return result
 
 
-def _worksheet_rows(values_ws, formula_ws) -> tuple[list[str], list[list[Any]]]:
+def _worksheet_rows(ws) -> tuple[list[str], list[list[Any]]]:
     rows: list[str] = []
     table_rows: list[list[Any]] = []
-    max_row = min(values_ws.max_row or 0, MAX_ROWS_PER_SHEET)
-    max_col = min(values_ws.max_column or 0, MAX_COLS_PER_SHEET)
+    max_row = min(ws.max_row or 0, MAX_ROWS_PER_SHEET)
+    max_col = min(ws.max_column or 0, MAX_COLS_PER_SHEET)
 
     for row_idx in range(1, max_row + 1):
         row_values: list[str] = []
         raw_values: list[Any] = []
         for col_idx in range(1, max_col + 1):
-            value = values_ws.cell(row=row_idx, column=col_idx).value
-            formula = formula_ws.cell(row=row_idx, column=col_idx).value
-            rendered = _render_cell(value, formula)
+            value = ws.cell(row=row_idx, column=col_idx).value
+            rendered = _render_cell(value)
             row_values.append(rendered)
-            raw_values.append(value if value is not None else formula)
+            raw_values.append(value)
         if not any(v != "" for v in row_values):
             continue
         table_rows.append(raw_values)
@@ -152,11 +153,7 @@ def _render_sheet(sheet_name: str, rows: list[str]) -> str:
     return f"--- Sheet: {sheet_name} ---\n" + "\n".join(rows)
 
 
-def _render_cell(value: Any, formula: Any) -> str:
-    if isinstance(formula, str) and formula.startswith("="):
-        if value not in (None, "") and value != formula:
-            return f"{_clean_cell(value)} ({formula})"
-        return formula
+def _render_cell(value: Any) -> str:
     return str(_clean_cell(value))
 
 
