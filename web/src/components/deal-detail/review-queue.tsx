@@ -13,6 +13,13 @@ import type { DataQualityGate, DealDetail, FieldProvenance, ValidationFlag } fro
 
 type ReviewArea = "Returns" | "Capital Stack" | "Debt" | "Construction" | "Sponsor" | "Market" | "Math" | "Source";
 
+type ReviewInput = {
+  path: string;
+  label: string;
+  value: unknown;
+  source?: string;
+};
+
 type ReviewItem = {
   key: string;
   priority: number;
@@ -27,6 +34,9 @@ type ReviewItem = {
   source?: string;
   recommendedValue?: string | number | boolean | null;
   recommendedLabel?: string;
+  inputs?: ReviewInput[];
+  actionHref?: string;
+  actionLabel?: string;
 };
 
 const REVIEW_LIMIT = 3;
@@ -46,8 +56,33 @@ const REVIEW_FIELDS = [
   { path: "financial_projections.stabilized_noi", label: "Stabilized NOI", format: "money" },
   { path: "financial_projections.avg_rent_per_unit", label: "Average rent", format: "money" },
   { path: "financial_projections.occupancy_assumption", label: "Occupancy", format: "pct" },
+  { path: "underwriting_checks.dscr", label: "DSCR", format: "multiple" },
   { path: "project_details.unit_count", label: "Unit count", format: "integer" },
 ] as const;
+
+const MATH_REVIEW_INPUTS: Array<{ match: RegExp; primaryPath: string; inputs: Array<{ path: string; label: string }> }> = [
+  {
+    match: /dscr|debt service/i,
+    primaryPath: "financial_projections.stabilized_noi",
+    inputs: [
+      { path: "underwriting_checks.dscr", label: "Reported DSCR" },
+      { path: "financial_projections.stabilized_noi", label: "NOI" },
+      { path: "deal_structure.debt_amount", label: "Debt" },
+      { path: "deal_structure.interest_rate", label: "Rate" },
+    ],
+  },
+  {
+    match: /hard.*soft.*land.*contingency|total cost/i,
+    primaryPath: "deal_structure.total_project_cost",
+    inputs: [
+      { path: "construction_costs.hard_costs", label: "Hard costs" },
+      { path: "construction_costs.soft_costs", label: "Soft costs" },
+      { path: "construction_costs.land_cost", label: "Land" },
+      { path: "construction_costs.contingency", label: "Contingency" },
+      { path: "deal_structure.total_project_cost", label: "Total cost" },
+    ],
+  },
+];
 
 export function ReviewQueue({ deal }: { deal: DealDetail }) {
   const items = buildReviewItems(deal);
@@ -145,6 +180,22 @@ function ReviewRow({ item, index, dealId }: { item: ReviewItem; index: number; d
           </span>
         </div>
         <p className="mt-1 text-xs leading-relaxed text-muted-foreground">{item.detail}</p>
+        {item.inputs && item.inputs.length > 0 && (
+          <div className="mt-3 rounded-md border border-border/60 bg-background/40 p-2">
+            <div className="mb-1 text-[10px] uppercase tracking-[0.12em] text-muted-foreground">Inputs to check</div>
+            <div className="flex flex-wrap gap-2">
+              {item.inputs.map((input) => (
+                <a
+                  key={input.path}
+                  href={`#${sourceCitationId(input.path)}`}
+                  className="rounded-md bg-muted/45 px-2 py-1 text-[11px] text-muted-foreground ring-1 ring-border/60 transition-colors hover:bg-muted hover:text-foreground"
+                >
+                  {input.label}: <span className="text-foreground">{formatReviewValue(input.value, input.path)}</span>
+                </a>
+              ))}
+            </div>
+          </div>
+        )}
         {(item.value !== undefined || item.recommendedValue !== undefined || item.source) && (
           <div className="mt-2 flex flex-wrap gap-2 text-[11px] text-muted-foreground">
             {item.value !== undefined && <span>Current: <span className="text-foreground">{formatReviewValue(item.value, item.path)}</span></span>}
@@ -165,6 +216,8 @@ function ReviewActions({ item, dealId }: { item: ReviewItem; dealId: number }) {
   const [editing, setEditing] = React.useState(false);
   const [draft, setDraft] = React.useState(() => scalarToInput(item.value));
   const canEdit = Boolean(item.path);
+  const actionHref = item.actionHref ?? (item.path ? `#${sourceCitationId(item.path)}` : "#technical-details");
+  const actionLabel = item.actionLabel ?? (item.kind === "math" ? "Review inputs" : "View source");
 
   async function saveValue(value: unknown, mode: "apply" | "save") {
     if (!item.path) return;
@@ -205,7 +258,7 @@ function ReviewActions({ item, dealId }: { item: ReviewItem; dealId: number }) {
         <FieldReviewAction dealId={dealId} path={item.path} value={item.value} provenance={item.provenance} />
       ) : null}
       <Button size="sm" variant="outline" asChild>
-        <a href={item.kind === "math" ? "#technical-details" : "#source-citations"}>View source</a>
+        <a href={actionHref}>{actionLabel}</a>
       </Button>
       {editing && item.path && (
         <div className="flex w-full items-center gap-2 md:w-auto">
@@ -234,7 +287,7 @@ function buildReviewItems(deal: DealDetail): ReviewItem[] {
   const flags = metrics.validation_flags ?? [];
   const items: ReviewItem[] = [];
 
-  items.push(...mathItems(gate));
+  items.push(...mathItems(gate, metrics, provenance));
   items.push(...flagItems(flags, metrics, provenance));
   items.push(...sourceItems(metrics, provenance));
 
@@ -243,17 +296,28 @@ function buildReviewItems(deal: DealDetail): ReviewItem[] {
     .slice(0, 12);
 }
 
-function mathItems(gate?: DataQualityGate): ReviewItem[] {
+function mathItems(gate: DataQualityGate | undefined, metrics: DealDetail["metrics"], provenance: Record<string, FieldProvenance>): ReviewItem[] {
   const blocking = gate?.math_summary?.blocking ?? [];
-  return blocking.map((check, index) => ({
-    key: `math:${check.check ?? index}`,
-    priority: 100 - index,
-    kind: "math" as const,
-    area: "Math" as const,
-    severity: "red" as const,
-    title: check.check || "Math check failed",
-    detail: [check.difference, check.formula].filter(Boolean).join(" - ") || "A deterministic calculation does not match the extracted deal values.",
-  }));
+  return blocking.map((check, index) => {
+    const config = MATH_REVIEW_INPUTS.find((entry) => entry.match.test(check.check ?? ""));
+    const inputs = config?.inputs.map((input) => ({
+      ...input,
+      value: getPath(metrics, input.path),
+      source: sourceLabel(provenance[input.path]),
+    }));
+    return {
+      key: `math:${check.check ?? index}`,
+      priority: 100 - index,
+      kind: "math" as const,
+      area: "Math" as const,
+      severity: "red" as const,
+      title: check.check || "Math check failed",
+      detail: [check.difference, check.formula].filter(Boolean).join(" - ") || "A deterministic calculation does not match the extracted deal values.",
+      inputs,
+      actionHref: config?.primaryPath ? `#${sourceCitationId(config.primaryPath)}` : "#technical-details",
+      actionLabel: "Review inputs",
+    };
+  });
 }
 
 function flagItems(
@@ -280,6 +344,8 @@ function flagItems(
         source: path ? sourceLabel(provenance[path]) : undefined,
         recommendedValue: alias?.value,
         recommendedLabel: alias?.label,
+        actionHref: path ? `#${sourceCitationId(path)}` : "#source-citations",
+        actionLabel: path ? "View source" : "Review sources",
       };
     });
 }
@@ -307,6 +373,8 @@ function sourceItems(metrics: DealDetail["metrics"], provenance: Record<string, 
       value,
       provenance: prov,
       source: sourceLabel(prov),
+      actionHref: `#${sourceCitationId(field.path)}`,
+      actionLabel: "View source",
     });
   }
   return out;
@@ -399,6 +467,10 @@ function getPath(data: unknown, path?: string): unknown {
     cur = (cur as Record<string, unknown>)[part];
   }
   return cur;
+}
+
+function sourceCitationId(path: string): string {
+  return `source-citation-${path.replace(/[^a-zA-Z0-9_-]+/g, "-")}`;
 }
 
 function formatReviewValue(value: unknown, path?: string): string {
