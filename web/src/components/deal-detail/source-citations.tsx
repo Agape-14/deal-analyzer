@@ -71,15 +71,15 @@ export function SourceCitations({ deal }: { deal: DealDetail }) {
 
 function citationRow(metrics: CitationMetrics, provenance: Record<string, FieldProvenance>, field: CitationField) {
   if (field.path === "target_returns.target_irr") {
-    const canonical = pickCanonicalReturnMetric(metrics, provenance, ["target_returns.net_irr", "target_returns.target_irr"]);
+    const canonical = pickCanonicalReturnMetric(metrics, provenance, ["target_returns.target_irr", "target_returns.net_irr"]);
     if (canonical) {
       return {
         field: { ...field, path: canonical.path },
         value: canonical.value,
         prov: canonical.prov,
-        note: canonical.path === "target_returns.net_irr"
-          ? "Using investor net IRR as the canonical Target IRR. Cash-on-cash remains separate below."
-          : "Using the reviewed Target IRR while the return aliases are being resolved.",
+        note: canonical.path === "target_returns.target_irr"
+          ? "Using Target IRR as the headline return metric. Net IRR and cash-on-cash remain separate checks."
+          : "Target IRR is missing, so investor net IRR is being used as the fallback headline return.",
       };
     }
   }
