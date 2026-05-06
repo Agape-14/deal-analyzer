@@ -44,7 +44,9 @@ export function MetricsSection({
     );
   }
 
-  const entries = Object.entries(data).filter(([, v]) => {
+  let entries = getDisplayEntries(sectionKey, data);
+  entries = entries.filter((entry) => {
+    const v = entry.value;
     if (v === null || v === "" || v === undefined) return false;
     // Empty arrays / empty objects add visual noise without carrying info.
     if (Array.isArray(v) && v.length === 0) return false;
@@ -54,10 +56,20 @@ export function MetricsSection({
     return true;
   });
   if (keysOrder) {
-    entries.sort(([a], [b]) => {
-      const ai = keysOrder.indexOf(a);
-      const bi = keysOrder.indexOf(b);
-      if (ai === -1 && bi === -1) return a.localeCompare(b);
+    entries.sort((a, b) => {
+      const ai = keysOrder.indexOf(a.name);
+      const bi = keysOrder.indexOf(b.name);
+      if (ai === -1 && bi === -1) return a.name.localeCompare(b.name);
+      if (ai === -1) return 1;
+      if (bi === -1) return -1;
+      return ai - bi;
+    });
+  } else if (sectionKey === "target_returns") {
+    entries.sort((a, b) => {
+      const order = TARGET_RETURN_ORDER as readonly string[];
+      const ai = order.indexOf(a.name);
+      const bi = order.indexOf(b.name);
+      if (ai === -1 && bi === -1) return a.name.localeCompare(b.name);
       if (ai === -1) return 1;
       if (bi === -1) return -1;
       return ai - bi;
@@ -69,14 +81,68 @@ export function MetricsSection({
       <h3 className="text-sm font-semibold tracking-tight">{title}</h3>
       {description && <p className="text-xs text-muted-foreground mt-0.5">{description}</p>}
       <dl className="mt-4 grid grid-cols-1 sm:grid-cols-2 gap-x-8 gap-y-3">
-        {entries.map(([k, v]) => {
-          const path = sectionKey ? `${sectionKey}.${k}` : undefined;
+        {entries.map((entry) => {
+          const path = sectionKey ? `${sectionKey}.${entry.sourceName ?? entry.name}` : undefined;
           const prov = path ? provenance?.[path] : undefined;
-          return <MetricRow key={k} name={k} value={v} provenance={prov} path={path} dealId={dealId} />;
+          return (
+            <MetricRow
+              key={`${entry.name}:${entry.sourceName ?? entry.name}`}
+              name={entry.name}
+              value={entry.value}
+              provenance={prov}
+              path={path}
+              dealId={dealId}
+            />
+          );
         })}
       </dl>
     </Card>
   );
+}
+
+type DisplayEntry = { name: string; value: unknown; sourceName?: string };
+
+const TARGET_RETURN_ORDER = [
+  "target_irr",
+  "target_equity_multiple",
+  "target_cash_on_cash",
+  "distribution_yield",
+  "gross_irr",
+  "gross_equity_multiple",
+  "primary_strategy",
+  "hold_scenario",
+  "sale_scenario",
+] as const;
+
+function getDisplayEntries(sectionKey: string | undefined, data: Record<string, unknown>): DisplayEntry[] {
+  if (sectionKey !== "target_returns") {
+    return Object.entries(data).map(([name, value]) => ({ name, value }));
+  }
+
+  const entries = new Map<string, DisplayEntry>();
+  Object.entries(data).forEach(([name, value]) => entries.set(name, { name, value }));
+
+  const netIrr = data.net_irr;
+  if (netIrr !== null && netIrr !== undefined && netIrr !== "") {
+    // In extracted packages, `target_irr` can be polluted by distribution yield
+    // or cash-on-cash language. The true investor IRR is the net IRR, so render
+    // it once under the business-facing "Target IRR" label and keep provenance
+    // tied to the canonical field that supplied the value.
+    entries.set("target_irr", { name: "target_irr", value: netIrr, sourceName: "net_irr" });
+    entries.delete("net_irr");
+  }
+
+  const netMultiple = data.net_equity_multiple;
+  if (netMultiple !== null && netMultiple !== undefined && netMultiple !== "") {
+    entries.set("target_equity_multiple", {
+      name: "target_equity_multiple",
+      value: netMultiple,
+      sourceName: "net_equity_multiple",
+    });
+    entries.delete("net_equity_multiple");
+  }
+
+  return Array.from(entries.values());
 }
 
 function MetricRow({
