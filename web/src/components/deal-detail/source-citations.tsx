@@ -52,8 +52,8 @@ export function SourceCitations({ deal }: { deal: DealDetail }) {
         </div>
       </div>
 
-      <div className="mt-5 overflow-hidden rounded-lg border border-border/70">
-        <div className="hidden md:grid grid-cols-[1.05fr_.75fr_1.25fr_.95fr] gap-4 bg-muted/35 px-4 py-2 text-[10px] uppercase tracking-[0.12em] text-muted-foreground">
+      <div className="mt-5 overflow-visible rounded-lg border border-border/70">
+        <div className="hidden md:grid grid-cols-[1.05fr_.75fr_1.25fr_.95fr] gap-4 rounded-t-lg bg-muted/35 px-4 py-2 text-[10px] uppercase tracking-[0.12em] text-muted-foreground">
           <div>Metric</div>
           <div>Value</div>
           <div>Source</div>
