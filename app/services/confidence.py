@@ -9,24 +9,27 @@ the same answer.
 from typing import Any, Dict, List, Optional, Tuple
 
 
+# Each entry is (canonical_path, label, fallback_paths). The canonical path is
+# what the scoring model and UI should use. Fallbacks keep older extracted deals
+# reviewable, while math checks still block scoring when an alias conflicts.
 CRITICAL_FIELDS = (
-    ("deal_structure.minimum_investment", "Minimum investment"),
-    ("deal_structure.total_equity_required", "Total equity required"),
-    ("deal_structure.total_project_cost", "Total project cost"),
-    ("deal_structure.debt_amount", "Debt amount"),
-    ("deal_structure.ltv", "LTV"),
-    ("deal_structure.hold_period_years", "Hold period"),
-    ("target_returns.target_irr", "Target IRR"),
-    ("target_returns.target_equity_multiple", "Equity multiple"),
-    ("target_returns.target_cash_on_cash", "Cash-on-cash"),
-    ("project_details.unit_count", "Unit count"),
-    ("financial_projections.stabilized_noi", "Stabilized NOI"),
-    ("financial_projections.avg_rent_per_unit", "Average rent"),
-    ("financial_projections.occupancy_assumption", "Occupancy assumption"),
-)  # type: Tuple[Tuple[str, str], ...]
+    ("deal_structure.minimum_investment", "Minimum investment", ()),
+    ("deal_structure.total_equity_required", "Total equity required", ()),
+    ("deal_structure.total_project_cost", "Total project cost", ()),
+    ("deal_structure.debt_amount", "Debt amount", ()),
+    ("deal_structure.ltv", "LTV", ()),
+    ("deal_structure.hold_period_years", "Hold period", ()),
+    ("target_returns.net_irr", "Target IRR", ("target_returns.target_irr",)),
+    ("target_returns.net_equity_multiple", "Equity multiple", ("target_returns.target_equity_multiple",)),
+    ("target_returns.target_cash_on_cash", "Cash-on-cash", ("target_returns.distribution_yield",)),
+    ("project_details.unit_count", "Unit count", ()),
+    ("financial_projections.stabilized_noi", "Stabilized NOI", ()),
+    ("financial_projections.avg_rent_per_unit", "Average rent", ()),
+    ("financial_projections.occupancy_assumption", "Occupancy assumption", ()),
+)  # type: Tuple[Tuple[str, str, Tuple[str, ...]], ...]
 
 VERIFIED_STATUSES = {"confirmed", "calculated"}
-BAD_STATUSES = {"wrong", "missing", "unverifiable"}
+BAD_STATUSES = {"wrong", "missing", "unverifiable", "math_failed"}
 
 
 def _get_path(data, path):
@@ -46,6 +49,15 @@ def _present(value):
     if isinstance(value, str):
         return bool(value.strip())
     return value != []
+
+
+def _pick_present_path(metrics, canonical_path, fallback_paths):
+    # type: (Dict[str, Any], str, Tuple[str, ...]) -> Tuple[str, Any]
+    for path in (canonical_path, *fallback_paths):
+        value = _get_path(metrics, path)
+        if _present(value):
+            return path, value
+    return canonical_path, None
 
 
 def summarize_math_checks(checks):
@@ -86,10 +98,10 @@ def assess_data_quality(metrics, math_checks=None, require_verified=True):
     conflicted = 0
     bad = 0
 
-    for path, label in CRITICAL_FIELDS:
-        value = _get_path(metrics, path)
+    for canonical_path, label, fallback_paths in CRITICAL_FIELDS:
+        actual_path, value = _pick_present_path(metrics, canonical_path, fallback_paths)
         present = _present(value)
-        prov = provenance.get(path) or {}
+        prov = provenance.get(actual_path) or {}
         status = str(prov.get("status") or ("extracted" if present else "missing")).lower()
         source = str(prov.get("source") or "").lower()
         verified = status in VERIFIED_STATUSES or source == "manual"
@@ -115,7 +127,8 @@ def assess_data_quality(metrics, math_checks=None, require_verified=True):
             unverified += 1
 
         critical.append({
-            "path": path,
+            "path": canonical_path,
+            "actual_path": actual_path,
             "label": label,
             "present": present,
             "status": status,
