@@ -18,6 +18,7 @@ type ReviewInput = {
   label: string;
   value: unknown;
   source?: string;
+  provenance?: FieldProvenance;
 };
 
 type ReviewItem = {
@@ -52,10 +53,15 @@ const REVIEW_FIELDS = [
   { path: "deal_structure.total_project_cost", label: "Total project cost", format: "money" },
   { path: "deal_structure.total_equity_required", label: "Equity required", format: "money" },
   { path: "deal_structure.debt_amount", label: "Debt amount", format: "money" },
+  { path: "deal_structure.interest_rate", label: "Interest rate", format: "pct" },
   { path: "deal_structure.ltv", label: "LTV", format: "pct" },
   { path: "financial_projections.stabilized_noi", label: "Stabilized NOI", format: "money" },
   { path: "financial_projections.avg_rent_per_unit", label: "Average rent", format: "money" },
   { path: "financial_projections.occupancy_assumption", label: "Occupancy", format: "pct" },
+  { path: "construction_costs.hard_costs", label: "Hard costs", format: "money" },
+  { path: "construction_costs.soft_costs", label: "Soft costs", format: "money" },
+  { path: "construction_costs.land_cost", label: "Land", format: "money" },
+  { path: "construction_costs.contingency", label: "Contingency", format: "money" },
   { path: "underwriting_checks.dscr", label: "DSCR", format: "multiple" },
   { path: "project_details.unit_count", label: "Unit count", format: "integer" },
 ] as const;
@@ -161,9 +167,9 @@ export function ReviewQueue({ deal }: { deal: DealDetail }) {
 function ReviewRow({ item, index, dealId }: { item: ReviewItem; index: number; dealId: number }) {
   const Icon = item.kind === "math" ? Calculator : item.kind === "source" ? FileText : AlertTriangle;
   return (
-    <div className="grid gap-3 rounded-lg border border-border/70 bg-card/40 p-4 md:grid-cols-[auto_1fr_auto] md:items-center">
+    <div className="grid gap-3 rounded-lg border border-border/70 bg-card/40 p-4 md:grid-cols-[auto_1fr_auto] md:items-start">
       <div className={cn(
-        "flex h-8 w-8 items-center justify-center rounded-md text-xs font-semibold ring-1",
+        "flex h-8 w-8 items-center justify-center rounded-md text-xs font-semibold ring-1 md:mt-1",
         item.severity === "red"
           ? "bg-destructive/15 text-destructive ring-destructive/30"
           : "bg-warning/15 text-warning ring-warning/30",
@@ -196,6 +202,9 @@ function ReviewRow({ item, index, dealId }: { item: ReviewItem; index: number; d
             </div>
           </div>
         )}
+        {item.kind === "math" && item.inputs && item.inputs.length > 0 && (
+          <MathInputEditor dealId={dealId} inputs={item.inputs} />
+        )}
         {(item.value !== undefined || item.recommendedValue !== undefined || item.source) && (
           <div className="mt-2 flex flex-wrap gap-2 text-[11px] text-muted-foreground">
             {item.value !== undefined && <span>Current: <span className="text-foreground">{formatReviewValue(item.value, item.path)}</span></span>}
@@ -210,6 +219,69 @@ function ReviewRow({ item, index, dealId }: { item: ReviewItem; index: number; d
   );
 }
 
+function MathInputEditor({ dealId, inputs }: { dealId: number; inputs: ReviewInput[] }) {
+  const router = useRouter();
+  const [drafts, setDrafts] = React.useState<Record<string, string>>(() =>
+    Object.fromEntries(inputs.map((input) => [input.path, scalarToInput(input.value)])),
+  );
+  const [busyPath, setBusyPath] = React.useState<string | null>(null);
+
+  React.useEffect(() => {
+    setDrafts(Object.fromEntries(inputs.map((input) => [input.path, scalarToInput(input.value)])));
+  }, [inputs]);
+
+  async function saveInput(input: ReviewInput) {
+    setBusyPath(input.path);
+    try {
+      await api.post(`/api/deals/${dealId}/fields/edit`, {
+        path: input.path,
+        value: parseDraftValue(drafts[input.path] ?? "", input.value),
+        lock: true,
+      });
+      toast.success("Input updated and locked", { description: humanizePath(input.path) });
+      router.refresh();
+    } catch (e) {
+      toast.error("Could not update input", { description: (e as { detail?: string })?.detail });
+    } finally {
+      setBusyPath(null);
+    }
+  }
+
+  return (
+    <div className="mt-3 rounded-lg border border-primary/25 bg-primary/5 p-3">
+      <div className="mb-2 flex items-center justify-between gap-3">
+        <div>
+          <div className="text-xs font-semibold tracking-tight text-foreground">Resolve calculation</div>
+          <p className="mt-0.5 text-[11px] text-muted-foreground">Correct the wrong or missing inputs, then the pipeline will re-check the math.</p>
+        </div>
+      </div>
+      <div className="grid gap-2 lg:grid-cols-2">
+        {inputs.map((input) => (
+          <div key={input.path} className="rounded-md border border-border/70 bg-background/70 p-2">
+            <div className="mb-1 flex items-center justify-between gap-2">
+              <div className="text-[11px] font-medium text-muted-foreground">{input.label}</div>
+              <a href={`#${sourceCitationId(input.path)}`} className="text-[11px] text-primary hover:underline">source</a>
+            </div>
+            <div className="flex items-center gap-2">
+              <input
+                value={drafts[input.path] ?? ""}
+                onChange={(e) => setDrafts((prev) => ({ ...prev, [input.path]: e.target.value }))}
+                placeholder="missing"
+                className="h-8 min-w-0 flex-1 rounded-md border border-border bg-background px-2 text-xs outline-none focus:ring-2 focus:ring-ring"
+              />
+              <Button size="sm" variant="secondary" onClick={() => saveInput(input)} disabled={busyPath !== null}>
+                {busyPath === input.path ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}
+                Save
+              </Button>
+            </div>
+            <div className="mt-1 text-[10px] text-muted-foreground">{input.path}</div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 function ReviewActions({ item, dealId }: { item: ReviewItem; dealId: number }) {
   const router = useRouter();
   const [busy, setBusy] = React.useState<"apply" | "save" | null>(null);
@@ -217,7 +289,7 @@ function ReviewActions({ item, dealId }: { item: ReviewItem; dealId: number }) {
   const [draft, setDraft] = React.useState(() => scalarToInput(item.value));
   const canEdit = Boolean(item.path);
   const actionHref = item.actionHref ?? (item.path ? `#${sourceCitationId(item.path)}` : "#technical-details");
-  const actionLabel = item.actionLabel ?? (item.kind === "math" ? "Review inputs" : "View source");
+  const actionLabel = item.actionLabel ?? (item.kind === "math" ? "View sources" : "View source");
 
   async function saveValue(value: unknown, mode: "apply" | "save") {
     if (!item.path) return;
@@ -241,7 +313,7 @@ function ReviewActions({ item, dealId }: { item: ReviewItem; dealId: number }) {
   }
 
   return (
-    <div className="flex flex-wrap items-center gap-2 md:justify-end">
+    <div className="flex flex-wrap items-center gap-2 md:justify-end md:pt-8">
       {item.recommendedValue !== undefined && item.path && (
         <Button size="sm" onClick={() => saveValue(item.recommendedValue, "apply")} disabled={busy !== null}>
           {busy === "apply" ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <CheckCircle2 className="h-3.5 w-3.5" />}
@@ -304,6 +376,7 @@ function mathItems(gate: DataQualityGate | undefined, metrics: DealDetail["metri
       ...input,
       value: getPath(metrics, input.path),
       source: sourceLabel(provenance[input.path]),
+      provenance: provenance[input.path],
     }));
     return {
       key: `math:${check.check ?? index}`,
@@ -315,7 +388,7 @@ function mathItems(gate: DataQualityGate | undefined, metrics: DealDetail["metri
       detail: [check.difference, check.formula].filter(Boolean).join(" - ") || "A deterministic calculation does not match the extracted deal values.",
       inputs,
       actionHref: config?.primaryPath ? `#${sourceCitationId(config.primaryPath)}` : "#technical-details",
-      actionLabel: "Review inputs",
+      actionLabel: "View sources",
     };
   });
 }
@@ -413,7 +486,7 @@ function aliasRecommendation(message: string): { path: string; value: number; la
 
 function extractBestPath(message: string): string | undefined {
   const matches = message.match(/[a-z_]+\.[a-z_]+/g) ?? [];
-  const preferred = matches.find((path) => path.includes("net_")) ?? matches[0];
+  const preferred = matches.find((path) => path.includes("target_")) ?? matches.find((path) => path.includes("net_")) ?? matches[0];
   return preferred;
 }
 
@@ -499,11 +572,11 @@ function scalarToInput(value: unknown): string {
 }
 
 function parseDraftValue(value: string, original: unknown): string | number | boolean | null {
-  const trimmed = value.trim();
+  const trimmed = value.trim().replace(/[$,%x]/gi, "").replace(/,/g, "");
   if (trimmed === "") return null;
   if (typeof original === "boolean") return ["true", "1", "yes"].includes(trimmed.toLowerCase());
   if (typeof original === "number" || /^-?\d+(\.\d+)?$/.test(trimmed)) return Number(trimmed);
-  return trimmed;
+  return value.trim();
 }
 
 function humanizePath(path: string): string {
