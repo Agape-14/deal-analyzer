@@ -33,10 +33,13 @@ export function OverviewTab({ deal }: { deal: DealDetail }) {
   const provenance = deal.metrics?._provenance;
   const headlineIrr = asNum(tr.net_irr) ?? asNum(tr.target_irr);
   const headlineMultiple = asNum(tr.net_equity_multiple) ?? asNum(tr.target_equity_multiple);
+  const quality = deal.quality && deal.scores?.data_quality
+    ? { ...deal.quality, data_quality: deal.scores.data_quality }
+    : deal.quality ?? deal.scores?.data_quality;
 
   return (
     <div className="space-y-6">
-      <QualityPanel dealId={deal.id} quality={deal.quality} documents={deal.documents ?? []} />
+      <QualityPanel dealId={deal.id} quality={quality} documents={deal.documents ?? []} />
       <PipelineTimeline deal={deal} />
       <UploadCompleteness deal={deal} />
 
@@ -134,20 +137,20 @@ function asNum(v: unknown): number | null {
 
 function strVal(v: unknown): string {
   if (typeof v === "string" && v.trim()) return v;
-  return "—";
+  return "-";
 }
 
 function fmtYears(n: number | null): string {
-  if (n == null) return "—";
+  if (n == null) return "-";
   return `${n} ${n === 1 ? "yr" : "yrs"}`;
 }
 
 function fmtInt(n: number | null): string {
-  if (n == null) return "—";
+  if (n == null) return "-";
   return Math.round(n).toLocaleString();
 }
 
 function fmtX(n: number | null): string {
-  if (n == null) return "—";
+  if (n == null) return "-";
   return `${n.toFixed(2)}x`;
 }
