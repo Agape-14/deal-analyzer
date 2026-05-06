@@ -7,7 +7,10 @@ import { FieldReviewAction } from "@/components/deal-detail/field-review-action"
 import { cn, fmtDate, fmtMoney, fmtMultiple, fmtPct } from "@/lib/utils";
 import type { DealDetail, FieldProvenance } from "@/lib/types";
 
-const CITATION_FIELDS = [
+type CitationFormat = "pct" | "multiple" | "money" | "years" | "integer";
+type CitationField = { path: string; label: string; format: CitationFormat };
+
+const CITATION_FIELDS: CitationField[] = [
   { path: "target_returns.target_irr", label: "Target IRR", format: "pct" },
   { path: "target_returns.target_equity_multiple", label: "Equity multiple", format: "multiple" },
   { path: "target_returns.target_cash_on_cash", label: "Cash-on-cash", format: "pct" },
@@ -21,20 +24,17 @@ const CITATION_FIELDS = [
   { path: "financial_projections.avg_rent_per_unit", label: "Average rent", format: "money" },
   { path: "financial_projections.occupancy_assumption", label: "Occupancy", format: "pct" },
   { path: "project_details.unit_count", label: "Unit count", format: "integer" },
-] as const;
+];
 
-type CitationField = (typeof CITATION_FIELDS)[number];
 type CitationMetrics = Record<string, unknown> & { _provenance?: Record<string, FieldProvenance> };
 
 export function SourceCitations({ deal }: { deal: DealDetail }) {
   const metrics = (deal.metrics ?? {}) as CitationMetrics;
   const provenance = metrics._provenance ?? {};
 
-  const rows = CITATION_FIELDS.map((field) => {
-    const value = getMetricValue(metrics, field.path);
-    const prov = provenance[field.path];
-    return { field, value, prov };
-  }).filter((row) => row.value != null || row.prov);
+  const rows = CITATION_FIELDS.map((field) => citationRow(metrics, provenance, field)).filter(
+    (row) => row.value != null || row.prov,
+  );
 
   if (rows.length === 0) return null;
 
@@ -60,8 +60,8 @@ export function SourceCitations({ deal }: { deal: DealDetail }) {
           <div>Status</div>
         </div>
         <div className="divide-y divide-border/60">
-          {rows.map(({ field, value, prov }) => (
-            <CitationRow key={field.path} field={field} value={value} provenance={prov} dealId={deal.id} />
+          {rows.map(({ field, value, prov, note }) => (
+            <CitationRow key={field.path} field={field} value={value} provenance={prov} dealId={deal.id} note={note} />
           ))}
         </div>
       </div>
@@ -69,16 +69,34 @@ export function SourceCitations({ deal }: { deal: DealDetail }) {
   );
 }
 
+function citationRow(metrics: CitationMetrics, provenance: Record<string, FieldProvenance>, field: CitationField) {
+  if (field.path === "target_returns.target_irr") {
+    const netIrr = getMetricValue(metrics, "target_returns.net_irr");
+    if (netIrr != null && netIrr !== "") {
+      return {
+        field: { ...field, path: "target_returns.net_irr" },
+        value: netIrr,
+        prov: provenance["target_returns.net_irr"] ?? provenance[field.path],
+        note: "Using investor net IRR as the canonical Target IRR. Cash-on-cash remains separate below.",
+      };
+    }
+  }
+  const value = getMetricValue(metrics, field.path);
+  return { field, value, prov: provenance[field.path], note: undefined };
+}
+
 function CitationRow({
   field,
   value,
   provenance,
   dealId,
+  note,
 }: {
   field: CitationField;
   value: unknown;
   provenance?: FieldProvenance;
   dealId: number;
+  note?: string;
 }) {
   const status = provenance?.status ?? (value == null ? "missing" : "extracted");
   const statusUi = statusStyle(status, Boolean(provenance?.conflict?.length));
@@ -89,12 +107,13 @@ function CitationRow({
       <div>
         <div className="font-medium tracking-tight">{field.label}</div>
         <div className="mt-0.5 text-[11px] text-muted-foreground">{field.path}</div>
+        {note && <div className="mt-1 text-[11px] leading-relaxed text-primary">{note}</div>}
       </div>
 
       <div>
         <MobileLabel>Value</MobileLabel>
         <div className="font-semibold tabular-nums">{formatMetric(value, field.format)}</div>
-        {correction && (
+        {correction && field.path !== "target_returns.net_irr" && (
           <div className="mt-1 text-[11px] text-muted-foreground">
             corrected from <span className="line-through">{formatRaw(provenance?.previous_value)}</span>
           </div>
@@ -171,7 +190,7 @@ function statusStyle(status: string, hasConflict: boolean) {
     case "unverifiable":
       return { Icon: HelpCircle, label: "Unverifiable", className: "bg-muted text-muted-foreground ring-border" };
     case "calculated":
-      return { Icon: Calculator, label: "Calculated", className: "bg-chart-3/15 text-[hsl(var(--chart-3))] ring-[hsl(var(--chart-3))/.3]" };
+      return { Icon: Calculator, label: "Calculated", className: "bg-chart-3/15 text-[hsl(var(--chart-3))] ring-[hsl(var(--chart-3))/.3" };
     case "manual":
       return { Icon: Lock, label: "Manual", className: "bg-primary/15 text-primary ring-primary/30" };
     case "missing":
@@ -190,7 +209,7 @@ function getMetricValue(metrics: CitationMetrics, path: string): unknown {
   return current;
 }
 
-function formatMetric(value: unknown, format: CitationField["format"]): string {
+function formatMetric(value: unknown, format: CitationFormat): string {
   if (value == null || value === "") return "-";
   const numeric = typeof value === "number" ? value : typeof value === "string" && !Number.isNaN(Number(value)) ? Number(value) : null;
   if (numeric == null) return String(value);
