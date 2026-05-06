@@ -22,15 +22,26 @@ export function FieldReviewAction({
   const router = useRouter();
   const [open, setOpen] = React.useState(false);
   const [busy, setBusy] = React.useState(false);
+  const [panelPos, setPanelPos] = React.useState<{ left: number; top: number } | null>(null);
   const wrapRef = React.useRef<HTMLDivElement>(null);
+  const buttonRef = React.useRef<HTMLButtonElement>(null);
 
   React.useEffect(() => {
     if (!open) return;
     function onDocClick(e: MouseEvent) {
       if (wrapRef.current && !wrapRef.current.contains(e.target as Node)) setOpen(false);
     }
+    function onViewportChange() {
+      setOpen(false);
+    }
     document.addEventListener("mousedown", onDocClick);
-    return () => document.removeEventListener("mousedown", onDocClick);
+    window.addEventListener("resize", onViewportChange);
+    window.addEventListener("scroll", onViewportChange, true);
+    return () => {
+      document.removeEventListener("mousedown", onDocClick);
+      window.removeEventListener("resize", onViewportChange);
+      window.removeEventListener("scroll", onViewportChange, true);
+    };
   }, [open]);
 
   if (!dealId || !path || !provenance || provenance.locked || !needsHumanReview(provenance) || !isEditableScalar(value)) {
@@ -56,17 +67,29 @@ export function FieldReviewAction({
     }
   }
 
+  function toggleOpen(e: React.MouseEvent<HTMLButtonElement>) {
+    e.stopPropagation();
+    const rect = buttonRef.current?.getBoundingClientRect();
+    if (rect) {
+      const width = 288;
+      const margin = 12;
+      setPanelPos({
+        left: Math.max(margin, Math.min(rect.right - width, window.innerWidth - width - margin)),
+        top: Math.min(rect.bottom + 8, window.innerHeight - 220),
+      });
+    }
+    setOpen((v) => !v);
+  }
+
   const confidence = typeof provenance.confidence === "number" ? provenance.confidence : null;
   const reason = reviewReason(provenance);
 
   return (
     <div ref={wrapRef} className="relative inline-flex">
       <button
+        ref={buttonRef}
         type="button"
-        onClick={(e) => {
-          e.stopPropagation();
-          setOpen((v) => !v);
-        }}
+        onClick={toggleOpen}
         className="inline-flex h-5 items-center gap-1 rounded-full bg-warning/15 px-1.5 text-[10px] font-medium text-warning ring-1 ring-warning/30 transition-colors hover:bg-warning/25"
         title="Review low-confidence field"
       >
@@ -76,7 +99,8 @@ export function FieldReviewAction({
 
       {open && (
         <div
-          className="absolute right-0 top-full z-50 mt-1.5 w-72 rounded-lg border border-border/80 bg-popover p-3 text-[11px] leading-relaxed text-popover-foreground shadow-[0_20px_60px_-20px_rgba(0,0,0,0.9)]"
+          className="fixed z-[1000] w-72 rounded-lg border border-border/80 bg-popover p-3 text-[11px] leading-relaxed text-popover-foreground shadow-[0_20px_60px_-20px_rgba(0,0,0,0.9)]"
+          style={panelPos ?? undefined}
           onClick={(e) => e.stopPropagation()}
         >
           <div className="flex items-center gap-1.5 font-semibold">
