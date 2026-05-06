@@ -184,13 +184,51 @@ def run_math_checks(metrics: dict) -> list[dict]:
     # 3. RETURN METRICS CROSS-CHECKS
     # ============================================
     
-    irr = _n(tr.get('net_irr') or tr.get('target_irr'))
-    em = _n(tr.get('net_equity_multiple') or tr.get('target_equity_multiple'))
-    hold = _n(ds.get('hold_period_years'))
+    target_irr = _n(tr.get('target_irr'))
+    net_irr = _n(tr.get('net_irr'))
+    target_em = _n(tr.get('target_equity_multiple'))
+    net_em = _n(tr.get('net_equity_multiple'))
     coc = _n(tr.get('target_cash_on_cash'))
+    dist_yield = _n(tr.get('distribution_yield'))
+    irr = net_irr or target_irr
+    em = net_em or target_em
+    hold = _n(ds.get('hold_period_years'))
     pref = _n(ds.get('preferred_return'))
     min_invest = _n(ds.get('minimum_investment'))
     projected_profit = _n(tr.get('projected_profit'))
+
+    _add_alias_consistency_checks(results, [
+        {
+            'label': 'Target IRR = Net IRR',
+            'canonical': 'target_returns.net_irr',
+            'alias': 'target_returns.target_irr',
+            'canonical_value': net_irr,
+            'alias_value': target_irr,
+            'unit': '%',
+            'tolerance': 0.25,
+            'note': 'Target IRR must represent investor net IRR. If the document quotes cash-on-cash or distribution yield, it belongs in a separate field.',
+        },
+        {
+            'label': 'Equity Multiple = Net Equity Multiple',
+            'canonical': 'target_returns.net_equity_multiple',
+            'alias': 'target_returns.target_equity_multiple',
+            'canonical_value': net_em,
+            'alias_value': target_em,
+            'unit': 'x',
+            'tolerance': 0.02,
+            'note': 'Target equity multiple must match the investor net equity multiple when both fields are present.',
+        },
+        {
+            'label': 'Cash-on-Cash = Distribution Yield',
+            'canonical': 'target_returns.target_cash_on_cash',
+            'alias': 'target_returns.distribution_yield',
+            'canonical_value': coc,
+            'alias_value': dist_yield,
+            'unit': '%',
+            'tolerance': 0.25,
+            'note': 'Cash-on-cash and distribution yield are the same periodic yield concept unless the source explicitly separates them by scenario.',
+        },
+    ])
     
     # Equity multiple vs hold period consistency
     if em and hold and hold > 0:
@@ -565,6 +603,28 @@ def run_math_checks(metrics: dict) -> list[dict]:
     return results
 
 
+def _add_alias_consistency_checks(results: list[dict], rules: list[dict]) -> None:
+    """Require same-calculation aliases to reconcile before they can be trusted."""
+    for rule in rules:
+        canonical = rule.get('canonical_value')
+        alias = rule.get('alias_value')
+        if canonical is None or alias is None:
+            continue
+        diff = abs(canonical - alias)
+        tolerance = float(rule.get('tolerance') or 0)
+        unit = rule.get('unit', '')
+        status = 'pass' if diff <= tolerance else 'fail'
+        results.append({
+            'check': rule['label'],
+            'status': status,
+            'expected': _fmt_unit(canonical, unit),
+            'actual': _fmt_unit(alias, unit),
+            'difference': 'match' if status == 'pass' else f'{diff:.2f}{unit} off',
+            'formula': f"{rule['alias']} must reconcile to canonical {rule['canonical']}. {rule['note']}",
+            'paths': [rule['canonical'], rule['alias']],
+        })
+
+
 def _n(val):
     """Safely convert to float."""
     if val is None:
@@ -580,6 +640,16 @@ def _fmt_dollar(val):
     if val is None:
         return '—'
     return f'${val:,.0f}'
+
+
+def _fmt_unit(val, unit: str):
+    if val is None:
+        return '—'
+    if unit == '%':
+        return f'{val:.1f}%'
+    if unit == 'x':
+        return f'{val:.2f}x'
+    return f'{val:g}{unit}'
 
 
 def _extract_dollar(text: str):
