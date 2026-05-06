@@ -39,6 +39,9 @@ const DOC_TYPES: Array<{ key: string; label: string }> = [
   { key: "other", label: "Other" },
 ];
 
+const ACCEPTED_UPLOAD_TYPES =
+  "application/pdf,.pdf,.xlsx,.xlsm,.xls,.csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel,text/csv";
+
 export function DocumentsPanel({
   dealId,
   documents,
@@ -117,7 +120,7 @@ export function DocumentsPanel({
         {documents.length === 0 ? (
           <div className="py-10 text-center text-sm text-muted-foreground">
             <FileText className="h-6 w-6 mx-auto mb-2 opacity-60" />
-            Upload a PDF to extract metrics and run scoring.
+            Upload a PDF, Excel model, or CSV to extract metrics and run scoring.
           </div>
         ) : (
           <ul className="divide-y divide-border/60">
@@ -130,14 +133,16 @@ export function DocumentsPanel({
                   <button
                     onClick={() => setPreviewDoc(d)}
                     className="text-sm font-medium truncate text-left hover:text-primary transition-colors"
-                    title="Preview PDF"
+                    title="Preview document"
                   >
                     {d.filename}
                   </button>
                   <div className="text-[11px] text-muted-foreground mt-0.5 flex items-center gap-2 flex-wrap">
                     <span className="uppercase tracking-wider">{d.doc_type.replace(/_/g, " ")}</span>
                     <span className="opacity-40">·</span>
-                    <span>{d.page_count} pages</span>
+                    <span>
+                      {d.page_count} {docUnit(d.filename, d.page_count)}
+                    </span>
                     {d.has_text && (
                       <>
                         <span className="opacity-40">·</span>
@@ -207,7 +212,7 @@ export function DocumentsPanel({
       <Card elevated className="p-6 flex flex-col">
         <h3 className="text-base font-semibold tracking-tight mb-1">Upload</h3>
         <p className="text-xs text-muted-foreground mb-4">
-          PDF is best. We&apos;ll run OCR + table extraction automatically.
+          Upload PDFs, Excel models, or CSVs. We&apos;ll extract text, tables, sheets, and formulas automatically.
         </p>
 
         <div className="mb-4">
@@ -258,7 +263,7 @@ export function DocumentsPanel({
             ref={inputRef}
             type="file"
             multiple
-            accept="application/pdf,.pdf"
+            accept={ACCEPTED_UPLOAD_TYPES}
             className="sr-only"
             onChange={(e) => e.target.files && handleFiles(e.target.files)}
           />
@@ -266,7 +271,7 @@ export function DocumentsPanel({
             <Upload className="h-4 w-4 text-primary" />
           </div>
           <div className="text-sm font-medium">Drop files here</div>
-          <div className="text-xs text-muted-foreground mt-1">or click to browse</div>
+          <div className="text-xs text-muted-foreground mt-1">PDF, Excel, CSV</div>
           <Button
             size="sm"
             variant="secondary"
@@ -382,4 +387,10 @@ function uploadWithProgress(
     xhr.onerror = () => reject(new Error("Network error"));
     xhr.send(form);
   });
+}
+
+function docUnit(filename: string, count: number): string {
+  const lower = filename.toLowerCase();
+  const singular = lower.endsWith(".xlsx") || lower.endsWith(".xlsm") || lower.endsWith(".xls") || lower.endsWith(".csv") ? "sheet" : "page";
+  return count === 1 ? singular : `${singular}s`;
 }
