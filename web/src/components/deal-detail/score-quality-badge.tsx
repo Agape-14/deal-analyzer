@@ -53,8 +53,8 @@ function stageUi(stage: string | null | undefined, canScore: boolean | undefined
     case "math_failed":
       return {
         Icon: AlertTriangle,
-        label: "Math issue",
-        detail: "Score blocked by failed deterministic checks",
+        label: "Needs review",
+        detail: "Final score held until failed math checks are resolved",
         className: "bg-destructive/15 text-destructive ring-destructive/30",
       };
     case "conflicting":
@@ -67,8 +67,8 @@ function stageUi(stage: string | null | undefined, canScore: boolean | undefined
     case "insufficient_source":
       return {
         Icon: HelpCircle,
-        label: "Blocked",
-        detail: "Missing or unverifiable critical fields",
+        label: "Needs review",
+        detail: "Missing or unverifiable critical fields are holding the final score",
         className: "bg-destructive/15 text-destructive ring-destructive/30",
       };
     case "needs_review":
