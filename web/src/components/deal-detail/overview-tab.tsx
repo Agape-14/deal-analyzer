@@ -22,7 +22,7 @@ const HERO_KEYS = [
   "ltv",
 ] as const;
 
-type ProvenanceMap = Record<string, FieldProvenance | undefined>;
+type ProvenanceMap = Record<string, FieldProvenance>;
 
 export function OverviewTab({ deal }: { deal: DealDetail }) {
   const tr = (deal.metrics?.target_returns ?? {}) as Record<string, unknown>;
