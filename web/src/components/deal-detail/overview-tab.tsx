@@ -6,6 +6,7 @@ import { ValidationFlagsPanel } from "@/components/deal-detail/validation-flags"
 import { MetricsSection } from "@/components/deal-detail/metrics-section";
 import { AuditTrail } from "@/components/deal-detail/audit-trail";
 import { QualityPanel } from "@/components/deal-detail/quality-panel";
+import { ReviewQueue } from "@/components/deal-detail/review-queue";
 import { PipelineTimeline } from "@/components/deal-detail/pipeline-timeline";
 import { SourceCitations } from "@/components/deal-detail/source-citations";
 import { UploadCompleteness } from "@/components/deal-detail/upload-completeness";
@@ -39,7 +40,10 @@ export function OverviewTab({ deal }: { deal: DealDetail }) {
 
   return (
     <div className="space-y-6">
-      <QualityPanel dealId={deal.id} quality={quality} documents={deal.documents ?? []} />
+      <ReviewQueue deal={deal} />
+      <div id="technical-details">
+        <QualityPanel dealId={deal.id} quality={quality} documents={deal.documents ?? []} />
+      </div>
       <PipelineTimeline deal={deal} />
       <UploadCompleteness deal={deal} />
 
@@ -89,7 +93,9 @@ export function OverviewTab({ deal }: { deal: DealDetail }) {
         <ScoreBreakdown scores={deal.scores ?? {}} />
       </div>
 
-      <SourceCitations deal={deal} />
+      <div id="source-citations">
+        <SourceCitations deal={deal} />
+      </div>
       <AuditTrail deal={deal} />
 
       <ValidationFlagsPanel flags={deal.metrics?.validation_flags} />
