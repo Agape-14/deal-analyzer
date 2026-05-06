@@ -25,8 +25,8 @@ export function DealHero({ deal }: { deal: DealDetail }) {
   const metrics = deal.metrics ?? {};
   const tr = (metrics.target_returns ?? {}) as Record<string, unknown>;
   const provenance = (metrics._provenance ?? {}) as ProvenanceMap;
-  const headlineIrr = pickTrustedNumber(tr, provenance, ["target_returns.net_irr", "target_returns.target_irr"]) ?? deal.target_irr;
-  const headlineMultiple = pickTrustedNumber(tr, provenance, ["target_returns.net_equity_multiple", "target_returns.target_equity_multiple"]) ?? deal.target_equity_multiple;
+  const headlineIrr = pickTrustedNumber(tr, provenance, ["target_returns.target_irr", "target_returns.net_irr"]) ?? deal.target_irr;
+  const headlineMultiple = pickTrustedNumber(tr, provenance, ["target_returns.target_equity_multiple", "target_returns.net_equity_multiple"]) ?? deal.target_equity_multiple;
 
   return (
     <FadeIn>
