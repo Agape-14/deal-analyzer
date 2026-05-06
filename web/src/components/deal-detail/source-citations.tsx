@@ -71,13 +71,15 @@ export function SourceCitations({ deal }: { deal: DealDetail }) {
 
 function citationRow(metrics: CitationMetrics, provenance: Record<string, FieldProvenance>, field: CitationField) {
   if (field.path === "target_returns.target_irr") {
-    const netIrr = getMetricValue(metrics, "target_returns.net_irr");
-    if (netIrr != null && netIrr !== "") {
+    const canonical = pickCanonicalReturnMetric(metrics, provenance, ["target_returns.net_irr", "target_returns.target_irr"]);
+    if (canonical) {
       return {
-        field: { ...field, path: "target_returns.net_irr" },
-        value: netIrr,
-        prov: provenance["target_returns.net_irr"] ?? provenance[field.path],
-        note: "Using investor net IRR as the canonical Target IRR. Cash-on-cash remains separate below.",
+        field: { ...field, path: canonical.path },
+        value: canonical.value,
+        prov: canonical.prov,
+        note: canonical.path === "target_returns.net_irr"
+          ? "Using investor net IRR as the canonical Target IRR. Cash-on-cash remains separate below."
+          : "Using the reviewed Target IRR while the return aliases are being resolved.",
       };
     }
   }
@@ -103,7 +105,10 @@ function CitationRow({
   const correction = provenance?.previous_value !== undefined && provenance.previous_value !== null;
 
   return (
-    <div className="grid grid-cols-1 md:grid-cols-[1.05fr_.75fr_1.25fr_.95fr] gap-3 md:gap-4 px-4 py-3 text-sm">
+    <div
+      id={sourceCitationId(field.path)}
+      className="scroll-mt-28 grid grid-cols-1 gap-3 px-4 py-3 text-sm transition-colors target:bg-primary/10 target:ring-1 target:ring-primary/35 md:grid-cols-[1.05fr_.75fr_1.25fr_.95fr] md:gap-4"
+    >
       <div>
         <div className="font-medium tracking-tight">{field.label}</div>
         <div className="mt-0.5 text-[11px] text-muted-foreground">{field.path}</div>
@@ -186,7 +191,7 @@ function statusStyle(status: string, hasConflict: boolean) {
     case "confirmed":
       return { Icon: CheckCircle2, label: "Verified", className: "bg-success/15 text-success ring-success/30" };
     case "wrong":
-      return { Icon: AlertTriangle, label: "Corrected", className: "bg-destructive/15 text-destructive ring-destructive/30" };
+      return { Icon: AlertTriangle, label: "Needs review", className: "bg-destructive/15 text-destructive ring-destructive/30" };
     case "unverifiable":
       return { Icon: HelpCircle, label: "Unverifiable", className: "bg-muted text-muted-foreground ring-border" };
     case "calculated":
@@ -198,6 +203,32 @@ function statusStyle(status: string, hasConflict: boolean) {
     default:
       return { Icon: Sparkles, label: "Extracted", className: "bg-warning/15 text-warning ring-warning/30" };
   }
+}
+
+function pickCanonicalReturnMetric(
+  metrics: CitationMetrics,
+  provenance: Record<string, FieldProvenance>,
+  paths: string[],
+): { path: string; value: unknown; prov?: FieldProvenance } | null {
+  const candidates = paths
+    .map((path) => ({ path, value: getMetricValue(metrics, path), prov: provenance[path] }))
+    .filter((candidate) => candidate.value != null && candidate.value !== "");
+
+  if (candidates.length === 0) return null;
+  const clean = candidates.filter((candidate) => !isBadSource(candidate.prov));
+  const reviewed = clean.find((candidate) => candidate.prov?.locked || ["manual", "confirmed", "calculated"].includes(String(candidate.prov?.status ?? "")));
+  return reviewed ?? clean[0] ?? candidates[0];
+}
+
+function isBadSource(provenance?: FieldProvenance): boolean {
+  if (!provenance) return false;
+  const status = String(provenance.status ?? "").toLowerCase();
+  const conflictCount = Array.isArray(provenance.conflict) ? provenance.conflict.length : 0;
+  return conflictCount > 1 || ["wrong", "missing", "unverifiable", "stale"].includes(status);
+}
+
+function sourceCitationId(path: string): string {
+  return `source-citation-${path.replace(/[^a-zA-Z0-9_-]+/g, "-")}`;
 }
 
 function getMetricValue(metrics: CitationMetrics, path: string): unknown {
