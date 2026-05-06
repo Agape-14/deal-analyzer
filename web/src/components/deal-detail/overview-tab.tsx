@@ -41,10 +41,19 @@ export function OverviewTab({ deal }: { deal: DealDetail }) {
   return (
     <div className="space-y-6">
       <ReviewQueue deal={deal} />
-      <div id="technical-details">
-        <QualityPanel dealId={deal.id} quality={quality} documents={deal.documents ?? []} />
-      </div>
-      <PipelineTimeline deal={deal} />
+      <details id="technical-details" className="group rounded-xl border border-border/80 bg-card/70 p-4">
+        <summary className="cursor-pointer list-none text-sm font-semibold tracking-tight text-foreground marker:hidden">
+          <span className="inline-flex items-center gap-2">
+            Technical audit details
+            <span className="text-xs font-normal text-muted-foreground group-open:hidden">Show extraction counters, math status, and pipeline checks</span>
+            <span className="hidden text-xs font-normal text-muted-foreground group-open:inline">Hide technical details</span>
+          </span>
+        </summary>
+        <div className="mt-4 space-y-6">
+          <QualityPanel dealId={deal.id} quality={quality} documents={deal.documents ?? []} />
+          <PipelineTimeline deal={deal} />
+        </div>
+      </details>
       <UploadCompleteness deal={deal} />
 
       {/* 2-column: snapshot + scores */}
