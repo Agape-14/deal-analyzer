@@ -126,29 +126,36 @@ def validate_deal_metrics(metrics: dict, property_type: str | None = None) -> li
     target_cash_on_cash = _num(tr.get('target_cash_on_cash'))
     distribution_yield = _num(tr.get('distribution_yield'))
 
+    primary_strategy = (tr.get('primary_strategy') or '').lower()
+    sale_scenario = tr.get('sale_scenario') or {}
+    hold_scenario = tr.get('hold_scenario') or {}
+
+    if primary_strategy not in {'hold', 'hold_with_sale_option'}:
+        _add_canonical_alias_flags(flags, [
+            {
+                "label": "Target IRR",
+                "canonical_label": "Net IRR",
+                "canonical_path": "target_returns.net_irr",
+                "alias_path": "target_returns.target_irr",
+                "canonical_value": net_irr,
+                "alias_value": target_irr,
+                "unit": "%",
+                "tolerance": 0.25,
+                "message": "Target IRR must match investor Net IRR. Cash-on-cash or distribution yield should remain separate.",
+            },
+            {
+                "label": "Equity multiple",
+                "canonical_label": "Net equity multiple",
+                "canonical_path": "target_returns.net_equity_multiple",
+                "alias_path": "target_returns.target_equity_multiple",
+                "canonical_value": net_equity_multiple,
+                "alias_value": target_equity_multiple,
+                "unit": "x",
+                "tolerance": 0.02,
+                "message": "Target equity multiple must match investor Net Equity Multiple when both are present.",
+            },
+        ])
     _add_canonical_alias_flags(flags, [
-        {
-            "label": "Target IRR",
-            "canonical_label": "Net IRR",
-            "canonical_path": "target_returns.net_irr",
-            "alias_path": "target_returns.target_irr",
-            "canonical_value": net_irr,
-            "alias_value": target_irr,
-            "unit": "%",
-            "tolerance": 0.25,
-            "message": "Target IRR must match investor Net IRR. Cash-on-cash or distribution yield should remain separate.",
-        },
-        {
-            "label": "Equity multiple",
-            "canonical_label": "Net equity multiple",
-            "canonical_path": "target_returns.net_equity_multiple",
-            "alias_path": "target_returns.target_equity_multiple",
-            "canonical_value": net_equity_multiple,
-            "alias_value": target_equity_multiple,
-            "unit": "x",
-            "tolerance": 0.02,
-            "message": "Target equity multiple must match investor Net Equity Multiple when both are present.",
-        },
         {
             "label": "Cash-on-cash",
             "canonical_label": "Distribution yield",
@@ -161,10 +168,6 @@ def validate_deal_metrics(metrics: dict, property_type: str | None = None) -> li
             "message": "Cash-on-cash and distribution yield are the same periodic yield concept unless the source explicitly separates scenarios.",
         },
     ])
-
-    primary_strategy = (tr.get('primary_strategy') or '').lower()
-    sale_scenario = tr.get('sale_scenario') or {}
-    hold_scenario = tr.get('hold_scenario') or {}
 
     scenario_gross = None
     scenario_net = None
@@ -205,7 +208,7 @@ def validate_deal_metrics(metrics: dict, property_type: str | None = None) -> li
 
     em = net_equity_multiple or target_equity_multiple
     hold = _num(ds.get('hold_period_years'))
-    if em and hold and hold > 0:
+    if em and hold and hold > 0 and primary_strategy not in {'hold', 'hold_with_sale_option'}:
         implied_annual = ((em - 1) / hold) * 100
         if irr and abs(implied_annual - irr) > 5:
             flags.append({'severity': 'yellow', 'category': 'Returns',
@@ -267,8 +270,8 @@ def validate_deal_metrics(metrics: dict, property_type: str | None = None) -> li
 
     dscr = _num(uc.get('dscr'))
     if dscr and dscr < 1.2:
-        flags.append({'severity': 'red', 'category': 'Underwriting',
-                      'message': f'DSCR of {dscr}x is too thin. Minimum should be 1.25x.'})
+        flags.append({'severity': 'yellow', 'category': 'Underwriting',
+                      'message': f'DSCR of {dscr}x is below the usual 1.25x target. Confirm annual debt service before treating this as a hard issue.'})
     elif dscr and dscr < profile["dscr_green"] - 0.1:
         flags.append({'severity': 'yellow', 'category': 'Underwriting',
                       'message': f'DSCR of {dscr}x is adequate but not comfortable. Prefer >={profile["dscr_green"]}x for this asset class.'})
@@ -315,8 +318,8 @@ def validate_deal_metrics(metrics: dict, property_type: str | None = None) -> li
     yoc = _num(uc.get('yield_on_cost'))
     if yoc and entry_cap:
         if yoc <= entry_cap:
-            flags.append({'severity': 'red', 'category': 'Underwriting',
-                          'message': f'Yield on cost ({yoc}%) does not exceed entry cap rate ({entry_cap}%). No value creation.'})
+            flags.append({'severity': 'yellow', 'category': 'Underwriting',
+                          'message': f'Yield on cost ({yoc}%) does not exceed entry cap rate ({entry_cap}%). This is a value-creation caution, not a source-data failure.'})
         elif yoc > entry_cap + 1.5:
             flags.append({'severity': 'green', 'category': 'Underwriting',
                           'message': f'Yield on cost ({yoc}%) exceeds entry cap ({entry_cap}%) by {yoc - entry_cap:.1f}%. Strong value creation.'})
