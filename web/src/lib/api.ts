@@ -11,6 +11,8 @@
  */
 
 const INTERNAL_BASE = process.env.FASTAPI_URL || "http://127.0.0.1:8000";
+const BAD_SOURCE_STATUSES = new Set(["wrong", "missing", "unverifiable", "stale", "math_failed"]);
+const REVIEWED_SOURCE_STATUSES = new Set(["manual", "confirmed", "calculated"]);
 
 function baseUrl(): string {
   if (typeof window === "undefined") return INTERNAL_BASE;
@@ -45,6 +47,24 @@ type BatchFieldEditBody = {
     value?: unknown;
     lock?: boolean;
   }>;
+};
+
+type ProvenanceLike = {
+  status?: unknown;
+  conflict?: unknown;
+  locked?: unknown;
+  source?: unknown;
+};
+
+type MetricsLike = {
+  target_returns?: Record<string, unknown>;
+  _provenance?: Record<string, ProvenanceLike>;
+};
+
+type DealLike = {
+  metrics?: MetricsLike;
+  target_irr?: unknown;
+  target_equity_multiple?: unknown;
 };
 
 async function request<T>(
@@ -85,7 +105,7 @@ async function request<T>(
   if (res.status === 204) return undefined as T;
   const ct = res.headers.get("content-type") || "";
   if (!ct.includes("application/json")) return (await res.blob()) as unknown as T;
-  return (await res.json()) as T;
+  return normalizeApiPayload(await res.json()) as T;
 }
 
 async function postJson<T>(path: string, body?: unknown): Promise<T> {
@@ -100,6 +120,55 @@ async function postJson<T>(path: string, body?: unknown): Promise<T> {
     return { message: "Fields updated", results } as T;
   }
   return request<T>(path, { method: "POST", body: body ? JSON.stringify(body) : undefined });
+}
+
+function normalizeApiPayload(payload: unknown): unknown {
+  if (Array.isArray(payload)) return payload.map(normalizeDealSummary);
+  if (!isRecord(payload)) return payload;
+  if (Array.isArray(payload.deals)) return { ...payload, deals: payload.deals.map(normalizeDealSummary) };
+  return normalizeDealSummary(payload);
+}
+
+function normalizeDealSummary(value: unknown): unknown {
+  if (!isRecord(value) || !isRecord(value.metrics)) return value;
+  const deal = value as DealLike;
+  const targetIrr = pickReturnMetric(deal.metrics, ["target_returns.target_irr", "target_returns.net_irr"]);
+  const targetMultiple = pickReturnMetric(deal.metrics, [
+    "target_returns.target_equity_multiple",
+    "target_returns.net_equity_multiple",
+  ]);
+  return {
+    ...value,
+    target_irr: targetIrr ?? deal.target_irr,
+    target_equity_multiple: targetMultiple ?? deal.target_equity_multiple,
+  };
+}
+
+function pickReturnMetric(metrics: MetricsLike | undefined, paths: string[]): unknown {
+  const returns = metrics?.target_returns ?? {};
+  const provenance = metrics?._provenance ?? {};
+  const candidates = paths
+    .map((path) => ({ path, value: returns[path.split(".").at(-1) ?? path], provenance: provenance[path] }))
+    .filter((candidate) => candidate.value !== null && candidate.value !== undefined && candidate.value !== "");
+
+  if (candidates.length === 0) return null;
+  const clean = candidates.filter((candidate) => !isBadSource(candidate.provenance));
+  const reviewed = clean.find((candidate) => {
+    const status = String(candidate.provenance?.status ?? "").toLowerCase();
+    return Boolean(candidate.provenance?.locked) || String(candidate.provenance?.source ?? "").toLowerCase() === "manual" || REVIEWED_SOURCE_STATUSES.has(status);
+  });
+  return (reviewed ?? clean[0] ?? candidates[0]).value;
+}
+
+function isBadSource(provenance?: ProvenanceLike): boolean {
+  if (!provenance) return false;
+  const status = String(provenance.status ?? "").toLowerCase();
+  const conflictCount = Array.isArray(provenance.conflict) ? provenance.conflict.length : 0;
+  return conflictCount > 1 || BAD_SOURCE_STATUSES.has(status);
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 
 export const api = {
