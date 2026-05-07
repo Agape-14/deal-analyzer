@@ -3,7 +3,7 @@
 import * as React from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { ArrowLeft, MapPin, Building2, Sparkles, FileDown, Loader2, RefreshCw } from "lucide-react";
+import { AlertCircle, ArrowLeft, CheckCircle2, MapPin, Building2, Sparkles, FileDown, Loader2, RefreshCw } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { BigScoreRing } from "@/components/deal-detail/score-ring";
@@ -26,17 +26,28 @@ const STATUS_STYLES: Record<string, string> = {
 
 type ProvenanceMap = Record<string, FieldProvenance | undefined>;
 type PipelineStep = "idle" | "extract" | "verify" | "score";
-type QualityResponse = { summary?: DealQualitySummary; stale_flags?: unknown[] };
+type PipelineStatus = {
+  status?: string;
+  step?: string;
+  message?: string;
+  error?: string | null;
+  started_at?: string | null;
+  updated_at?: string | null;
+};
+type QualityResponse = { summary?: DealQualitySummary; stale_flags?: unknown[]; pipeline?: PipelineStatus | null };
 
 export function DealHero({ deal }: { deal: DealDetail }) {
   const router = useRouter();
+  const metrics = deal.metrics ?? {};
   const [scoring, setScoring] = React.useState(false);
   const [pipelineRunning, setPipelineRunning] = React.useState(false);
   const [pipelineStep, setPipelineStep] = React.useState<PipelineStep>("idle");
+  const [pipelineStatus, setPipelineStatus] = React.useState<PipelineStatus | null>(
+    (metrics as { _pipeline?: PipelineStatus })._pipeline ?? null,
+  );
   const mountedRef = React.useRef(true);
   const locationBits = [deal.city, deal.state].filter(Boolean).join(", ") || deal.location;
   const visibleScore = deal.overall_score ?? deal.scores?.provisional_overall ?? null;
-  const metrics = deal.metrics ?? {};
   const tr = (metrics.target_returns ?? {}) as Record<string, unknown>;
   const provenance = (metrics._provenance ?? {}) as ProvenanceMap;
   const headlineIrr = pickTrustedNumber(tr, provenance, ["target_returns.target_irr", "target_returns.net_irr"]) ?? deal.target_irr;
@@ -56,32 +67,37 @@ export function DealHero({ deal }: { deal: DealDetail }) {
 
     try {
       await api.post(`/api/deals/${deal.id}/extract`);
+      setPipelineStatus({ status: "running", step: "extract", message: "Extraction started. Reading all uploaded documents." });
       toast.success("Extraction started", {
         description: "Reading all uploaded documents again.",
         duration: 5000,
       });
 
-      await waitForQualityTimestamp(deal.id, "extract", beforeExtract);
+      await waitForQualityTimestamp(deal.id, "extract", beforeExtract, setPipelineStatus);
       if (!mountedRef.current) return;
 
       setPipelineStep("verify");
       await api.post(`/api/deals/${deal.id}/verify`);
+      setPipelineStatus({ status: "running", step: "verify", message: "Verification started. Checking source documents." });
       toast.success("Verification started", {
         description: "Checking extracted values against source documents.",
         duration: 5000,
       });
 
-      await waitForQualityTimestamp(deal.id, "verify", beforeVerify);
+      await waitForQualityTimestamp(deal.id, "verify", beforeVerify, setPipelineStatus);
       if (!mountedRef.current) return;
 
       setPipelineStep("score");
+      setPipelineStatus({ status: "running", step: "score", message: "Scoring started. Recalculating validation, math checks, and score." });
       await api.post(`/api/deals/${deal.id}/score`);
+      setPipelineStatus({ status: "complete", step: "score", message: "Pipeline complete. Extraction, verification, math checks, and scoring finished." });
       toast.success("Pipeline complete", {
         description: "Documents were re-read, verified, math-checked, and scored.",
       });
       router.refresh();
     } catch (e) {
       const detail = (e as { detail?: string; message?: string })?.detail ?? (e as Error)?.message;
+      setPipelineStatus({ status: "failed", step: pipelineStep, message: "Pipeline did not finish.", error: detail });
       toast.error("Pipeline did not finish", { description: detail });
     } finally {
       if (mountedRef.current) {
@@ -111,7 +127,6 @@ export function DealHero({ deal }: { deal: DealDetail }) {
   return (
     <FadeIn>
       <div className="relative">
-        {/* Back nav */}
         <div className="mb-5">
           <Link
             href="/"
@@ -123,11 +138,10 @@ export function DealHero({ deal }: { deal: DealDetail }) {
         </div>
 
         <div className="flex flex-col lg:flex-row lg:items-start lg:justify-between gap-8">
-          {/* Title block */}
           <div className="min-w-0 flex-1">
             <div className="flex items-center gap-2 text-[11px] uppercase tracking-[0.14em] text-muted-foreground mb-2">
               <span>{deal.property_type || "Investment"}</span>
-              <span className="opacity-40">·</span>
+              <span className="opacity-40">/</span>
               <span
                 className={cn(
                   "px-2 py-0.5 rounded-full text-[10px] uppercase tracking-wider font-medium",
@@ -155,7 +169,6 @@ export function DealHero({ deal }: { deal: DealDetail }) {
               )}
             </div>
 
-            {/* Key metrics row */}
             <div className="mt-6 grid grid-cols-2 sm:grid-cols-4 gap-6">
               <Metric label="Target IRR" value={fmtPct(headlineIrr)} />
               <Metric label="Equity Multiple" value={fmtMultiple(headlineMultiple)} />
@@ -164,9 +177,7 @@ export function DealHero({ deal }: { deal: DealDetail }) {
             </div>
           </div>
 
-          {/* Score + actions */}
           <div className="flex flex-col items-center lg:items-end gap-4">
-            {/* 96px ring on phones, 128px on tablet+ */}
             <div className="sm:hidden">
               <BigScoreRing value={visibleScore} size={96} />
             </div>
@@ -190,6 +201,7 @@ export function DealHero({ deal }: { deal: DealDetail }) {
                 </a>
               </Button>
             </div>
+            <PipelineNotice status={pipelineStatus} running={pipelineRunning} />
             <p className="max-w-sm text-center lg:text-right text-[11px] leading-relaxed text-muted-foreground">
               Re-run pipeline reads all uploaded documents again. Recalculate score only uses already-extracted metrics.
             </p>
@@ -209,15 +221,56 @@ function Metric({ label, value }: { label: string; value: string }) {
   );
 }
 
-async function waitForQualityTimestamp(dealId: number, kind: "extract" | "verify", previous: string | null): Promise<string> {
+function PipelineNotice({ status, running }: { status: PipelineStatus | null; running: boolean }) {
+  if (!status?.status || status.status === "idle") return null;
+
+  const failed = status.status === "failed";
+  const complete = status.status === "complete";
+  const message = failed ? status.error || status.message || "Pipeline did not finish." : status.message;
+  const Icon = failed ? AlertCircle : complete ? CheckCircle2 : Loader2;
+
+  return (
+    <div
+      className={cn(
+        "max-w-sm rounded-lg border px-3 py-2 text-[11px] leading-relaxed",
+        failed
+          ? "border-destructive/40 bg-destructive/10 text-destructive"
+          : complete
+            ? "border-success/35 bg-success/10 text-success"
+            : "border-primary/35 bg-primary/10 text-primary",
+      )}
+    >
+      <div className="flex items-start gap-2">
+        <Icon className={cn("mt-0.5 h-3.5 w-3.5 shrink-0", running && !failed && !complete && "animate-spin")} />
+        <div>
+          <div className="font-semibold">
+            {failed ? "Pipeline stopped" : complete ? "Pipeline complete" : "Pipeline running"}
+          </div>
+          {message && <div className="mt-0.5 text-current/80">{message}</div>}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+async function waitForQualityTimestamp(
+  dealId: number,
+  kind: "extract" | "verify",
+  previous: string | null,
+  onStatus?: (status: PipelineStatus | null) => void,
+): Promise<string> {
   const start = Date.now();
   while (Date.now() - start < POLL_TIMEOUT) {
     await sleep(POLL_INTERVAL);
     const res = await api.get<QualityResponse>(`/api/deals/${dealId}/quality`);
+    if (res.pipeline) onStatus?.(res.pipeline);
+    if (res.pipeline?.status === "failed") {
+      throw new Error(res.pipeline.error || res.pipeline.message || `${kind === "extract" ? "Extraction" : "Verification"} failed.`);
+    }
     const next = qualityTimestamp(res.summary, kind);
     if (next && next !== previous) return next;
   }
-  throw new Error(`${kind === "extract" ? "Extraction" : "Verification"} is still running. Refresh in a minute to check the latest result.`);
+  throw new Error(`${kind === "extract" ? "Extraction" : "Verification"} did not finish before the timeout. The pipeline status will stay visible here; check notifications or re-run after any API limits clear.`);
 }
 
 function qualityTimestamp(quality: DealDetail["quality"] | DealQualitySummary | DataQualityGate | undefined, kind: "extract" | "verify"): string | null {
