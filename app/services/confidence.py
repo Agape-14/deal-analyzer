@@ -31,11 +31,21 @@ CRITICAL_FIELDS = (
 )  # type: Tuple[Tuple[str, str, Tuple[str, ...]], ...]
 
 VERIFIED_STATUSES = {"confirmed", "calculated"}
-BAD_STATUSES = {"wrong", "missing", "unverifiable", "math_failed"}
+BAD_STATUSES = {"wrong", "missing", "math_failed"}
+REVIEW_STATUSES = {"unverifiable"}
 HOLD_SCENARIO_ALIAS_CHECKS = {
     "Target IRR = Net IRR",
     "Equity Multiple = Net Equity Multiple",
     "IRR vs Equity Multiple Consistency",
+}
+# These checks are useful analyst cautions, but they are not proof that the
+# extracted source data is wrong. They rely on simplified formulas or partial
+# component lists, so they should not single-handedly block confidence.
+NON_BLOCKING_FAIL_CHECKS = {
+    "Yield on Cost vs Entry Cap Rate",
+    "DSCR = NOI / Annual Debt Service",
+    "Hard + Soft + Land + Contingency = Total Cost",
+    "Cost Components ≈ Total Project Cost",
 }
 
 
@@ -78,6 +88,15 @@ def _is_ignored_hold_alias_check(check, metrics):
     return "hypothetical sale" in formula and "hold" in formula
 
 
+def _is_non_blocking_fail_check(check):
+    # type: (Dict[str, Any]) -> bool
+    name = str((check or {}).get("check") or "")
+    if name in NON_BLOCKING_FAIL_CHECKS:
+        return True
+    formula = str((check or {}).get("formula") or "").lower()
+    return "interest-only approximation" in formula or "unaccounted" in str((check or {}).get("difference") or "").lower()
+
+
 def summarize_math_checks(checks, metrics=None):
     # type: (Optional[List[Dict[str, Any]]], Optional[Dict[str, Any]]) -> Dict[str, Any]
     checks = checks or []
@@ -89,6 +108,9 @@ def summarize_math_checks(checks, metrics=None):
         if ignored:
             summary["ignored"] += 1
             summary["info"] += 1
+            continue
+        if status == "fail" and _is_non_blocking_fail_check(check):
+            summary["warn"] += 1
             continue
         if status in ("pass", "fail", "warn", "info"):
             summary[status] += 1
@@ -128,8 +150,8 @@ def _critical_confidence_score(missing, unverified, conflicted, bad):
 def _blend_confidence(critical_score, verification_score, verification_complete):
     # type: (float, float, bool) -> float
     if verification_complete:
-        return critical_score * 0.75 + verification_score * 0.25
-    return critical_score * 0.85 + verification_score * 0.15
+        return critical_score * 0.85 + verification_score * 0.15
+    return critical_score * 0.9 + verification_score * 0.1
 
 
 def assess_data_quality(metrics, math_checks=None, require_verified=True):
@@ -176,6 +198,10 @@ def assess_data_quality(metrics, math_checks=None, require_verified=True):
             severity = "blocker"
             reason = status
             bad += 1
+        elif status in REVIEW_STATUSES:
+            severity = "review"
+            reason = "needs source review"
+            unverified += 1
         elif require_verified and not verified:
             severity = "review"
             reason = "not verified against source"
@@ -226,7 +252,7 @@ def assess_data_quality(metrics, math_checks=None, require_verified=True):
 
     # Deterministic math failures are high-signal and should still gate trust.
     confidence_score -= math_summary["fail"] * 12
-    confidence_score -= math_summary["warn"] * 2
+    confidence_score -= math_summary["warn"] * 1
 
     # If a deal is only provisional because verification has not finished, keep
     # it visibly below the verified range without claiming the extraction is bad.
@@ -236,9 +262,9 @@ def assess_data_quality(metrics, math_checks=None, require_verified=True):
     # Active blockers must remain obvious, but do not let a noisy broad verifier
     # turn otherwise reviewable data into a single-digit score by itself.
     if missing or bad:
-        confidence_score = min(confidence_score, 55.0)
+        confidence_score = min(confidence_score, 60.0)
     if conflicted or has_math_failures:
-        confidence_score = min(confidence_score, 50.0)
+        confidence_score = min(confidence_score, 55.0)
 
     confidence_score = max(0, min(100, round(confidence_score, 1)))
 
