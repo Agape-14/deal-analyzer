@@ -1,6 +1,9 @@
 """Burke-inspired deal validation checks for LP due diligence."""
 
 
+from app.services.canonical_metrics import is_hold_strategy
+
+
 # Asset-class-aware thresholds. Stabilized income properties accept lower
 # IRR and higher occupancy; development/value-add deals justifiably show
 # higher IRR and wider underwriting bands. Defaults match stabilized
@@ -127,10 +130,11 @@ def validate_deal_metrics(metrics: dict, property_type: str | None = None) -> li
     distribution_yield = _num(tr.get('distribution_yield'))
 
     primary_strategy = (tr.get('primary_strategy') or '').lower()
+    hold_strategy = is_hold_strategy(metrics)
     sale_scenario = tr.get('sale_scenario') or {}
     hold_scenario = tr.get('hold_scenario') or {}
 
-    if primary_strategy not in {'hold', 'hold_with_sale_option'}:
+    if not hold_strategy:
         _add_canonical_alias_flags(flags, [
             {
                 "label": "Target IRR",
@@ -208,7 +212,7 @@ def validate_deal_metrics(metrics: dict, property_type: str | None = None) -> li
 
     em = net_equity_multiple or target_equity_multiple
     hold = _num(ds.get('hold_period_years'))
-    if em and hold and hold > 0 and primary_strategy not in {'hold', 'hold_with_sale_option'}:
+    if em and hold and hold > 0 and not hold_strategy:
         implied_annual = ((em - 1) / hold) * 100
         if irr and abs(implied_annual - irr) > 5:
             flags.append({'severity': 'yellow', 'category': 'Returns',
@@ -293,8 +297,12 @@ def validate_deal_metrics(metrics: dict, property_type: str | None = None) -> li
     if entry_cap and exit_cap:
         spread = exit_cap - entry_cap
         if spread < 0:
-            flags.append({'severity': 'red', 'category': 'Underwriting',
-                          'message': f'Exit cap ({exit_cap}%) is BELOW entry cap ({entry_cap}%). Sponsor assumes cap rate compression - very risky.'})
+            if hold_strategy:
+                flags.append({'severity': 'yellow', 'category': 'Underwriting',
+                              'message': f'Optional sale scenario exit cap ({exit_cap}%) is below entry cap ({entry_cap}%). Treat sale returns as hypothetical; hold cash-flow metrics remain primary.'})
+            else:
+                flags.append({'severity': 'red', 'category': 'Underwriting',
+                              'message': f'Exit cap ({exit_cap}%) is BELOW entry cap ({entry_cap}%). Sponsor assumes cap rate compression - very risky.'})
         elif spread < 0.25:
             flags.append({'severity': 'yellow', 'category': 'Underwriting',
                           'message': f'Exit cap ({exit_cap}%) is only {spread * 100:.0f}bps above entry ({entry_cap}%). Conservative sponsors add 50-100bps.'})
