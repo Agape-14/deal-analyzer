@@ -17,7 +17,6 @@ type ReviewInput = {
   path: string;
   label: string;
   value: unknown;
-  source?: string;
   provenance?: FieldProvenance;
 };
 
@@ -43,10 +42,10 @@ type ReviewItem = {
 const REVIEW_LIMIT = 3;
 
 const REVIEW_FIELDS = [
-  { path: "target_returns.net_irr", label: "Target IRR", format: "pct" },
-  { path: "target_returns.target_irr", label: "Target IRR alias", format: "pct" },
-  { path: "target_returns.net_equity_multiple", label: "Equity multiple", format: "multiple" },
-  { path: "target_returns.target_equity_multiple", label: "Equity multiple alias", format: "multiple" },
+  { path: "target_returns.target_irr", label: "Target IRR", format: "pct" },
+  { path: "target_returns.net_irr", label: "Net IRR", format: "pct" },
+  { path: "target_returns.target_equity_multiple", label: "Target equity multiple", format: "multiple" },
+  { path: "target_returns.net_equity_multiple", label: "Net equity multiple", format: "multiple" },
   { path: "target_returns.target_cash_on_cash", label: "Cash-on-cash", format: "pct" },
   { path: "target_returns.distribution_yield", label: "Distribution yield", format: "pct" },
   { path: "deal_structure.minimum_investment", label: "Minimum investment", format: "money" },
@@ -59,9 +58,13 @@ const REVIEW_FIELDS = [
   { path: "financial_projections.avg_rent_per_unit", label: "Average rent", format: "money" },
   { path: "financial_projections.occupancy_assumption", label: "Occupancy", format: "pct" },
   { path: "construction_costs.hard_costs", label: "Hard costs", format: "money" },
+  { path: "construction_costs.hard_costs_total", label: "Hard costs", format: "money" },
   { path: "construction_costs.soft_costs", label: "Soft costs", format: "money" },
+  { path: "construction_costs.soft_costs_total", label: "Soft costs", format: "money" },
   { path: "construction_costs.land_cost", label: "Land", format: "money" },
+  { path: "construction_costs.land_cost_total", label: "Land", format: "money" },
   { path: "construction_costs.contingency", label: "Contingency", format: "money" },
+  { path: "construction_costs.contingency_total", label: "Contingency", format: "money" },
   { path: "underwriting_checks.dscr", label: "DSCR", format: "multiple" },
   { path: "project_details.unit_count", label: "Unit count", format: "integer" },
 ] as const;
@@ -69,7 +72,7 @@ const REVIEW_FIELDS = [
 const MATH_REVIEW_INPUTS: Array<{ match: RegExp; primaryPath: string; inputs: Array<{ path: string; label: string }> }> = [
   {
     match: /dscr|debt service/i,
-    primaryPath: "financial_projections.stabilized_noi",
+    primaryPath: "underwriting_checks.dscr",
     inputs: [
       { path: "underwriting_checks.dscr", label: "Reported DSCR" },
       { path: "financial_projections.stabilized_noi", label: "NOI" },
@@ -82,9 +85,13 @@ const MATH_REVIEW_INPUTS: Array<{ match: RegExp; primaryPath: string; inputs: Ar
     primaryPath: "deal_structure.total_project_cost",
     inputs: [
       { path: "construction_costs.hard_costs", label: "Hard costs" },
+      { path: "construction_costs.hard_costs_total", label: "Hard costs total" },
       { path: "construction_costs.soft_costs", label: "Soft costs" },
+      { path: "construction_costs.soft_costs_total", label: "Soft costs total" },
       { path: "construction_costs.land_cost", label: "Land" },
+      { path: "construction_costs.land_cost_total", label: "Land total" },
       { path: "construction_costs.contingency", label: "Contingency" },
+      { path: "construction_costs.contingency_total", label: "Contingency total" },
       { path: "deal_structure.total_project_cost", label: "Total cost" },
     ],
   },
@@ -124,7 +131,7 @@ export function ReviewQueue({ deal }: { deal: DealDetail }) {
             <div className="text-[10px] uppercase tracking-[0.14em] text-muted-foreground">Deal Readiness</div>
             <h3 className="text-base font-semibold tracking-tight">Needs review</h3>
             <p className="mt-0.5 text-xs text-muted-foreground">
-              {visible.length} priority item{visible.length === 1 ? "" : "s"} shown. Resolve these before trusting the score.
+              {visible.length} priority item{visible.length === 1 ? "" : "s"} shown. Correct or approve these before trusting the score.
             </p>
           </div>
         </div>
@@ -186,27 +193,8 @@ function ReviewRow({ item, index, dealId }: { item: ReviewItem; index: number; d
           </span>
         </div>
         <p className="mt-1 text-xs leading-relaxed text-muted-foreground">{item.detail}</p>
-        {item.inputs && item.inputs.length > 0 && (
-          <div className="mt-3 rounded-md border border-border/60 bg-background/40 p-2">
-            <div className="mb-1 text-[10px] uppercase tracking-[0.12em] text-muted-foreground">Inputs to check</div>
-            <div className="flex flex-wrap gap-2">
-              {item.inputs.map((input) => (
-                <a
-                  key={input.path}
-                  href={sourceHref(input.provenance, input.path)}
-                  target={input.provenance?.source_doc_id ? "_blank" : undefined}
-                  rel={input.provenance?.source_doc_id ? "noreferrer" : undefined}
-                  className="rounded-md bg-muted/45 px-2 py-1 text-[11px] text-muted-foreground ring-1 ring-border/60 transition-colors hover:bg-muted hover:text-foreground"
-                >
-                  {input.label}: <span className="text-foreground">{formatReviewValue(input.value, input.path)}</span>
-                </a>
-              ))}
-            </div>
-          </div>
-        )}
-        {item.kind === "math" && item.inputs && item.inputs.length > 0 && (
-          <MathInputEditor dealId={dealId} inputs={item.inputs} />
-        )}
+        {item.inputs && item.inputs.length > 0 && <InputChips inputs={item.inputs} />}
+        {item.kind === "math" && item.inputs && item.inputs.length > 0 && <MathInputEditor dealId={dealId} inputs={item.inputs} />}
         {(item.value !== undefined || item.recommendedValue !== undefined || item.source) && (
           <div className="mt-2 flex flex-wrap gap-2 text-[11px] text-muted-foreground">
             {item.value !== undefined && <span>Current: <span className="text-foreground">{formatReviewValue(item.value, item.path)}</span></span>}
@@ -221,16 +209,40 @@ function ReviewRow({ item, index, dealId }: { item: ReviewItem; index: number; d
   );
 }
 
+function InputChips({ inputs }: { inputs: ReviewInput[] }) {
+  return (
+    <div className="mt-3 rounded-md border border-border/60 bg-background/40 p-2">
+      <div className="mb-1 text-[10px] uppercase tracking-[0.12em] text-muted-foreground">Inputs to check</div>
+      <div className="flex flex-wrap gap-2">
+        {inputs.map((input) => (
+          <a
+            key={input.path}
+            href={sourceHref(input.provenance, input.path)}
+            target={input.provenance?.source_doc_id ? "_blank" : undefined}
+            rel={input.provenance?.source_doc_id ? "noreferrer" : undefined}
+            className="rounded-md bg-muted/45 px-2 py-1 text-[11px] text-muted-foreground ring-1 ring-border/60 transition-colors hover:bg-muted hover:text-foreground"
+          >
+            {input.label}: <span className="text-foreground">{formatReviewValue(input.value, input.path)}</span>
+          </a>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 function MathInputEditor({ dealId, inputs }: { dealId: number; inputs: ReviewInput[] }) {
   const router = useRouter();
+  const editableInputs = inputs.filter((input) => shouldShowMathInput(input));
   const [drafts, setDrafts] = React.useState<Record<string, string>>(() =>
-    Object.fromEntries(inputs.map((input) => [input.path, scalarToInput(input.value)])),
+    Object.fromEntries(editableInputs.map((input) => [input.path, scalarToInput(input.value)])),
   );
   const [busyPath, setBusyPath] = React.useState<string | null>(null);
 
   React.useEffect(() => {
-    setDrafts(Object.fromEntries(inputs.map((input) => [input.path, scalarToInput(input.value)])));
+    setDrafts(Object.fromEntries(editableInputs.map((input) => [input.path, scalarToInput(input.value)])));
   }, [inputs]);
+
+  if (editableInputs.length === 0) return null;
 
   async function saveInput(input: ReviewInput) {
     setBusyPath(input.path);
@@ -253,13 +265,13 @@ function MathInputEditor({ dealId, inputs }: { dealId: number; inputs: ReviewInp
     setBusyPath("__all");
     try {
       await api.post(`/api/deals/${dealId}/fields/batch-edit`, {
-        edits: inputs.map((input) => ({
+        edits: editableInputs.map((input) => ({
           path: input.path,
           value: parseDraftValue(drafts[input.path] ?? "", input.value),
           lock: true,
         })),
       });
-      toast.success("Inputs saved and math checks rerun", { description: `${inputs.length} fields updated` });
+      toast.success("Inputs saved and math checks rerun", { description: `${editableInputs.length} fields updated` });
       router.refresh();
     } catch (e) {
       toast.error("Could not save inputs", { description: (e as { detail?: string })?.detail });
@@ -273,7 +285,7 @@ function MathInputEditor({ dealId, inputs }: { dealId: number; inputs: ReviewInp
       <div className="mb-2 flex items-center justify-between gap-3">
         <div>
           <div className="text-xs font-semibold tracking-tight text-foreground">Resolve calculation</div>
-          <p className="mt-0.5 text-[11px] text-muted-foreground">Correct the wrong or missing inputs, then save them together to rerun the math check once.</p>
+          <p className="mt-0.5 text-[11px] text-muted-foreground">Only wrong or missing inputs are editable here. Save them together to rerun the math check once.</p>
         </div>
         <Button size="sm" onClick={saveAll} disabled={busyPath !== null}>
           {busyPath === "__all" ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <CheckCircle2 className="h-3.5 w-3.5" />}
@@ -281,7 +293,7 @@ function MathInputEditor({ dealId, inputs }: { dealId: number; inputs: ReviewInp
         </Button>
       </div>
       <div className="grid gap-2 lg:grid-cols-2">
-        {inputs.map((input) => (
+        {editableInputs.map((input) => (
           <div key={input.path} className="rounded-md border border-border/70 bg-background/70 p-2">
             <div className="mb-1 flex items-center justify-between gap-2">
               <div className="text-[11px] font-medium text-muted-foreground">{input.label}</div>
@@ -321,7 +333,7 @@ function ReviewActions({ item, dealId }: { item: ReviewItem; dealId: number }) {
   const [draft, setDraft] = React.useState(() => scalarToInput(item.value));
   const canEdit = Boolean(item.path);
   const actionHref = item.actionHref ?? (item.path ? sourceHref(item.provenance, item.path) : "#technical-details");
-  const actionLabel = item.actionLabel ?? (item.kind === "math" ? "View sources" : "View source");
+  const actionLabel = item.actionLabel ?? (item.kind === "math" ? "Review inputs" : "View source");
 
   async function saveValue(value: unknown, mode: "apply" | "save") {
     if (!item.path) return;
@@ -404,12 +416,13 @@ function mathItems(gate: DataQualityGate | undefined, metrics: DealDetail["metri
   const blocking = gate?.math_summary?.blocking ?? [];
   return blocking.map((check, index) => {
     const config = MATH_REVIEW_INPUTS.find((entry) => entry.match.test(check.check ?? ""));
-    const inputs = config?.inputs.map((input) => ({
-      ...input,
-      value: getPath(metrics, input.path),
-      source: sourceLabel(provenance[input.path]),
-      provenance: provenance[input.path],
-    }));
+    const inputs = config?.inputs
+      .map((input) => ({
+        ...input,
+        value: getPath(metrics, input.path),
+        provenance: provenance[input.path],
+      }))
+      .filter((input, pos, arr) => arr.findIndex((candidate) => candidate.path === input.path) === pos);
     return {
       key: `math:${check.check ?? index}`,
       priority: 100 - index,
@@ -420,7 +433,7 @@ function mathItems(gate: DataQualityGate | undefined, metrics: DealDetail["metri
       detail: [check.difference, check.formula].filter(Boolean).join(" - ") || "A deterministic calculation does not match the extracted deal values.",
       inputs,
       actionHref: config?.primaryPath ? sourceHref(provenance[config.primaryPath], config.primaryPath) : "#technical-details",
-      actionLabel: "View sources",
+      actionLabel: "Review inputs",
     };
   });
 }
@@ -461,7 +474,7 @@ function sourceItems(metrics: DealDetail["metrics"], provenance: Record<string, 
     const prov = provenance[field.path];
     const value = getPath(metrics, field.path);
     if (!prov || prov.locked) continue;
-    const status = String(prov.status ?? "");
+    const status = String(prov.status ?? "").toLowerCase();
     const confidence = typeof prov.confidence === "number" ? prov.confidence : null;
     const conflictCount = Array.isArray(prov.conflict) ? prov.conflict.length : 0;
     const needsReview = conflictCount > 1 || ["wrong", "missing", "unverifiable", "stale"].includes(status) || (confidence !== null && confidence < 85);
@@ -479,7 +492,7 @@ function sourceItems(metrics: DealDetail["metrics"], provenance: Record<string, 
       provenance: prov,
       source: sourceLabel(prov),
       actionHref: sourceHref(prov, field.path),
-      actionLabel: "View source",
+      actionLabel: prov.source_doc_id ? "Open document" : "View citation",
     });
   }
   return out;
@@ -586,6 +599,14 @@ function sourceCitationId(path: string): string {
   return `source-citation-${path.replace(/[^a-zA-Z0-9_-]+/g, "-")}`;
 }
 
+function shouldShowMathInput(input: ReviewInput): boolean {
+  if (input.value == null || input.value === "") return true;
+  const status = String(input.provenance?.status ?? "").toLowerCase();
+  if (["wrong", "missing", "unverifiable", "stale"].includes(status)) return true;
+  if (Array.isArray(input.provenance?.conflict) && input.provenance.conflict.length > 1) return true;
+  return false;
+}
+
 function formatReviewValue(value: unknown, path?: string): string {
   if (value == null || value === "") return "missing";
   const n = typeof value === "number" ? value : typeof value === "string" && !Number.isNaN(Number(value)) ? Number(value) : null;
@@ -620,6 +641,7 @@ function parseDraftValue(value: string, original: unknown): string | number | bo
 }
 
 function humanizePath(path: string): string {
-  const [, field = path] = path.split(".");
-  return field.replace(/_/g, " ").replace(/\b\w/g, (m) => m.toUpperCase());
+  const field = path.split(".").at(-1) ?? path;
+  const label = REVIEW_FIELDS.find((item) => item.path === path)?.label;
+  return label ?? field.replace(/_/g, " ").replace(/\b\w/g, (m) => m.toUpperCase());
 }
