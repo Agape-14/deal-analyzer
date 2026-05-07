@@ -1,11 +1,15 @@
 "use client";
 
+import * as React from "react";
 import Link from "next/link";
-import { ArrowLeft, MapPin, Building2, Sparkles, FileDown } from "lucide-react";
+import { useRouter } from "next/navigation";
+import { ArrowLeft, MapPin, Building2, Sparkles, FileDown, Loader2 } from "lucide-react";
+import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { BigScoreRing } from "@/components/deal-detail/score-ring";
 import { ScoreQualityBadge } from "@/components/deal-detail/score-quality-badge";
 import { FadeIn } from "@/components/motion";
+import { api } from "@/lib/api";
 import { cn, fmtMoney, fmtMultiple, fmtPct } from "@/lib/utils";
 import type { DealDetail, FieldProvenance } from "@/lib/types";
 
@@ -20,6 +24,8 @@ const STATUS_STYLES: Record<string, string> = {
 type ProvenanceMap = Record<string, FieldProvenance | undefined>;
 
 export function DealHero({ deal }: { deal: DealDetail }) {
+  const router = useRouter();
+  const [scoring, setScoring] = React.useState(false);
   const locationBits = [deal.city, deal.state].filter(Boolean).join(", ") || deal.location;
   const visibleScore = deal.overall_score ?? deal.scores?.provisional_overall ?? null;
   const metrics = deal.metrics ?? {};
@@ -27,6 +33,21 @@ export function DealHero({ deal }: { deal: DealDetail }) {
   const provenance = (metrics._provenance ?? {}) as ProvenanceMap;
   const headlineIrr = pickTrustedNumber(tr, provenance, ["target_returns.target_irr", "target_returns.net_irr"]) ?? deal.target_irr;
   const headlineMultiple = pickTrustedNumber(tr, provenance, ["target_returns.target_equity_multiple", "target_returns.net_equity_multiple"]) ?? deal.target_equity_multiple;
+
+  async function runScore() {
+    setScoring(true);
+    try {
+      await api.post(`/api/deals/${deal.id}/score`);
+      toast.success("Score updated", {
+        description: "The deal was recalculated with the latest extraction and strategy rules.",
+      });
+      router.refresh();
+    } catch (e) {
+      toast.error("Could not re-score deal", { description: (e as { detail?: string })?.detail });
+    } finally {
+      setScoring(false);
+    }
+  }
 
   return (
     <FadeIn>
@@ -95,9 +116,9 @@ export function DealHero({ deal }: { deal: DealDetail }) {
             </div>
             <ScoreQualityBadge gate={deal.scores?.data_quality} />
             <div className="flex items-center gap-2">
-              <Button size="sm" variant="secondary">
-                <Sparkles className="h-4 w-4" />
-                Re-score
+              <Button size="sm" variant="secondary" onClick={runScore} disabled={scoring}>
+                {scoring ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
+                {scoring ? "Scoring..." : "Re-score"}
               </Button>
               <Button size="sm" variant="outline" asChild>
                 <a href={`/api/reports/deal/${deal.id}/pdf`} target="_blank" rel="noreferrer">
