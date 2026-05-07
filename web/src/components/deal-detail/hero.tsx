@@ -11,7 +11,10 @@ import { ScoreQualityBadge } from "@/components/deal-detail/score-quality-badge"
 import { FadeIn } from "@/components/motion";
 import { api } from "@/lib/api";
 import { cn, fmtMoney, fmtMultiple, fmtPct } from "@/lib/utils";
-import type { DealDetail, FieldProvenance } from "@/lib/types";
+import type { DataQualityGate, DealDetail, DealQualitySummary, FieldProvenance } from "@/lib/types";
+
+const POLL_INTERVAL = 5_000;
+const POLL_TIMEOUT = 8 * 60_000;
 
 const STATUS_STYLES: Record<string, string> = {
   reviewing: "bg-muted/60 text-muted-foreground",
@@ -22,11 +25,15 @@ const STATUS_STYLES: Record<string, string> = {
 };
 
 type ProvenanceMap = Record<string, FieldProvenance | undefined>;
+type PipelineStep = "idle" | "extract" | "verify" | "score";
+type QualityResponse = { summary?: DealQualitySummary; stale_flags?: unknown[] };
 
 export function DealHero({ deal }: { deal: DealDetail }) {
   const router = useRouter();
   const [scoring, setScoring] = React.useState(false);
   const [pipelineRunning, setPipelineRunning] = React.useState(false);
+  const [pipelineStep, setPipelineStep] = React.useState<PipelineStep>("idle");
+  const mountedRef = React.useRef(true);
   const locationBits = [deal.city, deal.state].filter(Boolean).join(", ") || deal.location;
   const visibleScore = deal.overall_score ?? deal.scores?.provisional_overall ?? null;
   const metrics = deal.metrics ?? {};
@@ -35,19 +42,52 @@ export function DealHero({ deal }: { deal: DealDetail }) {
   const headlineIrr = pickTrustedNumber(tr, provenance, ["target_returns.target_irr", "target_returns.net_irr"]) ?? deal.target_irr;
   const headlineMultiple = pickTrustedNumber(tr, provenance, ["target_returns.target_equity_multiple", "target_returns.net_equity_multiple"]) ?? deal.target_equity_multiple;
 
+  React.useEffect(() => {
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
+
   async function runPipeline() {
     setPipelineRunning(true);
+    setPipelineStep("extract");
+    const beforeExtract = qualityTimestamp(deal.quality, "extract");
+    const beforeVerify = qualityTimestamp(deal.quality, "verify") ?? deal.scores?.data_quality?.verified_at ?? null;
+
     try {
       await api.post(`/api/deals/${deal.id}/extract`);
-      toast.success("Full pipeline started", {
-        description: "Documents will be re-extracted, verified, math-checked, and scored automatically.",
-        duration: 6000,
+      toast.success("Extraction started", {
+        description: "Reading all uploaded documents again.",
+        duration: 5000,
+      });
+
+      await waitForQualityTimestamp(deal.id, "extract", beforeExtract);
+      if (!mountedRef.current) return;
+
+      setPipelineStep("verify");
+      await api.post(`/api/deals/${deal.id}/verify`);
+      toast.success("Verification started", {
+        description: "Checking extracted values against source documents.",
+        duration: 5000,
+      });
+
+      await waitForQualityTimestamp(deal.id, "verify", beforeVerify);
+      if (!mountedRef.current) return;
+
+      setPipelineStep("score");
+      await api.post(`/api/deals/${deal.id}/score`);
+      toast.success("Pipeline complete", {
+        description: "Documents were re-read, verified, math-checked, and scored.",
       });
       router.refresh();
     } catch (e) {
-      toast.error("Could not start pipeline", { description: (e as { detail?: string })?.detail });
+      const detail = (e as { detail?: string; message?: string })?.detail ?? (e as Error)?.message;
+      toast.error("Pipeline did not finish", { description: detail });
     } finally {
-      setPipelineRunning(false);
+      if (mountedRef.current) {
+        setPipelineRunning(false);
+        setPipelineStep("idle");
+      }
     }
   }
 
@@ -65,6 +105,8 @@ export function DealHero({ deal }: { deal: DealDetail }) {
       setScoring(false);
     }
   }
+
+  const pipelineLabel = pipelineRunning ? pipelineStepLabel(pipelineStep) : "Re-run pipeline";
 
   return (
     <FadeIn>
@@ -135,7 +177,7 @@ export function DealHero({ deal }: { deal: DealDetail }) {
             <div className="flex flex-wrap items-center justify-center lg:justify-end gap-2 max-w-sm">
               <Button size="sm" onClick={runPipeline} disabled={pipelineRunning || scoring}>
                 {pipelineRunning ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
-                {pipelineRunning ? "Starting..." : "Re-run pipeline"}
+                {pipelineLabel}
               </Button>
               <Button size="sm" variant="secondary" onClick={runScore} disabled={scoring || pipelineRunning}>
                 {scoring ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
@@ -165,6 +207,44 @@ function Metric({ label, value }: { label: string; value: string }) {
       <div className="text-xl font-semibold tabular-nums tracking-tight mt-1.5">{value}</div>
     </div>
   );
+}
+
+async function waitForQualityTimestamp(dealId: number, kind: "extract" | "verify", previous: string | null): Promise<string> {
+  const start = Date.now();
+  while (Date.now() - start < POLL_TIMEOUT) {
+    await sleep(POLL_INTERVAL);
+    const res = await api.get<QualityResponse>(`/api/deals/${dealId}/quality`);
+    const next = qualityTimestamp(res.summary, kind);
+    if (next && next !== previous) return next;
+  }
+  throw new Error(`${kind === "extract" ? "Extraction" : "Verification"} is still running. Refresh in a minute to check the latest result.`);
+}
+
+function qualityTimestamp(quality: DealDetail["quality"] | DealQualitySummary | DataQualityGate | undefined, kind: "extract" | "verify"): string | null {
+  if (!quality) return null;
+  if (kind === "extract" && "last_extracted_at" in quality) return quality.last_extracted_at ?? null;
+  if (kind === "verify") {
+    if ("last_verified_at" in quality) return quality.last_verified_at ?? null;
+    if ("verified_at" in quality) return quality.verified_at ?? null;
+  }
+  return null;
+}
+
+function pipelineStepLabel(step: PipelineStep): string {
+  switch (step) {
+    case "extract":
+      return "Extracting docs...";
+    case "verify":
+      return "Verifying sources...";
+    case "score":
+      return "Scoring...";
+    default:
+      return "Running...";
+  }
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 function pickTrustedNumber(block: Record<string, unknown>, provenance: ProvenanceMap, paths: string[]): number | null {
