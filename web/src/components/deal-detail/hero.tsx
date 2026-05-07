@@ -3,7 +3,7 @@
 import * as React from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { ArrowLeft, MapPin, Building2, Sparkles, FileDown, Loader2 } from "lucide-react";
+import { ArrowLeft, MapPin, Building2, Sparkles, FileDown, Loader2, RefreshCw } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { BigScoreRing } from "@/components/deal-detail/score-ring";
@@ -26,6 +26,7 @@ type ProvenanceMap = Record<string, FieldProvenance | undefined>;
 export function DealHero({ deal }: { deal: DealDetail }) {
   const router = useRouter();
   const [scoring, setScoring] = React.useState(false);
+  const [pipelineRunning, setPipelineRunning] = React.useState(false);
   const locationBits = [deal.city, deal.state].filter(Boolean).join(", ") || deal.location;
   const visibleScore = deal.overall_score ?? deal.scores?.provisional_overall ?? null;
   const metrics = deal.metrics ?? {};
@@ -34,16 +35,32 @@ export function DealHero({ deal }: { deal: DealDetail }) {
   const headlineIrr = pickTrustedNumber(tr, provenance, ["target_returns.target_irr", "target_returns.net_irr"]) ?? deal.target_irr;
   const headlineMultiple = pickTrustedNumber(tr, provenance, ["target_returns.target_equity_multiple", "target_returns.net_equity_multiple"]) ?? deal.target_equity_multiple;
 
+  async function runPipeline() {
+    setPipelineRunning(true);
+    try {
+      await api.post(`/api/deals/${deal.id}/extract`);
+      toast.success("Full pipeline started", {
+        description: "Documents will be re-extracted, verified, math-checked, and scored automatically.",
+        duration: 6000,
+      });
+      router.refresh();
+    } catch (e) {
+      toast.error("Could not start pipeline", { description: (e as { detail?: string })?.detail });
+    } finally {
+      setPipelineRunning(false);
+    }
+  }
+
   async function runScore() {
     setScoring(true);
     try {
       await api.post(`/api/deals/${deal.id}/score`);
-      toast.success("Score updated", {
-        description: "The deal was recalculated with the latest extraction and strategy rules.",
+      toast.success("Score recalculated", {
+        description: "This used the metrics already extracted into the database.",
       });
       router.refresh();
     } catch (e) {
-      toast.error("Could not re-score deal", { description: (e as { detail?: string })?.detail });
+      toast.error("Could not recalculate score", { description: (e as { detail?: string })?.detail });
     } finally {
       setScoring(false);
     }
@@ -115,10 +132,14 @@ export function DealHero({ deal }: { deal: DealDetail }) {
               <BigScoreRing value={visibleScore} size={128} />
             </div>
             <ScoreQualityBadge gate={deal.scores?.data_quality} />
-            <div className="flex items-center gap-2">
-              <Button size="sm" variant="secondary" onClick={runScore} disabled={scoring}>
+            <div className="flex flex-wrap items-center justify-center lg:justify-end gap-2 max-w-sm">
+              <Button size="sm" onClick={runPipeline} disabled={pipelineRunning || scoring}>
+                {pipelineRunning ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
+                {pipelineRunning ? "Starting..." : "Re-run pipeline"}
+              </Button>
+              <Button size="sm" variant="secondary" onClick={runScore} disabled={scoring || pipelineRunning}>
                 {scoring ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
-                {scoring ? "Scoring..." : "Re-score"}
+                {scoring ? "Calculating..." : "Recalculate score"}
               </Button>
               <Button size="sm" variant="outline" asChild>
                 <a href={`/api/reports/deal/${deal.id}/pdf`} target="_blank" rel="noreferrer">
@@ -127,6 +148,9 @@ export function DealHero({ deal }: { deal: DealDetail }) {
                 </a>
               </Button>
             </div>
+            <p className="max-w-sm text-center lg:text-right text-[11px] leading-relaxed text-muted-foreground">
+              Re-run pipeline reads all uploaded documents again. Recalculate score only uses already-extracted metrics.
+            </p>
           </div>
         </div>
       </div>
