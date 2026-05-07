@@ -5,6 +5,7 @@ import * as React from "react";
 type Theme = "light" | "dark" | "system";
 
 const STORAGE_KEY = "kenyon-theme";
+const DEFAULT_THEME: Theme = "light";
 
 interface ThemeContextValue {
   theme: Theme;
@@ -21,12 +22,12 @@ const ThemeContext = React.createContext<ThemeContextValue | null>(null);
  * sync and reacting to user toggles.
  */
 export function ThemeProvider({ children }: { children: React.ReactNode }) {
-  const [theme, setThemeState] = React.useState<Theme>("dark");
-  const [resolved, setResolved] = React.useState<"light" | "dark">("dark");
+  const [theme, setThemeState] = React.useState<Theme>(DEFAULT_THEME);
+  const [resolved, setResolved] = React.useState<"light" | "dark">("light");
 
   // Read the initial theme the inline script wrote to <html>.
   React.useEffect(() => {
-    const stored = (localStorage.getItem(STORAGE_KEY) as Theme | null) ?? "dark";
+    const stored = (localStorage.getItem(STORAGE_KEY) as Theme | null) ?? DEFAULT_THEME;
     setThemeState(stored);
     setResolved(resolveTheme(stored));
   }, []);
@@ -66,15 +67,14 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
 export function useTheme() {
   const ctx = React.useContext(ThemeContext);
   if (!ctx) {
-    // Fail soft for components that import this outside a provider (e.g. tests)
-    return { theme: "dark" as Theme, resolved: "dark" as const, setTheme: () => {} };
+    return { theme: DEFAULT_THEME, resolved: "light" as const, setTheme: () => {} };
   }
   return ctx;
 }
 
 function resolveTheme(t: Theme): "light" | "dark" {
   if (t === "system") {
-    if (typeof window === "undefined") return "dark";
+    if (typeof window === "undefined") return "light";
     return window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
   }
   return t;
@@ -82,8 +82,8 @@ function resolveTheme(t: Theme): "light" | "dark" {
 
 /**
  * Inline script that sets the initial theme on <html> BEFORE React mounts.
- * Without this the page would paint in the default (dark) theme and then
- * flash to light if the user had picked light — jarring.
+ * Without this the page would paint in the default theme and then flash if
+ * the user had picked a different theme.
  *
  * Must be rendered as the first thing inside <head> (see layout.tsx).
  */
@@ -91,7 +91,7 @@ export function ThemeScript() {
   const code = `
 (function() {
   try {
-    var stored = localStorage.getItem('${STORAGE_KEY}') || 'dark';
+    var stored = localStorage.getItem('${STORAGE_KEY}') || '${DEFAULT_THEME}';
     var isDark = stored === 'dark' ||
       (stored === 'system' && window.matchMedia('(prefers-color-scheme: dark)').matches);
     var html = document.documentElement;
