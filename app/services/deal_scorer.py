@@ -6,6 +6,7 @@ without mistaking unverified extraction output for an investment-ready score.
 """
 
 from app.services.confidence import assess_data_quality
+from app.services.canonical_metrics import canonical_return_summary
 
 
 def _safe_get(metrics: dict, *keys, default=None):
@@ -30,38 +31,65 @@ def _score_range(value, ranges: list[tuple]) -> int:
 
 
 def score_returns(metrics: dict) -> tuple[int, str]:
-    """Score based on IRR, equity multiple, cash-on-cash. Weight: 20%"""
-    # Prefer net returns over gross
-    net_irr = _safe_get(metrics, "target_returns", "net_irr")
-    gross_irr = _safe_get(metrics, "target_returns", "gross_irr")
-    irr = net_irr or _safe_get(metrics, "target_returns", "target_irr")
+    """Score based on the deal's primary return strategy. Weight: 20%"""
+    summary = canonical_return_summary(metrics)
+    strategy = summary.get("primary_strategy") or "unknown"
+    tr = metrics.get("target_returns", {}) or {}
 
-    net_em = _safe_get(metrics, "target_returns", "net_equity_multiple")
-    em = net_em or _safe_get(metrics, "target_returns", "target_equity_multiple")
-    coc = _safe_get(metrics, "target_returns", "target_cash_on_cash")
-    dist_yield = _safe_get(metrics, "target_returns", "distribution_yield")
+    irr = summary.get("target_irr")
+    em = summary.get("target_equity_multiple")
+    coc = summary.get("cash_on_cash")
+    gross_irr = _safe_get(metrics, "target_returns", "gross_irr")
+    net_irr = _safe_get(metrics, "target_returns", "net_irr")
+    sale = tr.get("sale_scenario") if isinstance(tr.get("sale_scenario"), dict) else {}
+    sale_irr = sale.get("sale_irr")
+    sale_em = sale.get("sale_equity_multiple")
 
     irr_score = _score_range(irr, [(20, 10), (18, 9), (16, 8), (15, 7), (13, 6), (12, 5), (10, 4), (8, 3)])
     em_score = _score_range(em, [(2.5, 10), (2.2, 9), (2.0, 8), (1.8, 7), (1.6, 6), (1.5, 5), (1.3, 4)])
     coc_score = _score_range(coc, [(12, 10), (10, 9), (8, 7), (6, 5), (4, 3)])
 
-    scores = [s for s in [irr_score, em_score, coc_score] if s is not None]
-    avg = round(sum(scores) / len(scores)) if scores else 5
+    score_parts = []
+    if strategy in {"hold", "hold_with_sale_option"}:
+        if coc is not None:
+            score_parts.append(coc_score)
+        if irr is not None and irr != coc:
+            score_parts.append(irr_score)
+        if em is not None and strategy == "hold":
+            # A long-term hold may not have a meaningful sale multiple; include it
+            # only when it is not merely the optional hypothetical sale case.
+            score_parts.append(em_score)
+    else:
+        score_parts = [s for s in [irr_score, em_score, coc_score] if s is not None]
+
+    avg = round(sum(score_parts) / len(score_parts)) if score_parts else 5
 
     notes = []
-    if irr:
-        label = "Net IRR" if net_irr else "IRR"
+    if strategy == "hold_with_sale_option":
+        notes.append("Primary strategy: long-term hold; sale case treated as optional/hypothetical")
+    elif strategy == "hold":
+        notes.append("Primary strategy: long-term hold")
+    elif strategy == "sale":
+        notes.append("Primary strategy: sale")
+
+    if irr is not None:
+        label = "Hold yield" if strategy in {"hold", "hold_with_sale_option"} else ("Net IRR" if net_irr else "IRR")
         notes.append(f"{label} {irr}% -> {irr_score}/10")
-    if gross_irr and net_irr:
+    if gross_irr and net_irr and strategy == "sale":
         fee_drag = gross_irr - net_irr
         notes.append(f"Fee drag: {fee_drag:.1f}%")
-    if em:
-        label = "Net Equity Multiple" if net_em else "Equity Multiple"
+    if em is not None:
+        label = "Sale-case equity multiple" if strategy == "hold_with_sale_option" else "Equity Multiple"
         notes.append(f"{label} {em}x -> {em_score}/10")
-    if coc:
+    if coc is not None:
         notes.append(f"Cash-on-Cash {coc}% -> {coc_score}/10")
-    if dist_yield:
-        notes.append(f"Distribution yield {dist_yield}%")
+    if strategy == "hold_with_sale_option" and (sale_irr or sale_em):
+        sale_bits = []
+        if sale_irr:
+            sale_bits.append(f"IRR {sale_irr}%")
+        if sale_em:
+            sale_bits.append(f"EM {sale_em}x")
+        notes.append(f"Optional sale scenario shown separately ({', '.join(sale_bits)})")
     if not notes:
         notes.append("No return metrics found - scored neutral")
 
