@@ -30,6 +30,18 @@ CRITICAL_FIELDS = (
     ("financial_projections.occupancy_assumption", "Occupancy assumption", ()),
 )  # type: Tuple[Tuple[str, str, Tuple[str, ...]], ...]
 
+# These are decision-useful, but they are not always stated in an offering memo
+# or proforma in the exact field shape the app expects. They should create a
+# review queue item, not make the whole deal look unreadable.
+SUPPORTING_REVIEW_FIELDS = {
+    "deal_structure.hold_period_years",
+    "target_returns.target_equity_multiple",
+    "target_returns.target_cash_on_cash",
+    "financial_projections.stabilized_noi",
+    "financial_projections.avg_rent_per_unit",
+    "financial_projections.occupancy_assumption",
+}
+
 VERIFIED_STATUSES = {"confirmed", "calculated"}
 BAD_STATUSES = {"wrong", "missing", "math_failed"}
 REVIEW_STATUSES = {"unverifiable"}
@@ -75,6 +87,30 @@ def _pick_present_path(metrics, canonical_path, fallback_paths):
         if _present(value):
             return path, value
     return canonical_path, None
+
+
+def _has_any_return_metric(metrics):
+    # type: (Dict[str, Any]) -> bool
+    paths = (
+        "target_returns.target_irr",
+        "target_returns.net_irr",
+        "target_returns.target_cash_on_cash",
+        "target_returns.distribution_yield",
+        "target_returns.hold_scenario.cash_on_cash_return",
+        "target_returns.sale_scenario.sale_irr",
+    )
+    return any(_present(_get_path(metrics, path)) for path in paths)
+
+
+def _is_supporting_field(path, metrics):
+    # type: (str, Dict[str, Any]) -> bool
+    if path in SUPPORTING_REVIEW_FIELDS:
+        return True
+    if path == "target_returns.target_irr" and _has_any_return_metric(metrics):
+        # If another return metric exists, a missing/unverifiable target_irr is
+        # a mapping problem to review, not proof that the deal cannot be read.
+        return True
+    return False
 
 
 def _is_ignored_hold_alias_check(check, metrics):
@@ -134,24 +170,25 @@ def _parse_confidence(value, fallback):
     return max(0.0, min(100.0, parsed))
 
 
-def _critical_confidence_score(missing, unverified, conflicted, bad):
-    # type: (int, int, int, int) -> float
+def _critical_confidence_score(missing, unverified, conflicted, bad, review_only):
+    # type: (int, int, int, int, int) -> float
     # Confidence should answer: "Can I trust the key underwriting facts?"
     # The broad verifier may audit 100+ narrative and optional fields, so its
     # raw score is useful color but too noisy to be the base deal confidence.
     score = 100.0
-    score -= missing * 10
-    score -= unverified * 5
-    score -= conflicted * 18
-    score -= bad * 14
+    score -= missing * 12
+    score -= unverified * 4
+    score -= conflicted * 20
+    score -= bad * 16
+    score -= review_only * 2
     return max(0.0, min(100.0, score))
 
 
 def _blend_confidence(critical_score, verification_score, verification_complete):
     # type: (float, float, bool) -> float
     if verification_complete:
-        return critical_score * 0.85 + verification_score * 0.15
-    return critical_score * 0.9 + verification_score * 0.1
+        return critical_score * 0.9 + verification_score * 0.1
+    return critical_score * 0.95 + verification_score * 0.05
 
 
 def assess_data_quality(metrics, math_checks=None, require_verified=True):
@@ -174,6 +211,7 @@ def assess_data_quality(metrics, math_checks=None, require_verified=True):
     unverified = 0
     conflicted = 0
     bad = 0
+    review_only = 0
 
     for canonical_path, label, fallback_paths in CRITICAL_FIELDS:
         actual_path, value = _pick_present_path(metrics, canonical_path, fallback_paths)
@@ -183,21 +221,32 @@ def assess_data_quality(metrics, math_checks=None, require_verified=True):
         source = str(prov.get("source") or "").lower()
         verified = status in VERIFIED_STATUSES or source == "manual"
         conflict = bool(prov.get("conflict"))
+        supporting = _is_supporting_field(canonical_path, metrics)
 
         severity = "ok"
         reason = None
         if not present:
-            severity = "blocker"
-            reason = "missing"
-            missing += 1
+            if supporting:
+                severity = "review"
+                reason = "supporting field missing"
+                review_only += 1
+            else:
+                severity = "blocker"
+                reason = "missing"
+                missing += 1
         elif conflict:
             severity = "blocker"
             reason = "conflicting source values"
             conflicted += 1
         elif status in BAD_STATUSES:
-            severity = "blocker"
-            reason = status
-            bad += 1
+            if supporting:
+                severity = "review"
+                reason = status
+                review_only += 1
+            else:
+                severity = "blocker"
+                reason = status
+                bad += 1
         elif status in REVIEW_STATUSES:
             severity = "review"
             reason = "needs source review"
@@ -221,7 +270,7 @@ def assess_data_quality(metrics, math_checks=None, require_verified=True):
     math_summary = summarize_math_checks(math_checks, metrics)
     has_math_failures = math_summary["fail"] > 0
     has_blockers = missing > 0 or conflicted > 0 or bad > 0 or has_math_failures
-    has_review_items = unverified > 0
+    has_review_items = unverified > 0 or review_only > 0
     verification_complete = bool(verified_at)
 
     if conflicted:
@@ -247,7 +296,7 @@ def assess_data_quality(metrics, math_checks=None, require_verified=True):
         verification_confidence,
         35.0 if not verification_complete else 70.0,
     )
-    critical_score = _critical_confidence_score(missing, unverified, conflicted, bad)
+    critical_score = _critical_confidence_score(missing, unverified, conflicted, bad, review_only)
     confidence_score = _blend_confidence(critical_score, broad_verification_score, verification_complete)
 
     # Deterministic math failures are high-signal and should still gate trust.
@@ -262,9 +311,9 @@ def assess_data_quality(metrics, math_checks=None, require_verified=True):
     # Active blockers must remain obvious, but do not let a noisy broad verifier
     # turn otherwise reviewable data into a single-digit score by itself.
     if missing or bad:
-        confidence_score = min(confidence_score, 60.0)
+        confidence_score = min(confidence_score, 70.0)
     if conflicted or has_math_failures:
-        confidence_score = min(confidence_score, 55.0)
+        confidence_score = min(confidence_score, 60.0)
 
     confidence_score = max(0, min(100, round(confidence_score, 1)))
 
@@ -280,7 +329,8 @@ def assess_data_quality(metrics, math_checks=None, require_verified=True):
             "unverified": unverified,
             "conflicted": conflicted,
             "bad": bad,
-            "verified": len(CRITICAL_FIELDS) - missing - unverified - conflicted - bad,
+            "review_only": review_only,
+            "verified": len(CRITICAL_FIELDS) - missing - unverified - conflicted - bad - review_only,
         },
         "math_summary": math_summary,
         "confidence_breakdown": {
