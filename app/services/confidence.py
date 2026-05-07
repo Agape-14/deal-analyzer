@@ -8,6 +8,8 @@ the same answer.
 
 from typing import Any, Dict, List, Optional, Tuple
 
+from app.services.canonical_metrics import is_hold_strategy
+
 
 # Each entry is (canonical_path, label, fallback_paths). The canonical path is
 # what the scoring model and UI should use. Fallbacks keep older extracted deals
@@ -30,6 +32,11 @@ CRITICAL_FIELDS = (
 
 VERIFIED_STATUSES = {"confirmed", "calculated"}
 BAD_STATUSES = {"wrong", "missing", "unverifiable", "math_failed"}
+HOLD_SCENARIO_ALIAS_CHECKS = {
+    "Target IRR = Net IRR",
+    "Equity Multiple = Net Equity Multiple",
+    "IRR vs Equity Multiple Consistency",
+}
 
 
 def _get_path(data, path):
@@ -60,12 +67,29 @@ def _pick_present_path(metrics, canonical_path, fallback_paths):
     return canonical_path, None
 
 
-def summarize_math_checks(checks):
-    # type: (Optional[List[Dict[str, Any]]]) -> Dict[str, Any]
+def _is_ignored_hold_alias_check(check, metrics):
+    # type: (Dict[str, Any], Dict[str, Any]) -> bool
+    if not is_hold_strategy(metrics):
+        return False
+    name = str((check or {}).get("check") or "")
+    if name in HOLD_SCENARIO_ALIAS_CHECKS:
+        return True
+    formula = str((check or {}).get("formula") or "").lower()
+    return "hypothetical sale" in formula and "hold" in formula
+
+
+def summarize_math_checks(checks, metrics=None):
+    # type: (Optional[List[Dict[str, Any]]], Optional[Dict[str, Any]]) -> Dict[str, Any]
     checks = checks or []
-    summary = {"pass": 0, "fail": 0, "warn": 0, "info": 0, "total": len(checks), "blocking": []}
+    metrics = metrics or {}
+    summary = {"pass": 0, "fail": 0, "warn": 0, "info": 0, "ignored": 0, "total": len(checks), "blocking": []}
     for check in checks:
         status = str((check or {}).get("status") or "").lower()
+        ignored = status == "fail" and _is_ignored_hold_alias_check(check, metrics)
+        if ignored:
+            summary["ignored"] += 1
+            summary["info"] += 1
+            continue
         if status in ("pass", "fail", "warn", "info"):
             summary[status] += 1
         if status == "fail":
@@ -137,7 +161,7 @@ def assess_data_quality(metrics, math_checks=None, require_verified=True):
             "reason": reason,
         })
 
-    math_summary = summarize_math_checks(math_checks)
+    math_summary = summarize_math_checks(math_checks, metrics)
     has_math_failures = math_summary["fail"] > 0
     has_blockers = missing > 0 or conflicted > 0 or bad > 0 or has_math_failures
     has_review_items = unverified > 0
