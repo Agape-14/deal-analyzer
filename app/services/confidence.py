@@ -101,6 +101,37 @@ def summarize_math_checks(checks, metrics=None):
     return summary
 
 
+def _parse_confidence(value, fallback):
+    # type: (Any, float) -> float
+    if value is None:
+        return fallback
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        return fallback
+    return max(0.0, min(100.0, parsed))
+
+
+def _critical_confidence_score(missing, unverified, conflicted, bad):
+    # type: (int, int, int, int) -> float
+    # Confidence should answer: "Can I trust the key underwriting facts?"
+    # The broad verifier may audit 100+ narrative and optional fields, so its
+    # raw score is useful color but too noisy to be the base deal confidence.
+    score = 100.0
+    score -= missing * 10
+    score -= unverified * 5
+    score -= conflicted * 18
+    score -= bad * 14
+    return max(0.0, min(100.0, score))
+
+
+def _blend_confidence(critical_score, verification_score, verification_complete):
+    # type: (float, float, bool) -> float
+    if verification_complete:
+        return critical_score * 0.75 + verification_score * 0.25
+    return critical_score * 0.85 + verification_score * 0.15
+
+
 def assess_data_quality(metrics, math_checks=None, require_verified=True):
     # type: (Optional[Dict[str, Any]], Optional[List[Dict[str, Any]]], bool) -> Dict[str, Any]
     metrics = metrics or {}
@@ -186,20 +217,29 @@ def assess_data_quality(metrics, math_checks=None, require_verified=True):
         and not has_review_items
     )
 
-    if verification_confidence is None:
-        confidence_score = 35 if not verification_complete else 70
-    else:
-        try:
-            confidence_score = float(verification_confidence)
-        except (TypeError, ValueError):
-            confidence_score = 70
+    broad_verification_score = _parse_confidence(
+        verification_confidence,
+        35.0 if not verification_complete else 70.0,
+    )
+    critical_score = _critical_confidence_score(missing, unverified, conflicted, bad)
+    confidence_score = _blend_confidence(critical_score, broad_verification_score, verification_complete)
 
-    confidence_score -= missing * 8
-    confidence_score -= unverified * 4
-    confidence_score -= conflicted * 15
-    confidence_score -= bad * 12
-    confidence_score -= math_summary["fail"] * 10
+    # Deterministic math failures are high-signal and should still gate trust.
+    confidence_score -= math_summary["fail"] * 12
     confidence_score -= math_summary["warn"] * 2
+
+    # If a deal is only provisional because verification has not finished, keep
+    # it visibly below the verified range without claiming the extraction is bad.
+    if require_verified and not verification_complete:
+        confidence_score = min(confidence_score, 65.0)
+
+    # Active blockers must remain obvious, but do not let a noisy broad verifier
+    # turn otherwise reviewable data into a single-digit score by itself.
+    if missing or bad:
+        confidence_score = min(confidence_score, 55.0)
+    if conflicted or has_math_failures:
+        confidence_score = min(confidence_score, 50.0)
+
     confidence_score = max(0, min(100, round(confidence_score, 1)))
 
     return {
@@ -217,4 +257,10 @@ def assess_data_quality(metrics, math_checks=None, require_verified=True):
             "verified": len(CRITICAL_FIELDS) - missing - unverified - conflicted - bad,
         },
         "math_summary": math_summary,
+        "confidence_breakdown": {
+            "critical_field_score": round(critical_score, 1),
+            "broad_verification_score": round(broad_verification_score, 1),
+            "math_failures": math_summary["fail"],
+            "math_warnings": math_summary["warn"],
+        },
     }
