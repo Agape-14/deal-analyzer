@@ -245,36 +245,57 @@ function MathInputEditor({ dealId, inputs }: { dealId: number; inputs: ReviewInp
   if (editableInputs.length === 0) return null;
 
   async function saveInput(input: ReviewInput) {
+    const draft = drafts[input.path] ?? "";
+    if (draft.trim() === "") {
+      toast.error("Enter a value before saving", { description: humanizePath(input.path) });
+      return;
+    }
     setBusyPath(input.path);
     try {
       await api.post(`/api/deals/${dealId}/fields/edit`, {
         path: input.path,
-        value: parseDraftValue(drafts[input.path] ?? "", input.value),
+        value: parseDraftValue(draft, input.value),
         lock: true,
       });
+      await api.post(`/api/deals/${dealId}/score`);
       toast.success("Input updated and locked", { description: humanizePath(input.path) });
       router.refresh();
     } catch (e) {
-      toast.error("Could not update input", { description: (e as { detail?: string })?.detail });
+      toast.error("Could not update input", { description: errorDetail(e) });
     } finally {
       setBusyPath(null);
     }
   }
 
   async function saveAll() {
+    const edits = editableInputs
+      .map((input) => {
+        const draft = drafts[input.path] ?? "";
+        return draft.trim() === ""
+          ? null
+          : {
+              path: input.path,
+              value: parseDraftValue(draft, input.value),
+              lock: true,
+            };
+      })
+      .filter((edit): edit is { path: string; value: string | number | boolean | null; lock: boolean } => edit !== null);
+
+    if (edits.length === 0) {
+      toast.error("Nothing to save", { description: "Enter at least one value, then save again." });
+      return;
+    }
+
     setBusyPath("__all");
     try {
       await api.post(`/api/deals/${dealId}/fields/batch-edit`, {
-        edits: editableInputs.map((input) => ({
-          path: input.path,
-          value: parseDraftValue(drafts[input.path] ?? "", input.value),
-          lock: true,
-        })),
+        edits,
       });
-      toast.success("Inputs saved and math checks rerun", { description: `${editableInputs.length} fields updated` });
+      await api.post(`/api/deals/${dealId}/score`);
+      toast.success("Inputs saved and checks rerun", { description: `${edits.length} field${edits.length === 1 ? "" : "s"} updated` });
       router.refresh();
     } catch (e) {
-      toast.error("Could not save inputs", { description: (e as { detail?: string })?.detail });
+      toast.error("Could not save inputs", { description: errorDetail(e) });
     } finally {
       setBusyPath(null);
     }
@@ -350,7 +371,7 @@ function ReviewActions({ item, dealId }: { item: ReviewItem; dealId: number }) {
       setEditing(false);
       router.refresh();
     } catch (e) {
-      toast.error("Could not update field", { description: (e as { detail?: string })?.detail });
+      toast.error("Could not update field", { description: errorDetail(e) });
     } finally {
       setBusy(null);
     }
@@ -638,6 +659,20 @@ function parseDraftValue(value: string, original: unknown): string | number | bo
   if (typeof original === "boolean") return ["true", "1", "yes"].includes(trimmed.toLowerCase());
   if (typeof original === "number" || /^-?\d+(\.\d+)?$/.test(trimmed)) return Number(trimmed);
   return value.trim();
+}
+
+function errorDetail(error: unknown): string {
+  if (!error) return "The server did not return a reason.";
+  const detail = (error as { detail?: unknown; message?: unknown })?.detail ?? (error as { message?: unknown })?.message;
+  if (typeof detail === "string" && detail.trim()) return detail;
+  if (detail && typeof detail === "object") {
+    try {
+      return JSON.stringify(detail);
+    } catch {
+      return "The server returned an unreadable error.";
+    }
+  }
+  return "The server did not return a reason.";
 }
 
 function humanizePath(path: string): string {
