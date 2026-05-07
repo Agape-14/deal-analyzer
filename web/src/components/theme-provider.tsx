@@ -5,6 +5,7 @@ import * as React from "react";
 type Theme = "light" | "dark" | "system";
 
 const STORAGE_KEY = "kenyon-theme";
+const LIGHT_DEFAULT_MIGRATION_KEY = "kenyon-theme-light-default-v1";
 const DEFAULT_THEME: Theme = "light";
 
 interface ThemeContextValue {
@@ -27,7 +28,7 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
 
   // Read the initial theme the inline script wrote to <html>.
   React.useEffect(() => {
-    const stored = (localStorage.getItem(STORAGE_KEY) as Theme | null) ?? DEFAULT_THEME;
+    const stored = getInitialTheme();
     setThemeState(stored);
     setResolved(resolveTheme(stored));
   }, []);
@@ -54,6 +55,7 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
     setThemeState(t);
     try {
       localStorage.setItem(STORAGE_KEY, t);
+      localStorage.setItem(LIGHT_DEFAULT_MIGRATION_KEY, "1");
     } catch {
       /* private mode, etc. */
     }
@@ -70,6 +72,17 @@ export function useTheme() {
     return { theme: DEFAULT_THEME, resolved: "light" as const, setTheme: () => {} };
   }
   return ctx;
+}
+
+function getInitialTheme(): Theme {
+  const stored = (localStorage.getItem(STORAGE_KEY) as Theme | null) ?? null;
+  const migrated = localStorage.getItem(LIGHT_DEFAULT_MIGRATION_KEY) === "1";
+  if (!migrated) {
+    localStorage.setItem(STORAGE_KEY, DEFAULT_THEME);
+    localStorage.setItem(LIGHT_DEFAULT_MIGRATION_KEY, "1");
+    return DEFAULT_THEME;
+  }
+  return stored ?? DEFAULT_THEME;
 }
 
 function resolveTheme(t: Theme): "light" | "dark" {
@@ -91,7 +104,14 @@ export function ThemeScript() {
   const code = `
 (function() {
   try {
-    var stored = localStorage.getItem('${STORAGE_KEY}') || '${DEFAULT_THEME}';
+    var migrated = localStorage.getItem('${LIGHT_DEFAULT_MIGRATION_KEY}') === '1';
+    var stored = localStorage.getItem('${STORAGE_KEY}');
+    if (!migrated) {
+      stored = '${DEFAULT_THEME}';
+      localStorage.setItem('${STORAGE_KEY}', stored);
+      localStorage.setItem('${LIGHT_DEFAULT_MIGRATION_KEY}', '1');
+    }
+    stored = stored || '${DEFAULT_THEME}';
     var isDark = stored === 'dark' ||
       (stored === 'system' && window.matchMedia('(prefers-color-scheme: dark)').matches);
     var html = document.documentElement;
