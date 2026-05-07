@@ -29,8 +29,8 @@ export const metadata: Metadata = {
 
 export const viewport: Viewport = {
   themeColor: [
+    { media: "(prefers-color-scheme: light)", color: "#f3f6fa" },
     { media: "(prefers-color-scheme: dark)", color: "#0a0b10" },
-    { media: "(prefers-color-scheme: light)", color: "#f7fafc" },
   ],
   width: "device-width",
   initialScale: 1,
@@ -57,14 +57,15 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
           </Suspense>
           <Toaster
             position="bottom-right"
-            theme="dark"
+            theme="system"
             richColors
             closeButton
             toastOptions={{
               style: {
-                background: "#1a1d24",
-                border: "1px solid #2a2e38",
-                color: "#f5f5f7",
+                background: "hsl(var(--card))",
+                border: "1px solid hsl(var(--border))",
+                color: "hsl(var(--card-foreground))",
+                boxShadow: "0 22px 50px -24px hsl(222 39% 11% / 0.35)",
               },
             }}
           />
