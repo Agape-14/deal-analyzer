@@ -133,7 +133,7 @@ export function DealHero({ deal }: { deal: DealDetail }) {
             className="inline-flex min-h-10 items-center gap-2 rounded-lg border border-border/70 bg-card/70 px-3.5 py-2 text-sm font-medium text-foreground shadow-sm transition-colors hover:border-primary/45 hover:bg-muted/70 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/50"
             aria-label="Back to all deals"
           >
-            <ArrowLeft className="h-4.5 w-4.5" />
+            <ArrowLeft className="h-4 w-4" />
             All deals
           </Link>
         </div>
