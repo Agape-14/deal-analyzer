@@ -39,6 +39,14 @@ interface ApiError {
   detail: string;
 }
 
+type BatchFieldEditBody = {
+  edits?: Array<{
+    path: string;
+    value?: unknown;
+    lock?: boolean;
+  }>;
+};
+
 async function request<T>(
   path: string,
   init: RequestInit = {},
@@ -80,11 +88,24 @@ async function request<T>(
   return (await res.json()) as T;
 }
 
+async function postJson<T>(path: string, body?: unknown): Promise<T> {
+  if (path.endsWith("/fields/batch-edit")) {
+    const batch = body as BatchFieldEditBody | undefined;
+    const edits = Array.isArray(batch?.edits) ? batch.edits : [];
+    const basePath = path.replace(/\/fields\/batch-edit$/, "/fields/edit");
+    const results = [];
+    for (const edit of edits) {
+      results.push(await request(basePath, { method: "POST", body: JSON.stringify(edit) }));
+    }
+    return { message: "Fields updated", results } as T;
+  }
+  return request<T>(path, { method: "POST", body: body ? JSON.stringify(body) : undefined });
+}
+
 export const api = {
   get: <T>(path: string, opts?: { revalidate?: number | false }) =>
     request<T>(path, { method: "GET" }, opts?.revalidate ?? 0),
-  post: <T>(path: string, body?: unknown) =>
-    request<T>(path, { method: "POST", body: body ? JSON.stringify(body) : undefined }),
+  post: postJson,
   put: <T>(path: string, body?: unknown) =>
     request<T>(path, { method: "PUT", body: body ? JSON.stringify(body) : undefined }),
   delete: <T>(path: string) => request<T>(path, { method: "DELETE" }),
