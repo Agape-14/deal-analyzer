@@ -9,9 +9,11 @@ import { Button } from "@/components/ui/button";
 import { FieldReviewAction } from "@/components/deal-detail/field-review-action";
 import { api } from "@/lib/api";
 import { cn, fmtMoney, fmtMultiple, fmtPct } from "@/lib/utils";
-import type { DataQualityGate, DealDetail, FieldProvenance, ValidationFlag } from "@/lib/types";
+import type { DealDetail, FieldProvenance, ValidationFlag } from "@/lib/types";
 
 type ReviewArea = "Returns" | "Capital Stack" | "Debt" | "Construction" | "Sponsor" | "Market" | "Math" | "Source";
+type Severity = "red" | "yellow";
+type Metrics = NonNullable<DealDetail["metrics"]>;
 
 type ReviewInput = {
   path: string;
@@ -25,7 +27,7 @@ type ReviewItem = {
   priority: number;
   kind: "math" | "flag" | "source";
   area: ReviewArea;
-  severity: "red" | "yellow";
+  severity: Severity;
   title: string;
   detail: string;
   path?: string;
@@ -37,6 +39,15 @@ type ReviewItem = {
   inputs?: ReviewInput[];
   actionHref?: string;
   actionLabel?: string;
+};
+
+type MathCheck = { check?: string; difference?: string; formula?: string };
+
+type MathConfig = {
+  test: (name: string) => boolean;
+  primaryPath: string;
+  area: ReviewArea;
+  inputs: Array<{ path: string; label: string }>;
 };
 
 const REVIEW_LIMIT = 3;
@@ -51,6 +62,7 @@ const REVIEW_FIELDS = [
   { path: "deal_structure.minimum_investment", label: "Minimum investment", format: "money" },
   { path: "deal_structure.total_project_cost", label: "Total project cost", format: "money" },
   { path: "deal_structure.total_equity_required", label: "Equity required", format: "money" },
+  { path: "deal_structure.preferred_equity_amount", label: "Pref equity", format: "money" },
   { path: "deal_structure.debt_amount", label: "Debt amount", format: "money" },
   { path: "deal_structure.interest_rate", label: "Interest rate", format: "pct" },
   { path: "deal_structure.ltv", label: "LTV", format: "pct" },
@@ -58,45 +70,49 @@ const REVIEW_FIELDS = [
   { path: "financial_projections.avg_rent_per_unit", label: "Average rent", format: "money" },
   { path: "financial_projections.occupancy_assumption", label: "Occupancy", format: "pct" },
   { path: "construction_costs.hard_costs", label: "Hard costs", format: "money" },
-  { path: "construction_costs.hard_costs_total", label: "Hard costs", format: "money" },
+  { path: "construction_costs.hard_costs_total", label: "Hard costs total", format: "money" },
   { path: "construction_costs.soft_costs", label: "Soft costs", format: "money" },
-  { path: "construction_costs.soft_costs_total", label: "Soft costs", format: "money" },
+  { path: "construction_costs.soft_costs_total", label: "Soft costs total", format: "money" },
   { path: "construction_costs.land_cost", label: "Land", format: "money" },
-  { path: "construction_costs.land_cost_total", label: "Land", format: "money" },
+  { path: "construction_costs.land_cost_total", label: "Land total", format: "money" },
   { path: "construction_costs.contingency", label: "Contingency", format: "money" },
-  { path: "construction_costs.contingency_total", label: "Contingency", format: "money" },
+  { path: "construction_costs.contingency_total", label: "Contingency total", format: "money" },
   { path: "underwriting_checks.dscr", label: "DSCR", format: "multiple" },
   { path: "project_details.unit_count", label: "Unit count", format: "integer" },
 ] as const;
 
-const MATH_REVIEW_INPUTS: Array<{ match: RegExp; primaryPath: string; inputs: Array<{ path: string; label: string }> }> = [
+const MATH_CONFIGS: MathConfig[] = [
   {
-    match: /^target irr = net irr$/i,
+    test: (name) => name === "target irr = net irr",
     primaryPath: "target_returns.target_irr",
+    area: "Returns",
     inputs: [
       { path: "target_returns.target_irr", label: "Target IRR" },
       { path: "target_returns.net_irr", label: "Net IRR" },
     ],
   },
   {
-    match: /^equity multiple = net equity multiple$/i,
+    test: (name) => name === "equity multiple = net equity multiple",
     primaryPath: "target_returns.target_equity_multiple",
+    area: "Returns",
     inputs: [
       { path: "target_returns.target_equity_multiple", label: "Target equity multiple" },
       { path: "target_returns.net_equity_multiple", label: "Net equity multiple" },
     ],
   },
   {
-    match: /^cash-on-cash = distribution yield$/i,
+    test: (name) => name === "cash-on-cash = distribution yield",
     primaryPath: "target_returns.target_cash_on_cash",
+    area: "Returns",
     inputs: [
       { path: "target_returns.target_cash_on_cash", label: "Cash-on-cash" },
       { path: "target_returns.distribution_yield", label: "Distribution yield" },
     ],
   },
   {
-    match: /dscr|debt service/i,
+    test: (name) => name.includes("dscr") || name.includes("debt service"),
     primaryPath: "underwriting_checks.dscr",
+    area: "Debt",
     inputs: [
       { path: "underwriting_checks.dscr", label: "Reported DSCR" },
       { path: "financial_projections.stabilized_noi", label: "NOI" },
@@ -105,13 +121,39 @@ const MATH_REVIEW_INPUTS: Array<{ match: RegExp; primaryPath: string; inputs: Ar
     ],
   },
   {
-    match: /hard.*soft.*land.*contingency|total cost/i,
-    primaryPath: "deal_structure.total_project_cost",
+    test: (name) => name === "ltv = debt / total cost",
+    primaryPath: "deal_structure.ltv",
+    area: "Debt",
     inputs: [
-      { path: "financial_projections.hard_costs", label: "Hard costs" },
-      { path: "financial_projections.soft_costs", label: "Soft costs" },
-      { path: "financial_projections.land_cost", label: "Land" },
-      { path: "financial_projections.contingency", label: "Contingency" },
+      { path: "deal_structure.ltv", label: "Reported LTV" },
+      { path: "deal_structure.debt_amount", label: "Debt" },
+      { path: "deal_structure.total_project_cost", label: "Total cost" },
+    ],
+  },
+  {
+    test: (name) => name === "total project cost = equity + debt" || name === "total project cost = equity + debt + pref equity",
+    primaryPath: "deal_structure.total_project_cost",
+    area: "Capital Stack",
+    inputs: [
+      { path: "deal_structure.total_project_cost", label: "Total project cost" },
+      { path: "deal_structure.total_equity_required", label: "Equity required" },
+      { path: "deal_structure.preferred_equity_amount", label: "Pref equity" },
+      { path: "deal_structure.debt_amount", label: "Debt" },
+    ],
+  },
+  {
+    test: (name) => name.includes("hard") && name.includes("soft") && name.includes("land") && name.includes("contingency"),
+    primaryPath: "deal_structure.total_project_cost",
+    area: "Construction",
+    inputs: [
+      { path: "construction_costs.hard_costs", label: "Hard costs" },
+      { path: "construction_costs.hard_costs_total", label: "Hard costs total" },
+      { path: "construction_costs.soft_costs", label: "Soft costs" },
+      { path: "construction_costs.soft_costs_total", label: "Soft costs total" },
+      { path: "construction_costs.land_cost", label: "Land" },
+      { path: "construction_costs.land_cost_total", label: "Land total" },
+      { path: "construction_costs.contingency", label: "Contingency" },
+      { path: "construction_costs.contingency_total", label: "Contingency total" },
       { path: "deal_structure.total_project_cost", label: "Total cost" },
     ],
   },
@@ -142,7 +184,7 @@ export function ReviewQueue({ deal }: { deal: DealDetail }) {
 
   return (
     <Card elevated className="p-6">
-      <div className="flex items-start justify-between gap-4 flex-wrap">
+      <div className="flex flex-wrap items-start justify-between gap-4">
         <div className="flex items-center gap-3">
           <div className="grid h-10 w-10 place-items-center rounded-lg bg-destructive/15 text-destructive ring-1 ring-destructive/30">
             <ShieldAlert className="h-5 w-5" />
@@ -155,11 +197,11 @@ export function ReviewQueue({ deal }: { deal: DealDetail }) {
             </p>
           </div>
         </div>
-        {hidden.length > 0 && (
+        {hidden.length > 0 ? (
           <a href="#technical-details" className="text-xs text-muted-foreground transition-colors hover:text-foreground">
             {hidden.length} more grouped below
           </a>
-        )}
+        ) : null}
       </div>
 
       <div className="mt-5 space-y-3">
@@ -168,7 +210,7 @@ export function ReviewQueue({ deal }: { deal: DealDetail }) {
         ))}
       </div>
 
-      {groups.length > 0 && (
+      {groups.length > 0 ? (
         <div className="mt-5 border-t border-border/60 pt-4">
           <div className="mb-2 text-[10px] uppercase tracking-[0.14em] text-muted-foreground">More issues by area</div>
           <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
@@ -186,7 +228,7 @@ export function ReviewQueue({ deal }: { deal: DealDetail }) {
             ))}
           </div>
         </div>
-      )}
+      ) : null}
     </Card>
   );
 }
@@ -201,15 +243,13 @@ function ReviewRow({ item, index, dealId }: { item: ReviewItem; index: number; d
     <div className="grid gap-3 rounded-lg border border-border/70 bg-card/40 p-4 md:grid-cols-[auto_1fr_auto] md:items-start">
       <div className={cn(
         "flex h-8 w-8 items-center justify-center rounded-md text-xs font-semibold ring-1 md:mt-1",
-        item.severity === "red"
-          ? "bg-destructive/15 text-destructive ring-destructive/30"
-          : "bg-warning/15 text-warning ring-warning/30",
+        item.severity === "red" ? "bg-destructive/15 text-destructive ring-destructive/30" : "bg-warning/15 text-warning ring-warning/30",
       )}>
         {index + 1}
       </div>
 
       <div className="min-w-0">
-        <div className="flex items-center gap-2 flex-wrap">
+        <div className="flex flex-wrap items-center gap-2">
           <Icon className={cn("h-4 w-4", item.severity === "red" ? "text-destructive" : "text-warning")} />
           <div className="font-semibold tracking-tight">{item.title}</div>
           <span className="rounded-md bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground ring-1 ring-border/70">
@@ -229,13 +269,13 @@ function ReviewRow({ item, index, dealId }: { item: ReviewItem; index: number; d
         ) : hasInputs ? (
           <ReviewInputSummary inputs={item.inputs ?? []} saved={savedInputs} />
         ) : null}
-        {(item.value !== undefined || item.recommendedValue !== undefined || item.source) && (
+        {(item.value !== undefined || item.recommendedValue !== undefined || item.source) ? (
           <div className="mt-2 flex flex-wrap gap-2 text-[11px] text-muted-foreground">
-            {item.value !== undefined && <span>Current: <span className="text-foreground">{formatReviewValue(item.value, item.path)}</span></span>}
-            {item.recommendedValue !== undefined && <span>Recommended: <span className="text-foreground">{formatReviewValue(item.recommendedValue, item.path)}</span></span>}
-            {item.source && <span>Source: <span className="text-foreground">{item.source}</span></span>}
+            {item.value !== undefined ? <span>Current: <span className="text-foreground">{formatReviewValue(item.value, item.path)}</span></span> : null}
+            {item.recommendedValue !== undefined ? <span>Recommended: <span className="text-foreground">{formatReviewValue(item.recommendedValue, item.path)}</span></span> : null}
+            {item.source ? <span>Source: <span className="text-foreground">{item.source}</span></span> : null}
           </div>
-        )}
+        ) : null}
       </div>
 
       <ReviewActions
@@ -254,12 +294,12 @@ function ReviewInputSummary({ inputs, saved }: { inputs: ReviewInput[]; saved: b
     <div className="mt-3 rounded-lg border border-border/70 bg-muted/20 p-2.5">
       <div className="mb-1.5 flex items-center justify-between gap-2">
         <div className="text-[10px] uppercase tracking-[0.14em] text-muted-foreground">Inputs to check</div>
-        {saved && (
+        {saved ? (
           <span className="inline-flex items-center gap-1 rounded-full bg-success/10 px-2 py-0.5 text-[10px] font-medium text-success ring-1 ring-success/25">
             <CheckCircle2 className="h-3 w-3" />
-            Saved; still open
+            Saved
           </span>
-        )}
+        ) : null}
       </div>
       <div className="flex flex-wrap gap-1.5">
         {visible.map((input) => (
@@ -267,17 +307,17 @@ function ReviewInputSummary({ inputs, saved }: { inputs: ReviewInput[]; saved: b
             {input.label}: <span className="font-medium text-foreground">{formatReviewValue(input.value, input.path)}</span>
           </span>
         ))}
-        {inputs.length > visible.length && (
+        {inputs.length > visible.length ? (
           <span className="rounded-md border border-border bg-background px-2 py-1 text-[11px] text-muted-foreground">
             +{inputs.length - visible.length} more
           </span>
-        )}
+        ) : null}
       </div>
-      {saved && (
+      {saved ? (
         <p className="mt-2 text-[11px] leading-relaxed text-muted-foreground">
-          These values were stored. This issue stays here until the saved values make the formula match or the correct source field is approved.
+          Saved. If this row remains after refresh, the stored values still do not reconcile or the source needs approval.
         </p>
-      )}
+      ) : null}
     </div>
   );
 }
@@ -325,11 +365,7 @@ function ReviewInputEditor({ dealId, inputs, onSaved }: { dealId: number; inputs
         const draft = drafts[input.path] ?? "";
         return draft.trim() === ""
           ? null
-          : {
-              path: input.path,
-              value: parseDraftValue(draft, input.value),
-              lock: true,
-            };
+          : { path: input.path, value: parseDraftValue(draft, input.value), lock: true };
       })
       .filter((edit): edit is { path: string; value: string | number | boolean | null; lock: boolean } => edit !== null);
 
@@ -421,11 +457,7 @@ function ReviewActions({
     if (!item.path) return;
     setBusy(mode);
     try {
-      await api.post(`/api/deals/${dealId}/fields/edit`, {
-        path: item.path,
-        value,
-        lock: true,
-      });
+      await api.post(`/api/deals/${dealId}/fields/edit`, { path: item.path, value, lock: true });
       toast.success(mode === "apply" ? "Recommended fix applied" : "Field saved and checks updated", {
         description: humanizePath(item.path),
       });
@@ -445,25 +477,25 @@ function ReviewActions({
           {reviewingInputs ? "Hide inputs" : "Review inputs"}
         </Button>
       ) : null}
-      {item.recommendedValue !== undefined && item.path && (
+      {item.recommendedValue !== undefined && item.path ? (
         <Button size="sm" onClick={() => saveValue(item.recommendedValue, "apply")} disabled={busy !== null}>
           {busy === "apply" ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <CheckCircle2 className="h-3.5 w-3.5" />}
           {item.recommendedLabel ?? "Apply fix"}
         </Button>
-      )}
-      {canEdit && !editing && (
+      ) : null}
+      {canEdit && !editing ? (
         <Button size="sm" variant="outline" onClick={() => setEditing(true)}>
           <Pencil className="h-3.5 w-3.5" />
           Edit
         </Button>
-      )}
+      ) : null}
       {!hasInlineEditor && item.path && item.provenance ? (
         <FieldReviewAction dealId={dealId} path={item.path} value={item.value} provenance={item.provenance} />
       ) : null}
       <Button size="sm" variant="outline" asChild>
         <a href={actionHref} target={item.provenance?.source_doc_id ? "_blank" : undefined} rel={item.provenance?.source_doc_id ? "noreferrer" : undefined}>{actionLabel}</a>
       </Button>
-      {editing && item.path && (
+      {editing && item.path ? (
         <div className="flex w-full items-center gap-2 md:w-auto">
           <input
             value={draft}
@@ -478,46 +510,43 @@ function ReviewActions({
             Cancel
           </Button>
         </div>
-      )}
+      ) : null}
     </div>
   );
 }
 
 function buildReviewItems(deal: DealDetail): ReviewItem[] {
-  const metrics = deal.metrics ?? {};
-  const gate = deal.scores?.data_quality ?? metrics._data_quality;
-  const provenance = metrics._provenance ?? {};
-  const flags = metrics.validation_flags ?? [];
+  const metrics = (deal.metrics ?? {}) as Metrics;
+  const gate = (deal.scores?.data_quality ?? (metrics as any)._data_quality) as any;
+  const provenance = (((metrics as any)._provenance ?? {}) as Record<string, FieldProvenance>);
+  const flags = (Array.isArray((metrics as any).validation_flags) ? (metrics as any).validation_flags : []) as ValidationFlag[];
   const items: ReviewItem[] = [];
 
   items.push(...mathItems(gate, metrics, provenance));
   items.push(...flagItems(flags, metrics, provenance));
   items.push(...sourceItems(metrics, provenance));
 
-  return dedupeItems(items)
-    .sort((a, b) => b.priority - a.priority)
-    .slice(0, 12);
+  return dedupeItems(items).sort((a, b) => b.priority - a.priority).slice(0, 12);
 }
 
-function mathItems(gate: DataQualityGate | undefined, metrics: DealDetail["metrics"], provenance: Record<string, FieldProvenance>): ReviewItem[] {
-  const blocking = gate?.math_summary?.blocking ?? [];
-  return blocking.map((check, index) => {
-    const config = MATH_REVIEW_INPUTS.find((entry) => entry.match.test(check.check ?? ""));
+function mathItems(gate: any, metrics: Metrics, provenance: Record<string, FieldProvenance>): ReviewItem[] {
+  const checks = ((gate?.math_summary?.blocking ?? []) as MathCheck[]).filter((check) => !mathCheckPassesNow(check, metrics));
+  return checks.map((check, index) => {
+    const config = findMathConfig(check.check ?? "");
     const inputs = config?.inputs
-      .map((input) => ({
-        ...input,
-        value: getPath(metrics, input.path),
-        provenance: provenance[input.path],
-      }))
+      .map((input) => ({ ...input, value: getPath(metrics, input.path), provenance: provenance[input.path] }))
       .filter((input, pos, arr) => arr.findIndex((candidate) => candidate.path === input.path) === pos);
     return {
       key: `math:${check.check ?? index}`,
       priority: 100 - index,
       kind: "math" as const,
-      area: "Math" as const,
+      area: config?.area ?? "Math",
       severity: "red" as const,
       title: check.check || "Math check failed",
       detail: mathDetail(check, metrics),
+      path: config?.primaryPath,
+      value: config?.primaryPath ? getPath(metrics, config.primaryPath) : undefined,
+      provenance: config?.primaryPath ? provenance[config.primaryPath] : undefined,
       inputs,
       actionHref: config?.primaryPath ? sourceHref(provenance[config.primaryPath], config.primaryPath) : "#technical-details",
       actionLabel: "Open source",
@@ -525,113 +554,7 @@ function mathItems(gate: DataQualityGate | undefined, metrics: DealDetail["metri
   });
 }
 
-function mathDetail(
-  check: { check?: string; difference?: string; formula?: string },
-  metrics: DealDetail["metrics"],
-): string {
-  const name = check.check ?? "";
-  const fallback = [check.difference, check.formula].filter(Boolean).join(" - ");
-
-  if (/^target irr = net irr$/i.test(name)) {
-    return aliasMathDetail(
-      metrics,
-      "target_returns.target_irr",
-      "target_returns.net_irr",
-      "%",
-      "Target IRR must represent investor net IRR. If the source quotes cash-on-cash or distribution yield, keep it in its separate field.",
-    ) ?? fallback;
-  }
-
-  if (/^equity multiple = net equity multiple$/i.test(name)) {
-    return aliasMathDetail(
-      metrics,
-      "target_returns.target_equity_multiple",
-      "target_returns.net_equity_multiple",
-      "x",
-      "Target equity multiple should reconcile to investor net equity multiple when both are present.",
-    ) ?? fallback;
-  }
-
-  if (/^cash-on-cash = distribution yield$/i.test(name)) {
-    return aliasMathDetail(
-      metrics,
-      "target_returns.target_cash_on_cash",
-      "target_returns.distribution_yield",
-      "%",
-      "Cash-on-cash and distribution yield should match unless the document explicitly separates scenarios.",
-    ) ?? fallback;
-  }
-
-  if (/dscr|debt service/i.test(name)) {
-    const reported = numberValue(getPath(metrics, "underwriting_checks.dscr"));
-    const noi = numberValue(getPath(metrics, "financial_projections.stabilized_noi"));
-    const debt = numberValue(getPath(metrics, "deal_structure.debt_amount"));
-    const rate = numberValue(getPath(metrics, "deal_structure.interest_rate"));
-    const totalCost = numberValue(getPath(metrics, "deal_structure.total_project_cost"));
-    if (reported !== null && noi !== null && debt !== null && rate !== null && rate > 0) {
-      const annualDebtService = debt * (rate / 100);
-      if (annualDebtService > 0) {
-        const calculated = noi / annualDebtService;
-        const diff = Math.abs(calculated - reported);
-        const unitHint = debt > 0 && debt < 1_000_000 && (totalCost ?? 0) > 10_000_000
-          ? " Debt amount looks unusually small for this deal; use full dollars or a suffix like 65.95M if the source is in millions."
-          : "";
-        return `${diff.toFixed(2)}x off after saved inputs - ${formatFormulaMoney(noi)} / ${formatFormulaMoney(annualDebtService)} = ${calculated.toFixed(2)}x.${unitHint}`;
-      }
-    }
-  }
-
-  if (/hard.*soft.*land.*contingency|total cost/i.test(name)) {
-    const hard = firstNumber(
-      getPath(metrics, "financial_projections.hard_costs"),
-      getPath(metrics, "construction_costs.hard_costs_total"),
-      getPath(metrics, "construction_costs.hard_costs"),
-    );
-    const soft = firstNumber(
-      getPath(metrics, "financial_projections.soft_costs"),
-      getPath(metrics, "construction_costs.soft_costs_total"),
-      getPath(metrics, "construction_costs.soft_costs"),
-    );
-    const land = firstNumber(
-      getPath(metrics, "financial_projections.land_cost"),
-      getPath(metrics, "construction_costs.land_cost_total"),
-      getPath(metrics, "construction_costs.land_cost"),
-    );
-    const contingency = firstNumber(
-      getPath(metrics, "financial_projections.contingency"),
-      getPath(metrics, "construction_costs.contingency_total"),
-      getPath(metrics, "construction_costs.contingency"),
-    ) ?? 0;
-    const total = numberValue(getPath(metrics, "deal_structure.total_project_cost"));
-    if (hard !== null && soft !== null && land !== null && total !== null && total > 0) {
-      const sum = hard + soft + land + contingency;
-      const diffPct = Math.abs(sum - total) / total * 100;
-      return `${diffPct.toFixed(1)}% off after saved inputs - ${formatFormulaMoney(hard)} + ${formatFormulaMoney(soft)} + ${formatFormulaMoney(land)} + ${formatFormulaMoney(contingency)} = ${formatFormulaMoney(sum)}`;
-    }
-  }
-
-  return fallback || "A deterministic calculation does not match the current saved deal values.";
-}
-
-function aliasMathDetail(
-  metrics: DealDetail["metrics"],
-  aliasPath: string,
-  canonicalPath: string,
-  unit: "%" | "x",
-  note: string,
-): string | undefined {
-  const alias = numberValue(getPath(metrics, aliasPath));
-  const canonical = numberValue(getPath(metrics, canonicalPath));
-  if (alias === null || canonical === null) return undefined;
-  const diff = Math.abs(alias - canonical);
-  return `${formatFormulaNumber(diff, unit)} off after saved inputs - ${aliasPath} ${formatFormulaNumber(alias, unit)} must reconcile to ${canonicalPath} ${formatFormulaNumber(canonical, unit)}. ${note}`;
-}
-
-function flagItems(
-  flags: ValidationFlag[],
-  metrics: DealDetail["metrics"],
-  provenance: Record<string, FieldProvenance>,
-): ReviewItem[] {
+function flagItems(flags: ValidationFlag[], metrics: Metrics, provenance: Record<string, FieldProvenance>): ReviewItem[] {
   return flags
     .filter((flag) => ["red", "yellow"].includes(String(flag.severity).toLowerCase()))
     .map((flag, index) => {
@@ -654,12 +577,12 @@ function flagItems(
         recommendedLabel: alias?.label,
         inputs,
         actionHref: path ? sourceHref(provenance[path], path) : "#source-citations",
-        actionLabel: path ? "View source" : "Review sources",
+        actionLabel: path ? "Open source" : "Review sources",
       };
     });
 }
 
-function sourceItems(metrics: DealDetail["metrics"], provenance: Record<string, FieldProvenance>): ReviewItem[] {
+function sourceItems(metrics: Metrics, provenance: Record<string, FieldProvenance>): ReviewItem[] {
   const out: ReviewItem[] = [];
   for (const field of REVIEW_FIELDS) {
     const prov = provenance[field.path];
@@ -690,25 +613,156 @@ function sourceItems(metrics: DealDetail["metrics"], provenance: Record<string, 
   return out;
 }
 
-function groupItems(items: ReviewItem[]) {
-  const by = new Map<ReviewArea, { area: ReviewArea; count: number; red: number }>();
-  for (const item of items) {
-    const group = by.get(item.area) ?? { area: item.area, count: 0, red: 0 };
-    group.count += 1;
-    if (item.severity === "red") group.red += 1;
-    by.set(item.area, group);
+function mathCheckPassesNow(check: MathCheck, metrics: Metrics): boolean {
+  const name = normalizeMathName(check.check ?? "");
+
+  if (name === "target irr = net irr") return valuesWithin(metrics, "target_returns.target_irr", "target_returns.net_irr", 0.25);
+  if (name === "equity multiple = net equity multiple") return valuesWithin(metrics, "target_returns.target_equity_multiple", "target_returns.net_equity_multiple", 0.02);
+  if (name === "cash-on-cash = distribution yield") return valuesWithin(metrics, "target_returns.target_cash_on_cash", "target_returns.distribution_yield", 0.25);
+
+  if (name.includes("dscr") || name.includes("debt service")) {
+    const reported = numberValue(getPath(metrics, "underwriting_checks.dscr"));
+    const noi = numberValue(getPath(metrics, "financial_projections.stabilized_noi"));
+    const debt = numberValue(getPath(metrics, "deal_structure.debt_amount"));
+    const rate = numberValue(getPath(metrics, "deal_structure.interest_rate"));
+    if (reported === null || noi === null || debt === null || rate === null || rate <= 0) return false;
+    const annualDebtService = debt * (rate / 100);
+    return annualDebtService > 0 && Math.abs(noi / annualDebtService - reported) < 0.05;
   }
-  return Array.from(by.values()).sort((a, b) => b.red - a.red || b.count - a.count);
+
+  if (name === "ltv = debt / total cost") {
+    const reported = numberValue(getPath(metrics, "deal_structure.ltv"));
+    const debt = numberValue(getPath(metrics, "deal_structure.debt_amount"));
+    const total = numberValue(getPath(metrics, "deal_structure.total_project_cost"));
+    return reported !== null && debt !== null && total !== null && total > 0 && Math.abs(debt / total * 100 - reported) < 0.5;
+  }
+
+  if (name === "total project cost = equity + debt" || name === "total project cost = equity + debt + pref equity") {
+    const total = numberValue(getPath(metrics, "deal_structure.total_project_cost"));
+    const equity = numberValue(getPath(metrics, "deal_structure.total_equity_required"));
+    const debt = numberValue(getPath(metrics, "deal_structure.debt_amount"));
+    const pref = numberValue(getPath(metrics, "deal_structure.preferred_equity_amount")) ?? 0;
+    return total !== null && equity !== null && debt !== null && total > 0 && Math.abs(equity + debt + pref - total) / total * 100 < 1;
+  }
+
+  if (name.includes("hard") && name.includes("soft") && name.includes("land") && name.includes("contingency")) {
+    const hard = costNumber(metrics, "hard_costs");
+    const soft = costNumber(metrics, "soft_costs");
+    const land = costNumber(metrics, "land_cost");
+    const contingency = costNumber(metrics, "contingency") ?? 0;
+    const total = numberValue(getPath(metrics, "deal_structure.total_project_cost"));
+    return hard !== null && soft !== null && land !== null && total !== null && total > 0 && Math.abs(hard + soft + land + contingency - total) / total * 100 < 2;
+  }
+
+  return false;
 }
 
-function dedupeItems(items: ReviewItem[]): ReviewItem[] {
-  const byKey = new Map<string, ReviewItem>();
-  for (const item of items) {
-    const key = item.path ?? item.key;
-    const existing = byKey.get(key);
-    if (!existing || item.priority > existing.priority) byKey.set(key, item);
+function mathDetail(check: MathCheck, metrics: Metrics): string {
+  const name = normalizeMathName(check.check ?? "");
+  const fallback = [check.difference, check.formula].filter(Boolean).join(" - ");
+
+  if (name === "target irr = net irr") {
+    return aliasMathDetail(metrics, "target_returns.target_irr", "target_returns.net_irr", "%", "Target IRR must represent investor net IRR. If the document quotes cash-on-cash or distribution yield, it belongs in a separate field.") ?? fallback;
   }
-  return Array.from(byKey.values());
+  if (name === "equity multiple = net equity multiple") {
+    return aliasMathDetail(metrics, "target_returns.target_equity_multiple", "target_returns.net_equity_multiple", "x", "Target equity multiple should reconcile to investor net equity multiple when both are present.") ?? fallback;
+  }
+  if (name === "cash-on-cash = distribution yield") {
+    return aliasMathDetail(metrics, "target_returns.target_cash_on_cash", "target_returns.distribution_yield", "%", "Cash-on-cash and distribution yield should match unless the document explicitly separates scenarios.") ?? fallback;
+  }
+
+  if (name.includes("dscr") || name.includes("debt service")) {
+    const reported = numberValue(getPath(metrics, "underwriting_checks.dscr"));
+    const noi = numberValue(getPath(metrics, "financial_projections.stabilized_noi"));
+    const debt = numberValue(getPath(metrics, "deal_structure.debt_amount"));
+    const rate = numberValue(getPath(metrics, "deal_structure.interest_rate"));
+    const totalCost = numberValue(getPath(metrics, "deal_structure.total_project_cost"));
+    if (reported !== null && noi !== null && debt !== null && rate !== null && rate > 0) {
+      const annualDebtService = debt * (rate / 100);
+      if (annualDebtService > 0) {
+        const calculated = noi / annualDebtService;
+        const unitHint = debt > 0 && debt < 1_000_000 && (totalCost ?? 0) > 10_000_000
+          ? " Debt amount looks unusually small for this deal; use full dollars or a suffix like 65.95M if the source is in millions."
+          : "";
+        return `${Math.abs(calculated - reported).toFixed(2)}x off after saved inputs - ${formatFormulaMoney(noi)} / ${formatFormulaMoney(annualDebtService)} = ${calculated.toFixed(2)}x.${unitHint}`;
+      }
+    }
+  }
+
+  if (name === "ltv = debt / total cost") {
+    const reported = numberValue(getPath(metrics, "deal_structure.ltv"));
+    const debt = numberValue(getPath(metrics, "deal_structure.debt_amount"));
+    const total = numberValue(getPath(metrics, "deal_structure.total_project_cost"));
+    if (reported !== null && debt !== null && total !== null && total > 0) {
+      const calculated = debt / total * 100;
+      return `${Math.abs(calculated - reported).toFixed(1)}pp off after saved inputs - ${formatFormulaMoney(debt)} / ${formatFormulaMoney(total)} = ${calculated.toFixed(1)}% LTV.`;
+    }
+  }
+
+  if (name === "total project cost = equity + debt" || name === "total project cost = equity + debt + pref equity") {
+    const total = numberValue(getPath(metrics, "deal_structure.total_project_cost"));
+    const equity = numberValue(getPath(metrics, "deal_structure.total_equity_required"));
+    const debt = numberValue(getPath(metrics, "deal_structure.debt_amount"));
+    const pref = numberValue(getPath(metrics, "deal_structure.preferred_equity_amount")) ?? 0;
+    if (total !== null && equity !== null && debt !== null && total > 0) {
+      const sum = equity + debt + pref;
+      const formula = pref > 0 ? `${formatFormulaMoney(equity)} + ${formatFormulaMoney(debt)} + ${formatFormulaMoney(pref)}` : `${formatFormulaMoney(equity)} + ${formatFormulaMoney(debt)}`;
+      return `${(Math.abs(sum - total) / total * 100).toFixed(1)}% off after saved inputs - ${formula} = ${formatFormulaMoney(sum)}.`;
+    }
+  }
+
+  if (name.includes("hard") && name.includes("soft") && name.includes("land") && name.includes("contingency")) {
+    const hard = costNumber(metrics, "hard_costs");
+    const soft = costNumber(metrics, "soft_costs");
+    const land = costNumber(metrics, "land_cost");
+    const contingency = costNumber(metrics, "contingency") ?? 0;
+    const total = numberValue(getPath(metrics, "deal_structure.total_project_cost"));
+    if (hard !== null && soft !== null && land !== null && total !== null && total > 0) {
+      const sum = hard + soft + land + contingency;
+      return `${(Math.abs(sum - total) / total * 100).toFixed(1)}% off after saved inputs - ${formatFormulaMoney(hard)} + ${formatFormulaMoney(soft)} + ${formatFormulaMoney(land)} + ${formatFormulaMoney(contingency)} = ${formatFormulaMoney(sum)}.`;
+    }
+  }
+
+  return fallback || "A deterministic calculation does not match the current saved deal values.";
+}
+
+function findMathConfig(checkName: string): MathConfig | undefined {
+  const name = normalizeMathName(checkName);
+  return MATH_CONFIGS.find((config) => config.test(name));
+}
+
+function normalizeMathName(name: string): string {
+  return name.toLowerCase().replace(/\s+/g, " ").trim();
+}
+
+function aliasMathDetail(metrics: Metrics, aliasPath: string, canonicalPath: string, unit: "%" | "x", note: string): string | undefined {
+  const alias = numberValue(getPath(metrics, aliasPath));
+  const canonical = numberValue(getPath(metrics, canonicalPath));
+  if (alias === null || canonical === null) return undefined;
+  return `${formatFormulaNumber(Math.abs(alias - canonical), unit)} off after saved inputs - ${aliasPath} ${formatFormulaNumber(alias, unit)} must reconcile to ${canonicalPath} ${formatFormulaNumber(canonical, unit)}. ${note}`;
+}
+
+function valuesWithin(metrics: Metrics, leftPath: string, rightPath: string, tolerance: number): boolean {
+  const left = numberValue(getPath(metrics, leftPath));
+  const right = numberValue(getPath(metrics, rightPath));
+  return left !== null && right !== null && Math.abs(left - right) <= tolerance;
+}
+
+function costNumber(metrics: Metrics, base: "hard_costs" | "soft_costs" | "land_cost" | "contingency"): number | null {
+  const totalPath = `construction_costs.${base === "land_cost" ? "land_cost_total" : `${base}_total`}`;
+  return firstNumber(getPath(metrics, totalPath), getPath(metrics, `construction_costs.${base}`), getPath(metrics, `financial_projections.${base}`));
+}
+
+function reviewInputsForFlag(message: string, primaryPath: string | undefined, metrics: Metrics, provenance: Record<string, FieldProvenance>): ReviewInput[] | undefined {
+  const paths = new Set<string>();
+  if (primaryPath) paths.add(primaryPath);
+  for (const path of message.match(/[a-z_]+\.[a-z_]+/g) ?? []) {
+    if (REVIEW_FIELDS.some((field) => field.path === path)) paths.add(path);
+  }
+  const inputs = Array.from(paths)
+    .map((path) => ({ path, label: humanizePath(path), value: getPath(metrics, path), provenance: provenance[path] }))
+    .filter((input, pos, arr) => arr.findIndex((candidate) => candidate.path === input.path) === pos);
+  return inputs.length > 0 ? inputs : undefined;
 }
 
 function aliasRecommendation(message: string): { path: string; value: number; label: string } | undefined {
@@ -721,32 +775,9 @@ function aliasRecommendation(message: string): { path: string; value: number; la
   return { path: aliasPath, value, label: "Apply fix" };
 }
 
-function reviewInputsForFlag(
-  message: string,
-  primaryPath: string | undefined,
-  metrics: DealDetail["metrics"],
-  provenance: Record<string, FieldProvenance>,
-): ReviewInput[] | undefined {
-  const paths = new Set<string>();
-  if (primaryPath) paths.add(primaryPath);
-  for (const path of message.match(/[a-z_]+\.[a-z_]+/g) ?? []) {
-    if (REVIEW_FIELDS.some((field) => field.path === path)) paths.add(path);
-  }
-  const inputs = Array.from(paths)
-    .map((path) => ({
-      path,
-      label: humanizePath(path),
-      value: getPath(metrics, path),
-      provenance: provenance[path],
-    }))
-    .filter((input, pos, arr) => arr.findIndex((candidate) => candidate.path === input.path) === pos);
-  return inputs.length > 0 ? inputs : undefined;
-}
-
 function extractBestPath(message: string): string | undefined {
   const matches = message.match(/[a-z_]+\.[a-z_]+/g) ?? [];
-  const preferred = matches.find((path) => path.includes("target_")) ?? matches.find((path) => path.includes("net_")) ?? matches[0];
-  return preferred;
+  return matches.find((path) => path.includes("target_")) ?? matches.find((path) => path.includes("net_")) ?? matches[0];
 }
 
 function flagTitle(flag: ValidationFlag, path?: string): string {
@@ -786,6 +817,8 @@ function areaForFlag(flag: ValidationFlag, path?: string): ReviewArea {
   if (cat.includes("return") || path?.startsWith("target_returns")) return "Returns";
   if (cat.includes("leverage") || cat.includes("debt") || path?.includes("debt") || path?.includes("ltv")) return "Debt";
   if (cat.includes("sponsor") || cat.includes("alignment")) return "Sponsor";
+  if (cat.includes("market")) return "Market";
+  if (cat.includes("source")) return "Source";
   if (cat.includes("benchmark") || cat.includes("underwriting")) return "Capital Stack";
   return path ? areaForPath(path) : "Source";
 }
@@ -797,6 +830,27 @@ function areaForPath(path: string): ReviewArea {
   if (path.startsWith("sponsor_evaluation")) return "Sponsor";
   if (path.startsWith("market_location")) return "Market";
   return "Capital Stack";
+}
+
+function groupItems(items: ReviewItem[]) {
+  const by = new Map<ReviewArea, { area: ReviewArea; count: number; red: number }>();
+  for (const item of items) {
+    const group = by.get(item.area) ?? { area: item.area, count: 0, red: 0 };
+    group.count += 1;
+    if (item.severity === "red") group.red += 1;
+    by.set(item.area, group);
+  }
+  return Array.from(by.values()).sort((a, b) => b.red - a.red || b.count - a.count);
+}
+
+function dedupeItems(items: ReviewItem[]): ReviewItem[] {
+  const byKey = new Map<string, ReviewItem>();
+  for (const item of items) {
+    const key = item.path ?? item.key;
+    const existing = byKey.get(key);
+    if (!existing || item.priority > existing.priority) byKey.set(key, item);
+  }
+  return Array.from(byKey.values());
 }
 
 function getPath(data: unknown, path?: string): unknown {
