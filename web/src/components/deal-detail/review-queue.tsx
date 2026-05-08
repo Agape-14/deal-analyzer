@@ -237,8 +237,7 @@ function ReviewInputEditor({ dealId, inputs }: { dealId: number; inputs: ReviewI
         value: parseDraftValue(draft, input.value),
         lock: true,
       });
-      toast.success("Input updated and locked", { description: humanizePath(input.path) });
-      await rerunScoreAfterSave(dealId);
+      toast.success("Input saved and checks updated", { description: humanizePath(input.path) });
       router.refresh();
     } catch (e) {
       toast.error(`Could not save ${humanizePath(input.path)}`, { description: errorDetail(e) });
@@ -269,8 +268,7 @@ function ReviewInputEditor({ dealId, inputs }: { dealId: number; inputs: ReviewI
     setBusyPath("__all");
     try {
       await api.post(`/api/deals/${dealId}/fields/batch-edit`, { edits });
-      toast.success("Inputs saved", { description: `${edits.length} field${edits.length === 1 ? "" : "s"} updated and locked` });
-      await rerunScoreAfterSave(dealId);
+      toast.success("Inputs saved and checks updated", { description: `${edits.length} field${edits.length === 1 ? "" : "s"} updated and locked` });
       router.refresh();
     } catch (e) {
       toast.error("Could not save inputs", { description: errorDetail(e) });
@@ -344,10 +342,9 @@ function ReviewActions({ item, dealId }: { item: ReviewItem; dealId: number }) {
         value,
         lock: true,
       });
-      toast.success(mode === "apply" ? "Recommended fix applied" : "Field updated and locked", {
+      toast.success(mode === "apply" ? "Recommended fix applied" : "Field saved and checks updated", {
         description: humanizePath(item.path),
       });
-      await rerunScoreAfterSave(dealId);
       setEditing(false);
       router.refresh();
     } catch (e) {
@@ -660,18 +657,6 @@ function parseDraftValue(value: string, original: unknown): string | number | bo
   if (typeof original === "boolean") return ["true", "1", "yes"].includes(trimmed.toLowerCase());
   if (typeof original === "number" || /^-?\d+(\.\d+)?$/.test(trimmed)) return Number(trimmed);
   return value.trim();
-}
-
-async function rerunScoreAfterSave(dealId: number) {
-  try {
-    await api.post(`/api/deals/${dealId}/score`);
-    toast.success("Checks rerun", { description: "The review queue has been refreshed." });
-  } catch (e) {
-    toast.warning("Inputs saved, but checks did not rerun", {
-      description: errorDetail(e),
-      duration: 7000,
-    });
-  }
 }
 
 function errorDetail(error: unknown): string {
