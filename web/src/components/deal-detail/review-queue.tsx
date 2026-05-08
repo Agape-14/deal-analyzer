@@ -193,8 +193,9 @@ function ReviewRow({ item, index, dealId }: { item: ReviewItem; index: number; d
           </span>
         </div>
         <p className="mt-1 text-xs leading-relaxed text-muted-foreground">{item.detail}</p>
-        {item.inputs && item.inputs.length > 0 && <InputChips inputs={item.inputs} />}
-        {item.kind === "math" && item.inputs && item.inputs.length > 0 && <MathInputEditor dealId={dealId} inputs={item.inputs} />}
+        {item.inputs && item.inputs.length > 0 ? (
+          <ReviewInputEditor dealId={dealId} inputs={item.inputs} />
+        ) : null}
         {(item.value !== undefined || item.recommendedValue !== undefined || item.source) && (
           <div className="mt-2 flex flex-wrap gap-2 text-[11px] text-muted-foreground">
             {item.value !== undefined && <span>Current: <span className="text-foreground">{formatReviewValue(item.value, item.path)}</span></span>}
@@ -209,30 +210,9 @@ function ReviewRow({ item, index, dealId }: { item: ReviewItem; index: number; d
   );
 }
 
-function InputChips({ inputs }: { inputs: ReviewInput[] }) {
-  return (
-    <div className="mt-3 rounded-md border border-border/60 bg-background/40 p-2">
-      <div className="mb-1 text-[10px] uppercase tracking-[0.12em] text-muted-foreground">Inputs to check</div>
-      <div className="flex flex-wrap gap-2">
-        {inputs.map((input) => (
-          <a
-            key={input.path}
-            href={sourceHref(input.provenance, input.path)}
-            target={input.provenance?.source_doc_id ? "_blank" : undefined}
-            rel={input.provenance?.source_doc_id ? "noreferrer" : undefined}
-            className="rounded-md bg-muted/45 px-2 py-1 text-[11px] text-muted-foreground ring-1 ring-border/60 transition-colors hover:bg-muted hover:text-foreground"
-          >
-            {input.label}: <span className="text-foreground">{formatReviewValue(input.value, input.path)}</span>
-          </a>
-        ))}
-      </div>
-    </div>
-  );
-}
-
-function MathInputEditor({ dealId, inputs }: { dealId: number; inputs: ReviewInput[] }) {
+function ReviewInputEditor({ dealId, inputs }: { dealId: number; inputs: ReviewInput[] }) {
   const router = useRouter();
-  const editableInputs = inputs.filter((input) => shouldShowMathInput(input));
+  const editableInputs = inputs.filter((input) => isEditableReviewInput(input));
   const [drafts, setDrafts] = React.useState<Record<string, string>>(() =>
     Object.fromEntries(editableInputs.map((input) => [input.path, scalarToInput(input.value)])),
   );
@@ -309,12 +289,12 @@ function MathInputEditor({ dealId, inputs }: { dealId: number; inputs: ReviewInp
     <div className="mt-3 rounded-lg border border-primary/25 bg-primary/5 p-3">
       <div className="mb-2 flex items-center justify-between gap-3">
         <div>
-          <div className="text-xs font-semibold tracking-tight text-foreground">Resolve calculation</div>
-          <p className="mt-0.5 text-[11px] text-muted-foreground">Only wrong or missing inputs are editable here. Save them together to rerun the math check once.</p>
+          <div className="text-xs font-semibold tracking-tight text-foreground">Review and correct inputs</div>
+          <p className="mt-0.5 text-[11px] text-muted-foreground">Edit any value that looks wrong. If a value is correct, leave it unchanged and save to approve it.</p>
         </div>
         <Button size="sm" onClick={saveAll} disabled={busyPath !== null}>
           {busyPath === "__all" ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <CheckCircle2 className="h-3.5 w-3.5" />}
-          Save all and rerun
+          Save/approve all
         </Button>
       </div>
       <div className="grid gap-2 lg:grid-cols-2">
@@ -340,7 +320,7 @@ function MathInputEditor({ dealId, inputs }: { dealId: number; inputs: ReviewInp
               />
               <Button size="sm" variant="secondary" onClick={() => saveInput(input)} disabled={busyPath !== null}>
                 {busyPath === input.path ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}
-                Save
+                Save/approve
               </Button>
             </div>
             <div className="mt-1 text-[10px] text-muted-foreground">{input.path}</div>
@@ -356,9 +336,10 @@ function ReviewActions({ item, dealId }: { item: ReviewItem; dealId: number }) {
   const [busy, setBusy] = React.useState<"apply" | "save" | null>(null);
   const [editing, setEditing] = React.useState(false);
   const [draft, setDraft] = React.useState(() => scalarToInput(item.value));
-  const canEdit = Boolean(item.path);
+  const hasInlineEditor = Boolean(item.inputs?.length);
+  const canEdit = Boolean(item.path) && !hasInlineEditor;
   const actionHref = item.actionHref ?? (item.path ? sourceHref(item.provenance, item.path) : "#technical-details");
-  const actionLabel = item.actionLabel ?? (item.kind === "math" ? "Review inputs" : "View source");
+  const actionLabel = item.actionLabel ?? "View source";
 
   async function saveValue(value: unknown, mode: "apply" | "save") {
     if (!item.path) return;
@@ -372,10 +353,11 @@ function ReviewActions({ item, dealId }: { item: ReviewItem; dealId: number }) {
       toast.success(mode === "apply" ? "Recommended fix applied" : "Field updated and locked", {
         description: humanizePath(item.path),
       });
+      await rerunScoreAfterSave(dealId);
       setEditing(false);
       router.refresh();
     } catch (e) {
-      toast.error("Could not update field", { description: (e as { detail?: string })?.detail });
+      toast.error("Could not update field", { description: errorDetail(e) });
     } finally {
       setBusy(null);
     }
@@ -395,7 +377,7 @@ function ReviewActions({ item, dealId }: { item: ReviewItem; dealId: number }) {
           Edit
         </Button>
       )}
-      {item.path && item.provenance ? (
+      {!hasInlineEditor && item.path && item.provenance ? (
         <FieldReviewAction dealId={dealId} path={item.path} value={item.value} provenance={item.provenance} />
       ) : null}
       <Button size="sm" variant="outline" asChild>
@@ -458,7 +440,7 @@ function mathItems(gate: DataQualityGate | undefined, metrics: DealDetail["metri
       detail: [check.difference, check.formula].filter(Boolean).join(" - ") || "A deterministic calculation does not match the extracted deal values.",
       inputs,
       actionHref: config?.primaryPath ? sourceHref(provenance[config.primaryPath], config.primaryPath) : "#technical-details",
-      actionLabel: "Review inputs",
+      actionLabel: "Open source",
     };
   });
 }
@@ -473,6 +455,7 @@ function flagItems(
     .map((flag, index) => {
       const alias = aliasRecommendation(flag.message);
       const path = alias?.path ?? extractBestPath(flag.message);
+      const inputs = reviewInputsForFlag(flag.message, path, metrics, provenance);
       return {
         key: `flag:${flag.category}:${path ?? flag.message}`,
         priority: flag.severity === "red" ? 80 - index : 45 - index,
@@ -487,6 +470,7 @@ function flagItems(
         source: path ? sourceLabel(provenance[path]) : undefined,
         recommendedValue: alias?.value,
         recommendedLabel: alias?.label,
+        inputs,
         actionHref: path ? sourceHref(provenance[path], path) : "#source-citations",
         actionLabel: path ? "View source" : "Review sources",
       };
@@ -516,6 +500,7 @@ function sourceItems(metrics: DealDetail["metrics"], provenance: Record<string, 
       value,
       provenance: prov,
       source: sourceLabel(prov),
+      inputs: [{ path: field.path, label: field.label, value, provenance: prov }],
       actionHref: sourceHref(prov, field.path),
       actionLabel: prov.source_doc_id ? "Open document" : "View citation",
     });
@@ -552,6 +537,28 @@ function aliasRecommendation(message: string): { path: string; value: number; la
   const value = Number(canonicalMatch[2]);
   if (!Number.isFinite(value)) return undefined;
   return { path: aliasPath, value, label: "Apply fix" };
+}
+
+function reviewInputsForFlag(
+  message: string,
+  primaryPath: string | undefined,
+  metrics: DealDetail["metrics"],
+  provenance: Record<string, FieldProvenance>,
+): ReviewInput[] | undefined {
+  const paths = new Set<string>();
+  if (primaryPath) paths.add(primaryPath);
+  for (const path of message.match(/[a-z_]+\.[a-z_]+/g) ?? []) {
+    if (REVIEW_FIELDS.some((field) => field.path === path)) paths.add(path);
+  }
+  const inputs = Array.from(paths)
+    .map((path) => ({
+      path,
+      label: humanizePath(path),
+      value: getPath(metrics, path),
+      provenance: provenance[path],
+    }))
+    .filter((input, pos, arr) => arr.findIndex((candidate) => candidate.path === input.path) === pos);
+  return inputs.length > 0 ? inputs : undefined;
 }
 
 function extractBestPath(message: string): string | undefined {
@@ -624,12 +631,8 @@ function sourceCitationId(path: string): string {
   return `source-citation-${path.replace(/[^a-zA-Z0-9_-]+/g, "-")}`;
 }
 
-function shouldShowMathInput(input: ReviewInput): boolean {
-  if (input.value == null || input.value === "") return true;
-  const status = String(input.provenance?.status ?? "").toLowerCase();
-  if (["wrong", "missing", "unverifiable", "stale"].includes(status)) return true;
-  if (Array.isArray(input.provenance?.conflict) && input.provenance.conflict.length > 1) return true;
-  return false;
+function isEditableReviewInput(input: ReviewInput): boolean {
+  return input.value == null || ["string", "number", "boolean"].includes(typeof input.value);
 }
 
 function formatReviewValue(value: unknown, path?: string): string {
