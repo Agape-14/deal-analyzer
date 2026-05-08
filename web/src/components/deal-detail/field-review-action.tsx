@@ -50,7 +50,7 @@ export function FieldReviewAction({
     };
   }, [open]);
 
-  if (!dealId || !path || !provenance || provenance.locked || !needsHumanReview(provenance) || !isEditableScalar(value)) {
+  if (!dealId || !path || !provenance || !isEditableScalar(value)) {
     return null;
   }
 
@@ -63,11 +63,11 @@ export function FieldReviewAction({
         value,
         lock: true,
       });
-      toast.success("Field approved and checks updated", { description: humanizePath(path) });
+      toast.success("Field confirmed and checks updated", { description: humanizePath(path) });
       setOpen(false);
       router.refresh();
     } catch (e) {
-      toast.error("Couldn't approve field", { description: errorDetail(e) });
+      toast.error("Couldn't confirm field", { description: errorDetail(e) });
     } finally {
       setBusy(false);
     }
@@ -111,6 +111,7 @@ export function FieldReviewAction({
   }
 
   const confidence = typeof provenance.confidence === "number" ? provenance.confidence : null;
+  const needsReview = needsHumanReview(provenance);
   const reason = reviewReason(provenance);
 
   return (
@@ -119,11 +120,16 @@ export function FieldReviewAction({
         ref={buttonRef}
         type="button"
         onClick={toggleOpen}
-        className="inline-flex h-5 items-center gap-1 rounded-full bg-warning/15 px-1.5 text-[10px] font-medium text-warning ring-1 ring-warning/30 transition-colors hover:bg-warning/25"
-        title="Review or correct field"
+        className={cn(
+          "inline-flex h-5 items-center gap-1 rounded-full px-1.5 text-[10px] font-medium ring-1 transition-colors",
+          needsReview
+            ? "bg-warning/15 text-warning ring-warning/30 hover:bg-warning/25"
+            : "bg-primary/10 text-primary ring-primary/25 hover:bg-primary/20",
+        )}
+        title="Edit or confirm field"
       >
         <ShieldCheck className="h-2.5 w-2.5" />
-        Review/edit
+        Edit/confirm
       </button>
 
       {open && (
@@ -133,11 +139,18 @@ export function FieldReviewAction({
           onClick={(e) => e.stopPropagation()}
         >
           <div className="flex items-center gap-1.5 font-semibold">
-            <ShieldCheck className="h-3.5 w-3.5 text-warning" />
-            Low-confidence review
+            <ShieldCheck className={cn("h-3.5 w-3.5", needsReview ? "text-warning" : "text-primary")} />
+            Edit or confirm field
           </div>
-          <div className="mt-2 rounded-md bg-warning/10 p-2 ring-1 ring-warning/20">
-            <div className="text-[10px] uppercase tracking-[0.12em] text-warning/90">Reason</div>
+          <div
+            className={cn(
+              "mt-2 rounded-md p-2 ring-1",
+              needsReview ? "bg-warning/10 ring-warning/20" : "bg-primary/10 ring-primary/20",
+            )}
+          >
+            <div className={cn("text-[10px] uppercase tracking-[0.12em]", needsReview ? "text-warning/90" : "text-primary")}>
+              Status
+            </div>
             <div className="mt-1 text-foreground/90">{reason}</div>
             {confidence !== null && <div className="mt-1 text-muted-foreground">Confidence: {confidence}%</div>}
           </div>
@@ -166,7 +179,7 @@ export function FieldReviewAction({
             <div className="mt-1 text-[10px] text-muted-foreground">{path}</div>
           </div>
           <div className="mt-2 text-muted-foreground">
-            If the current value is already correct, approve it. If it is wrong, save the corrected value instead.
+            If the current value is correct, confirm it. If it is wrong, save the corrected value instead.
           </div>
           <div className="mt-2.5 flex items-center gap-1.5 border-t border-border/60 pt-2.5">
             <button
@@ -179,7 +192,7 @@ export function FieldReviewAction({
               )}
             >
               {busy ? <Loader2 className="h-3 w-3 animate-spin" /> : <CheckCircle2 className="h-3 w-3" />}
-              Approve current
+              Confirm current
             </button>
             <button
               type="button"
@@ -209,8 +222,21 @@ function reviewReason(provenance: FieldProvenance): string {
   if (provenance.status === "unverifiable") return "The verifier could not confirm this value in source documents.";
   if (provenance.status === "missing") return "The field was expected but not reliably extracted.";
   if (provenance.status === "stale") return "The field may be older than the latest uploaded documents.";
-  if (typeof provenance.confidence === "number") return `Confidence is below the 85% approval threshold.`;
-  return "This value has not reached the verified confidence threshold.";
+  if (provenance.locked && provenance.status === "manual") {
+    return "This value is manually locked. You can confirm it again or save a corrected value here.";
+  }
+  if (provenance.locked) {
+    return "This value is locked as reviewed. You can still correct it here if the source says otherwise.";
+  }
+  if (provenance.status === "confirmed") {
+    if (typeof provenance.confidence === "number" && provenance.confidence < 85) {
+      return "This value is verified, but confidence is below the 85% threshold.";
+    }
+    return "This value is verified. Confirm it again or correct it if the source is wrong.";
+  }
+  if (provenance.status === "manual") return "This value was manually entered. Confirm it again or correct it.";
+  if (typeof provenance.confidence === "number") return "Confidence is below the 85% approval threshold.";
+  return "This value can be confirmed or corrected from here.";
 }
 
 function isEditableScalar(value: unknown): value is string | number | boolean | null {
