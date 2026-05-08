@@ -173,6 +173,10 @@ export function ReviewQueue({ deal }: { deal: DealDetail }) {
 
 function ReviewRow({ item, index, dealId }: { item: ReviewItem; index: number; dealId: number }) {
   const Icon = item.kind === "math" ? Calculator : item.kind === "source" ? FileText : AlertTriangle;
+  const hasInputs = Boolean(item.inputs?.length);
+  const [reviewingInputs, setReviewingInputs] = React.useState(false);
+  const [savedInputs, setSavedInputs] = React.useState(false);
+
   return (
     <div className="grid gap-3 rounded-lg border border-border/70 bg-card/40 p-4 md:grid-cols-[auto_1fr_auto] md:items-start">
       <div className={cn(
@@ -193,8 +197,17 @@ function ReviewRow({ item, index, dealId }: { item: ReviewItem; index: number; d
           </span>
         </div>
         <p className="mt-1 text-xs leading-relaxed text-muted-foreground">{item.detail}</p>
-        {item.inputs && item.inputs.length > 0 ? (
-          <ReviewInputEditor dealId={dealId} inputs={item.inputs} />
+        {item.inputs && item.inputs.length > 0 && reviewingInputs ? (
+          <ReviewInputEditor
+            dealId={dealId}
+            inputs={item.inputs}
+            onSaved={() => {
+              setSavedInputs(true);
+              setReviewingInputs(false);
+            }}
+          />
+        ) : hasInputs ? (
+          <ReviewInputSummary inputs={item.inputs ?? []} saved={savedInputs} />
         ) : null}
         {(item.value !== undefined || item.recommendedValue !== undefined || item.source) && (
           <div className="mt-2 flex flex-wrap gap-2 text-[11px] text-muted-foreground">
@@ -205,12 +218,51 @@ function ReviewRow({ item, index, dealId }: { item: ReviewItem; index: number; d
         )}
       </div>
 
-      <ReviewActions item={item} dealId={dealId} />
+      <ReviewActions
+        item={item}
+        dealId={dealId}
+        reviewingInputs={reviewingInputs}
+        onReviewInputs={hasInputs ? () => setReviewingInputs((value) => !value) : undefined}
+      />
     </div>
   );
 }
 
-function ReviewInputEditor({ dealId, inputs }: { dealId: number; inputs: ReviewInput[] }) {
+function ReviewInputSummary({ inputs, saved }: { inputs: ReviewInput[]; saved: boolean }) {
+  const visible = inputs.slice(0, 8);
+  return (
+    <div className="mt-3 rounded-lg border border-border/70 bg-muted/20 p-2.5">
+      <div className="mb-1.5 flex items-center justify-between gap-2">
+        <div className="text-[10px] uppercase tracking-[0.14em] text-muted-foreground">Inputs to check</div>
+        {saved && (
+          <span className="inline-flex items-center gap-1 rounded-full bg-success/10 px-2 py-0.5 text-[10px] font-medium text-success ring-1 ring-success/25">
+            <CheckCircle2 className="h-3 w-3" />
+            Saved
+          </span>
+        )}
+      </div>
+      <div className="flex flex-wrap gap-1.5">
+        {visible.map((input) => (
+          <span key={input.path} className="rounded-md border border-border bg-background px-2 py-1 text-[11px] text-muted-foreground">
+            {input.label}: <span className="font-medium text-foreground">{formatReviewValue(input.value, input.path)}</span>
+          </span>
+        ))}
+        {inputs.length > visible.length && (
+          <span className="rounded-md border border-border bg-background px-2 py-1 text-[11px] text-muted-foreground">
+            +{inputs.length - visible.length} more
+          </span>
+        )}
+      </div>
+      {saved && (
+        <p className="mt-2 text-[11px] leading-relaxed text-muted-foreground">
+          Inputs were saved. If this row remains, the calculation still does not reconcile with the saved values.
+        </p>
+      )}
+    </div>
+  );
+}
+
+function ReviewInputEditor({ dealId, inputs, onSaved }: { dealId: number; inputs: ReviewInput[]; onSaved?: () => void }) {
   const router = useRouter();
   const editableInputs = inputs.filter((input) => isEditableReviewInput(input));
   const [drafts, setDrafts] = React.useState<Record<string, string>>(() =>
@@ -238,6 +290,7 @@ function ReviewInputEditor({ dealId, inputs }: { dealId: number; inputs: ReviewI
         lock: true,
       });
       toast.success("Input saved and checks updated", { description: humanizePath(input.path) });
+      onSaved?.();
       router.refresh();
     } catch (e) {
       toast.error(`Could not save ${humanizePath(input.path)}`, { description: errorDetail(e) });
@@ -269,6 +322,7 @@ function ReviewInputEditor({ dealId, inputs }: { dealId: number; inputs: ReviewI
     try {
       await api.post(`/api/deals/${dealId}/fields/batch-edit`, { edits });
       toast.success("Inputs saved and checks updated", { description: `${edits.length} field${edits.length === 1 ? "" : "s"} updated and locked` });
+      onSaved?.();
       router.refresh();
     } catch (e) {
       toast.error("Could not save inputs", { description: errorDetail(e) });
@@ -323,7 +377,17 @@ function ReviewInputEditor({ dealId, inputs }: { dealId: number; inputs: ReviewI
   );
 }
 
-function ReviewActions({ item, dealId }: { item: ReviewItem; dealId: number }) {
+function ReviewActions({
+  item,
+  dealId,
+  reviewingInputs,
+  onReviewInputs,
+}: {
+  item: ReviewItem;
+  dealId: number;
+  reviewingInputs?: boolean;
+  onReviewInputs?: () => void;
+}) {
   const router = useRouter();
   const [busy, setBusy] = React.useState<"apply" | "save" | null>(null);
   const [editing, setEditing] = React.useState(false);
@@ -356,6 +420,11 @@ function ReviewActions({ item, dealId }: { item: ReviewItem; dealId: number }) {
 
   return (
     <div className="flex flex-wrap items-center gap-2 md:justify-end md:pt-8">
+      {onReviewInputs ? (
+        <Button size="sm" variant={reviewingInputs ? "secondary" : "outline"} onClick={onReviewInputs}>
+          {reviewingInputs ? "Hide inputs" : "Review inputs"}
+        </Button>
+      ) : null}
       {item.recommendedValue !== undefined && item.path && (
         <Button size="sm" onClick={() => saveValue(item.recommendedValue, "apply")} disabled={busy !== null}>
           {busy === "apply" ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <CheckCircle2 className="h-3.5 w-3.5" />}
