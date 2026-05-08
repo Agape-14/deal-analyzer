@@ -11,7 +11,8 @@ from sqlalchemy.orm.attributes import flag_modified
 
 from app.database import get_db
 from app.models import Deal
-from app.services.data_integrity import mark_manual_edit, set_lock
+from app.services.confidence import assess_data_quality, summarize_math_checks
+from app.services.data_integrity import mark_manual_edit, now_iso, set_lock
 from app.services.deal_scorer import score_deal
 from app.services.deal_validator import validate_deal_metrics
 from app.services.math_checker import run_math_checks
@@ -64,17 +65,59 @@ def _refresh_integrity(deal: Deal, metrics: dict) -> None:
         math_checks = run_math_checks(metrics)
     except Exception as e:
         metrics["_manual_edit_warning"] = f"Math checks did not rerun: {type(e).__name__}: {e}"
+    else:
+        metrics["_math_checks"] = {
+            "checked_at": now_iso(),
+            "summary": summarize_math_checks(math_checks, metrics),
+            "results": math_checks,
+        }
     try:
         metrics["validation_flags"] = validate_deal_metrics(metrics, deal.property_type)
     except Exception as e:
         metrics.setdefault("validation_flags", [])
         metrics["_manual_edit_warning"] = f"Validation did not rerun: {type(e).__name__}: {e}"
-    deal.metrics = _json_safe(jsonable_encoder(metrics))
     try:
-        deal.scores = _json_safe(jsonable_encoder(score_deal(deal.metrics or {}, math_checks=math_checks)))
+        scores = score_deal(metrics, math_checks=math_checks)
     except Exception as e:
         metrics["_manual_edit_warning"] = f"Score did not refresh: {type(e).__name__}: {e}"
-        deal.metrics = _json_safe(jsonable_encoder(metrics))
+        try:
+            data_quality = assess_data_quality(metrics, math_checks=math_checks)
+        except Exception as quality_error:
+            data_quality = {
+                "stage": "refresh_failed",
+                "can_score": False,
+                "confidence_score": 0,
+                "verified_at": (metrics.get("_verification") or {}).get("verified_at"),
+                "critical_fields": [],
+                "critical_summary": {
+                    "total": 0,
+                    "missing": 0,
+                    "unverified": 0,
+                    "conflicted": 0,
+                    "bad": 0,
+                    "review_only": 0,
+                    "verified": 0,
+                },
+                "math_summary": summarize_math_checks(math_checks or [], metrics),
+                "confidence_breakdown": {
+                    "critical_field_score": 0,
+                    "broad_verification_score": 0,
+                    "math_failures": 0,
+                    "math_warnings": 0,
+                },
+                "refresh_error": f"{type(quality_error).__name__}: {quality_error}",
+            }
+        scores = {
+            "overall": None,
+            "provisional_overall": None,
+            "data_quality": data_quality,
+            "refresh_error": f"{type(e).__name__}: {e}",
+        }
+    data_quality = scores.get("data_quality") if isinstance(scores, dict) else None
+    if data_quality:
+        metrics["_data_quality"] = data_quality
+    deal.metrics = _json_safe(jsonable_encoder(metrics))
+    deal.scores = _json_safe(jsonable_encoder(scores))
     flag_modified(deal, "metrics")
     flag_modified(deal, "scores")
 
