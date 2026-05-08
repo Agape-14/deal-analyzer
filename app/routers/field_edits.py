@@ -62,7 +62,11 @@ def _refresh_integrity(deal: Deal, metrics: dict) -> None:
         run_math_checks(metrics)
     except Exception as e:
         metrics["_manual_edit_warning"] = f"Math checks did not rerun: {type(e).__name__}: {e}"
-    metrics["validation_flags"] = validate_deal_metrics(metrics, deal.property_type)
+    try:
+        metrics["validation_flags"] = validate_deal_metrics(metrics, deal.property_type)
+    except Exception as e:
+        metrics.setdefault("validation_flags", [])
+        metrics["_manual_edit_warning"] = f"Validation did not rerun: {type(e).__name__}: {e}"
     deal.metrics = _json_safe(jsonable_encoder(metrics))
     flag_modified(deal, "metrics")
 
