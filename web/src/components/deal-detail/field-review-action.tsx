@@ -63,8 +63,7 @@ export function FieldReviewAction({
         value,
         lock: true,
       });
-      toast.success("Field approved and locked", { description: humanizePath(path) });
-      await rerunScoreAfterSave(dealId);
+      toast.success("Field approved and checks updated", { description: humanizePath(path) });
       setOpen(false);
       router.refresh();
     } catch (e) {
@@ -87,8 +86,7 @@ export function FieldReviewAction({
         value: parseDraftValue(draft, value),
         lock: true,
       });
-      toast.success("Correction saved and locked", { description: humanizePath(path) });
-      await rerunScoreAfterSave(dealId);
+      toast.success("Correction saved and checks updated", { description: humanizePath(path) });
       setOpen(false);
       router.refresh();
     } catch (e) {
@@ -231,17 +229,6 @@ function parseDraftValue(value: string, original: unknown): string | number | bo
   if (typeof original === "boolean") return ["true", "1", "yes"].includes(trimmed.toLowerCase());
   if (typeof original === "number" || /^-?\d+(\.\d+)?$/.test(trimmed)) return Number(trimmed);
   return value.trim();
-}
-
-async function rerunScoreAfterSave(dealId: number) {
-  try {
-    await api.post(`/api/deals/${dealId}/score`);
-  } catch (e) {
-    toast.warning("Saved, but score did not refresh", {
-      description: errorDetail(e),
-      duration: 7000,
-    });
-  }
 }
 
 function errorDetail(error: unknown): string {
