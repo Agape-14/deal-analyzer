@@ -71,6 +71,30 @@ const REVIEW_FIELDS = [
 
 const MATH_REVIEW_INPUTS: Array<{ match: RegExp; primaryPath: string; inputs: Array<{ path: string; label: string }> }> = [
   {
+    match: /^target irr = net irr$/i,
+    primaryPath: "target_returns.target_irr",
+    inputs: [
+      { path: "target_returns.target_irr", label: "Target IRR" },
+      { path: "target_returns.net_irr", label: "Net IRR" },
+    ],
+  },
+  {
+    match: /^equity multiple = net equity multiple$/i,
+    primaryPath: "target_returns.target_equity_multiple",
+    inputs: [
+      { path: "target_returns.target_equity_multiple", label: "Target equity multiple" },
+      { path: "target_returns.net_equity_multiple", label: "Net equity multiple" },
+    ],
+  },
+  {
+    match: /^cash-on-cash = distribution yield$/i,
+    primaryPath: "target_returns.target_cash_on_cash",
+    inputs: [
+      { path: "target_returns.target_cash_on_cash", label: "Cash-on-cash" },
+      { path: "target_returns.distribution_yield", label: "Distribution yield" },
+    ],
+  },
+  {
     match: /dscr|debt service/i,
     primaryPath: "underwriting_checks.dscr",
     inputs: [
@@ -84,14 +108,10 @@ const MATH_REVIEW_INPUTS: Array<{ match: RegExp; primaryPath: string; inputs: Ar
     match: /hard.*soft.*land.*contingency|total cost/i,
     primaryPath: "deal_structure.total_project_cost",
     inputs: [
-      { path: "construction_costs.hard_costs", label: "Hard costs" },
-      { path: "construction_costs.hard_costs_total", label: "Hard costs total" },
-      { path: "construction_costs.soft_costs", label: "Soft costs" },
-      { path: "construction_costs.soft_costs_total", label: "Soft costs total" },
-      { path: "construction_costs.land_cost", label: "Land" },
-      { path: "construction_costs.land_cost_total", label: "Land total" },
-      { path: "construction_costs.contingency", label: "Contingency" },
-      { path: "construction_costs.contingency_total", label: "Contingency total" },
+      { path: "financial_projections.hard_costs", label: "Hard costs" },
+      { path: "financial_projections.soft_costs", label: "Soft costs" },
+      { path: "financial_projections.land_cost", label: "Land" },
+      { path: "financial_projections.contingency", label: "Contingency" },
       { path: "deal_structure.total_project_cost", label: "Total cost" },
     ],
   },
@@ -237,7 +257,7 @@ function ReviewInputSummary({ inputs, saved }: { inputs: ReviewInput[]; saved: b
         {saved && (
           <span className="inline-flex items-center gap-1 rounded-full bg-success/10 px-2 py-0.5 text-[10px] font-medium text-success ring-1 ring-success/25">
             <CheckCircle2 className="h-3 w-3" />
-            Saved
+            Saved; still open
           </span>
         )}
       </div>
@@ -255,7 +275,7 @@ function ReviewInputSummary({ inputs, saved }: { inputs: ReviewInput[]; saved: b
       </div>
       {saved && (
         <p className="mt-2 text-[11px] leading-relaxed text-muted-foreground">
-          Inputs were saved. If this row remains, the calculation still does not reconcile with the saved values.
+          These values were stored. This issue stays here until the saved values make the formula match or the correct source field is approved.
         </p>
       )}
     </div>
@@ -361,7 +381,7 @@ function ReviewInputEditor({ dealId, inputs, onSaved }: { dealId: number; inputs
               <input
                 value={drafts[input.path] ?? ""}
                 onChange={(e) => setDrafts((prev) => ({ ...prev, [input.path]: e.target.value }))}
-                placeholder="missing"
+                placeholder="missing or 65.95M"
                 className="h-8 min-w-0 flex-1 rounded-md border border-border bg-background px-2 text-xs outline-none focus:ring-2 focus:ring-ring"
               />
               <Button size="sm" variant="secondary" onClick={() => saveInput(input)} disabled={busyPath !== null}>
@@ -497,12 +517,114 @@ function mathItems(gate: DataQualityGate | undefined, metrics: DealDetail["metri
       area: "Math" as const,
       severity: "red" as const,
       title: check.check || "Math check failed",
-      detail: [check.difference, check.formula].filter(Boolean).join(" - ") || "A deterministic calculation does not match the extracted deal values.",
+      detail: mathDetail(check, metrics),
       inputs,
       actionHref: config?.primaryPath ? sourceHref(provenance[config.primaryPath], config.primaryPath) : "#technical-details",
       actionLabel: "Open source",
     };
   });
+}
+
+function mathDetail(
+  check: { check?: string; difference?: string; formula?: string },
+  metrics: DealDetail["metrics"],
+): string {
+  const name = check.check ?? "";
+  const fallback = [check.difference, check.formula].filter(Boolean).join(" - ");
+
+  if (/^target irr = net irr$/i.test(name)) {
+    return aliasMathDetail(
+      metrics,
+      "target_returns.target_irr",
+      "target_returns.net_irr",
+      "%",
+      "Target IRR must represent investor net IRR. If the source quotes cash-on-cash or distribution yield, keep it in its separate field.",
+    ) ?? fallback;
+  }
+
+  if (/^equity multiple = net equity multiple$/i.test(name)) {
+    return aliasMathDetail(
+      metrics,
+      "target_returns.target_equity_multiple",
+      "target_returns.net_equity_multiple",
+      "x",
+      "Target equity multiple should reconcile to investor net equity multiple when both are present.",
+    ) ?? fallback;
+  }
+
+  if (/^cash-on-cash = distribution yield$/i.test(name)) {
+    return aliasMathDetail(
+      metrics,
+      "target_returns.target_cash_on_cash",
+      "target_returns.distribution_yield",
+      "%",
+      "Cash-on-cash and distribution yield should match unless the document explicitly separates scenarios.",
+    ) ?? fallback;
+  }
+
+  if (/dscr|debt service/i.test(name)) {
+    const reported = numberValue(getPath(metrics, "underwriting_checks.dscr"));
+    const noi = numberValue(getPath(metrics, "financial_projections.stabilized_noi"));
+    const debt = numberValue(getPath(metrics, "deal_structure.debt_amount"));
+    const rate = numberValue(getPath(metrics, "deal_structure.interest_rate"));
+    const totalCost = numberValue(getPath(metrics, "deal_structure.total_project_cost"));
+    if (reported !== null && noi !== null && debt !== null && rate !== null && rate > 0) {
+      const annualDebtService = debt * (rate / 100);
+      if (annualDebtService > 0) {
+        const calculated = noi / annualDebtService;
+        const diff = Math.abs(calculated - reported);
+        const unitHint = debt > 0 && debt < 1_000_000 && (totalCost ?? 0) > 10_000_000
+          ? " Debt amount looks unusually small for this deal; use full dollars or a suffix like 65.95M if the source is in millions."
+          : "";
+        return `${diff.toFixed(2)}x off after saved inputs - ${formatFormulaMoney(noi)} / ${formatFormulaMoney(annualDebtService)} = ${calculated.toFixed(2)}x.${unitHint}`;
+      }
+    }
+  }
+
+  if (/hard.*soft.*land.*contingency|total cost/i.test(name)) {
+    const hard = firstNumber(
+      getPath(metrics, "financial_projections.hard_costs"),
+      getPath(metrics, "construction_costs.hard_costs_total"),
+      getPath(metrics, "construction_costs.hard_costs"),
+    );
+    const soft = firstNumber(
+      getPath(metrics, "financial_projections.soft_costs"),
+      getPath(metrics, "construction_costs.soft_costs_total"),
+      getPath(metrics, "construction_costs.soft_costs"),
+    );
+    const land = firstNumber(
+      getPath(metrics, "financial_projections.land_cost"),
+      getPath(metrics, "construction_costs.land_cost_total"),
+      getPath(metrics, "construction_costs.land_cost"),
+    );
+    const contingency = firstNumber(
+      getPath(metrics, "financial_projections.contingency"),
+      getPath(metrics, "construction_costs.contingency_total"),
+      getPath(metrics, "construction_costs.contingency"),
+    ) ?? 0;
+    const total = numberValue(getPath(metrics, "deal_structure.total_project_cost"));
+    if (hard !== null && soft !== null && land !== null && total !== null && total > 0) {
+      const sum = hard + soft + land + contingency;
+      const diffPct = Math.abs(sum - total) / total * 100;
+      return `${diffPct.toFixed(1)}% off after saved inputs - ${formatFormulaMoney(hard)} + ${formatFormulaMoney(soft)} + ${formatFormulaMoney(land)} + ${formatFormulaMoney(contingency)} = ${formatFormulaMoney(sum)}`;
+    }
+  }
+
+  return fallback || "A deterministic calculation does not match the current saved deal values.";
+}
+
+function aliasMathDetail(
+  metrics: DealDetail["metrics"],
+  aliasPath: string,
+  canonicalPath: string,
+  unit: "%" | "x",
+  note: string,
+): string | undefined {
+  const alias = numberValue(getPath(metrics, aliasPath));
+  const canonical = numberValue(getPath(metrics, canonicalPath));
+  if (alias === null || canonical === null) return undefined;
+  const diff = Math.abs(alias - canonical);
+  return `${formatFormulaNumber(diff, unit)} off after saved inputs - ${aliasPath} ${formatFormulaNumber(alias, unit)} must reconcile to ${canonicalPath} ${formatFormulaNumber(canonical, unit)}. ${note}`;
 }
 
 function flagItems(
@@ -687,6 +809,23 @@ function getPath(data: unknown, path?: string): unknown {
   return cur;
 }
 
+function numberValue(value: unknown): number | null {
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (typeof value === "string" && value.trim() !== "") {
+    const parsed = Number(value.replace(/[$,%x]/gi, "").replace(/,/g, ""));
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+  return null;
+}
+
+function firstNumber(...values: unknown[]): number | null {
+  for (const value of values) {
+    const parsed = numberValue(value);
+    if (parsed !== null) return parsed;
+  }
+  return null;
+}
+
 function sourceCitationId(path: string): string {
   return `source-citation-${path.replace(/[^a-zA-Z0-9_-]+/g, "-")}`;
 }
@@ -721,11 +860,27 @@ function scalarToInput(value: unknown): string {
 }
 
 function parseDraftValue(value: string, original: unknown): string | number | boolean | null {
-  const trimmed = value.trim().replace(/[$,%x]/gi, "").replace(/,/g, "");
-  if (trimmed === "") return null;
-  if (typeof original === "boolean") return ["true", "1", "yes"].includes(trimmed.toLowerCase());
-  if (typeof original === "number" || /^-?\d+(\.\d+)?$/.test(trimmed)) return Number(trimmed);
-  return value.trim();
+  const raw = value.trim();
+  if (raw === "") return null;
+  const compact = raw.replace(/[$,%x]/gi, "").replace(/,/g, "").trim();
+  if (typeof original === "boolean") return ["true", "1", "yes"].includes(compact.toLowerCase());
+  const numeric = compact.match(/^(-?\d+(?:\.\d+)?)(k|mm|m|b)?$/i);
+  if (numeric) {
+    const [, amount, suffix = ""] = numeric;
+    const multipliers: Record<string, number> = { k: 1_000, m: 1_000_000, mm: 1_000_000, b: 1_000_000_000 };
+    return Number(amount) * (multipliers[suffix.toLowerCase()] ?? 1);
+  }
+  if (typeof original === "number") return raw;
+  return raw;
+}
+
+function formatFormulaMoney(value: number): string {
+  return `$${Math.round(value).toLocaleString()}`;
+}
+
+function formatFormulaNumber(value: number, unit: "%" | "x"): string {
+  if (unit === "x") return `${value.toFixed(2)}x`;
+  return `${value.toFixed(2)}%`;
 }
 
 function errorDetail(error: unknown): string {
