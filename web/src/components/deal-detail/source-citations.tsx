@@ -1,7 +1,8 @@
 "use client";
 
+import * as React from "react";
 import type { ReactNode } from "react";
-import { AlertTriangle, Calculator, CheckCircle2, FileText, HelpCircle, Lock, Sparkles } from "lucide-react";
+import { AlertTriangle, Calculator, CheckCircle2, ExternalLink, FileText, HelpCircle, Lock, Sparkles } from "lucide-react";
 import { Card } from "@/components/ui/card";
 import { FieldReviewAction } from "@/components/deal-detail/field-review-action";
 import { cn, fmtDate, fmtMoney, fmtMultiple, fmtPct } from "@/lib/utils";
@@ -12,17 +13,31 @@ type CitationField = { path: string; label: string; format: CitationFormat };
 
 const CITATION_FIELDS: CitationField[] = [
   { path: "target_returns.target_irr", label: "Target IRR", format: "pct" },
+  { path: "target_returns.net_irr", label: "Net IRR", format: "pct" },
   { path: "target_returns.target_equity_multiple", label: "Equity multiple", format: "multiple" },
+  { path: "target_returns.net_equity_multiple", label: "Net equity multiple", format: "multiple" },
   { path: "target_returns.target_cash_on_cash", label: "Cash-on-cash", format: "pct" },
+  { path: "target_returns.distribution_yield", label: "Distribution yield", format: "pct" },
   { path: "deal_structure.minimum_investment", label: "Minimum investment", format: "money" },
   { path: "deal_structure.total_project_cost", label: "Total project cost", format: "money" },
   { path: "deal_structure.total_equity_required", label: "Equity required", format: "money" },
+  { path: "deal_structure.preferred_equity_amount", label: "Pref equity", format: "money" },
   { path: "deal_structure.debt_amount", label: "Debt amount", format: "money" },
+  { path: "deal_structure.interest_rate", label: "Interest rate", format: "pct" },
   { path: "deal_structure.ltv", label: "LTV", format: "pct" },
   { path: "deal_structure.hold_period_years", label: "Hold period", format: "years" },
   { path: "financial_projections.stabilized_noi", label: "Stabilized NOI", format: "money" },
   { path: "financial_projections.avg_rent_per_unit", label: "Average rent", format: "money" },
   { path: "financial_projections.occupancy_assumption", label: "Occupancy", format: "pct" },
+  { path: "underwriting_checks.dscr", label: "DSCR", format: "multiple" },
+  { path: "construction_costs.hard_costs", label: "Hard costs", format: "money" },
+  { path: "construction_costs.hard_costs_total", label: "Hard costs total", format: "money" },
+  { path: "construction_costs.soft_costs", label: "Soft costs", format: "money" },
+  { path: "construction_costs.soft_costs_total", label: "Soft costs total", format: "money" },
+  { path: "construction_costs.land_cost", label: "Land", format: "money" },
+  { path: "construction_costs.land_cost_total", label: "Land total", format: "money" },
+  { path: "construction_costs.contingency", label: "Contingency", format: "money" },
+  { path: "construction_costs.contingency_total", label: "Contingency total", format: "money" },
   { path: "project_details.unit_count", label: "Unit count", format: "integer" },
 ];
 
@@ -31,6 +46,16 @@ type CitationMetrics = Record<string, unknown> & { _provenance?: Record<string, 
 export function SourceCitations({ deal }: { deal: DealDetail }) {
   const metrics = (deal.metrics ?? {}) as CitationMetrics;
   const provenance = metrics._provenance ?? {};
+  const [activeCitation, setActiveCitation] = React.useState("");
+
+  React.useEffect(() => {
+    function updateActiveCitation() {
+      setActiveCitation(window.location.hash.replace("#", ""));
+    }
+    updateActiveCitation();
+    window.addEventListener("hashchange", updateActiveCitation);
+    return () => window.removeEventListener("hashchange", updateActiveCitation);
+  }, []);
 
   const rows = CITATION_FIELDS.map((field) => citationRow(metrics, provenance, field)).filter(
     (row) => row.value != null || row.prov,
@@ -60,8 +85,17 @@ export function SourceCitations({ deal }: { deal: DealDetail }) {
           <div>Status</div>
         </div>
         <div className="divide-y divide-border/60">
-          {rows.map(({ field, value, prov, note }) => (
-            <CitationRow key={field.path} field={field} value={value} provenance={prov} dealId={deal.id} note={note} />
+          {rows.map(({ field, value, prov, note, anchorPath }) => (
+            <CitationRow
+              key={`${anchorPath}:${field.path}`}
+              field={field}
+              value={value}
+              provenance={prov}
+              dealId={deal.id}
+              note={note}
+              anchorPath={anchorPath}
+              activeCitation={activeCitation}
+            />
           ))}
         </div>
       </div>
@@ -77,6 +111,7 @@ function citationRow(metrics: CitationMetrics, provenance: Record<string, FieldP
         field: { ...field, path: canonical.path },
         value: canonical.value,
         prov: canonical.prov,
+        anchorPath: field.path,
         note: canonical.path === "target_returns.target_irr"
           ? "Using Target IRR as the headline return metric. Net IRR and cash-on-cash remain separate checks."
           : "Target IRR is missing, so investor net IRR is being used as the fallback headline return.",
@@ -84,7 +119,7 @@ function citationRow(metrics: CitationMetrics, provenance: Record<string, FieldP
     }
   }
   const value = getMetricValue(metrics, field.path);
-  return { field, value, prov: provenance[field.path], note: undefined };
+  return { field, value, prov: provenance[field.path], note: undefined, anchorPath: field.path };
 }
 
 function CitationRow({
@@ -93,24 +128,40 @@ function CitationRow({
   provenance,
   dealId,
   note,
+  anchorPath,
+  activeCitation,
 }: {
   field: CitationField;
   value: unknown;
   provenance?: FieldProvenance;
   dealId: number;
   note?: string;
+  anchorPath: string;
+  activeCitation: string;
 }) {
   const status = provenance?.status ?? (value == null ? "missing" : "extracted");
   const statusUi = statusStyle(status, Boolean(provenance?.conflict?.length));
   const correction = provenance?.previous_value !== undefined && provenance.previous_value !== null;
+  const rowId = sourceCitationId(anchorPath);
+  const isActive = activeCitation === rowId;
 
   return (
     <div
-      id={sourceCitationId(field.path)}
-      className="scroll-mt-28 grid grid-cols-1 gap-3 px-4 py-3 text-sm transition-colors target:bg-primary/10 target:ring-1 target:ring-primary/35 md:grid-cols-[1.05fr_.75fr_1.25fr_.95fr] md:gap-4"
+      id={rowId}
+      className={cn(
+        "scroll-mt-28 grid grid-cols-1 gap-3 px-4 py-3 text-sm transition-all target:bg-primary/10 target:ring-2 target:ring-primary/45 md:grid-cols-[1.05fr_.75fr_1.25fr_.95fr] md:gap-4",
+        isActive && "bg-primary/10 ring-2 ring-primary/45",
+      )}
     >
       <div>
-        <div className="font-medium tracking-tight">{field.label}</div>
+        <div className="flex flex-wrap items-center gap-2">
+          <div className="font-medium tracking-tight">{field.label}</div>
+          {isActive && (
+            <span className="rounded-full bg-primary/15 px-2 py-0.5 text-[10px] font-medium text-primary ring-1 ring-primary/30">
+              Reviewing this source
+            </span>
+          )}
+        </div>
         <div className="mt-0.5 text-[11px] text-muted-foreground">{field.path}</div>
         {note && <div className="mt-1 text-[11px] leading-relaxed text-primary">{note}</div>}
       </div>
@@ -140,6 +191,17 @@ function CitationRow({
               <div className="mt-1 line-clamp-2 text-xs leading-relaxed text-muted-foreground">
                 {provenance.correction_note || provenance.correction_source || provenance.verification_note || provenance.verification_source}
               </div>
+            )}
+            {provenance.source_doc_id && (
+              <a
+                href={documentHref(provenance)}
+                target="_blank"
+                rel="noreferrer"
+                className="mt-2 inline-flex items-center gap-1.5 rounded-md border border-border/70 bg-background px-2 py-1 text-[11px] font-medium text-foreground transition-colors hover:bg-muted"
+              >
+                <ExternalLink className="h-3 w-3" />
+                Open document page
+              </a>
             )}
           </div>
         ) : (
@@ -229,6 +291,11 @@ function isBadSource(provenance?: FieldProvenance): boolean {
 
 function sourceCitationId(path: string): string {
   return `source-citation-${path.replace(/[^a-zA-Z0-9_-]+/g, "-")}`;
+}
+
+function documentHref(provenance: FieldProvenance): string {
+  const page = provenance.source_page ? `#page=${provenance.source_page}` : "";
+  return `/api/deals/documents/${provenance.source_doc_id}/file${page}`;
 }
 
 function getMetricValue(metrics: CitationMetrics, path: string): unknown {
