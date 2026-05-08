@@ -404,12 +404,7 @@ function ReviewInputEditor({ dealId, inputs, onSaved }: { dealId: number; inputs
           <div key={input.path} className="rounded-md border border-border/70 bg-background/70 p-2">
             <div className="mb-1 flex items-center justify-between gap-2">
               <div className="text-[11px] font-medium text-muted-foreground">{input.label}</div>
-              <a
-                href={sourceHref(input.provenance, input.path)}
-                target={input.provenance?.source_doc_id ? "_blank" : undefined}
-                rel={input.provenance?.source_doc_id ? "noreferrer" : undefined}
-                className="text-[11px] text-primary hover:underline"
-              >
+              <a href={sourceHref(input.provenance, input.path)} className="text-[11px] text-primary hover:underline">
                 source
               </a>
             </div>
@@ -493,7 +488,7 @@ function ReviewActions({
         <FieldReviewAction dealId={dealId} path={item.path} value={item.value} provenance={item.provenance} />
       ) : null}
       <Button size="sm" variant="outline" asChild>
-        <a href={actionHref} target={item.provenance?.source_doc_id ? "_blank" : undefined} rel={item.provenance?.source_doc_id ? "noreferrer" : undefined}>{actionLabel}</a>
+        <a href={actionHref}>{actionLabel}</a>
       </Button>
       {editing && item.path ? (
         <div className="flex w-full items-center gap-2 md:w-auto">
@@ -549,7 +544,7 @@ function mathItems(gate: any, metrics: Metrics, provenance: Record<string, Field
       provenance: config?.primaryPath ? provenance[config.primaryPath] : undefined,
       inputs,
       actionHref: config?.primaryPath ? sourceHref(provenance[config.primaryPath], config.primaryPath) : "#technical-details",
-      actionLabel: "Open source",
+      actionLabel: "Review source",
     };
   });
 }
@@ -577,7 +572,7 @@ function flagItems(flags: ValidationFlag[], metrics: Metrics, provenance: Record
         recommendedLabel: alias?.label,
         inputs,
         actionHref: path ? sourceHref(provenance[path], path) : "#source-citations",
-        actionLabel: path ? "Open source" : "Review sources",
+        actionLabel: path ? "Review source" : "Review sources",
       };
     });
 }
@@ -607,7 +602,7 @@ function sourceItems(metrics: Metrics, provenance: Record<string, FieldProvenanc
       source: sourceLabel(prov),
       inputs: [{ path: field.path, label: field.label, value, provenance: prov }],
       actionHref: sourceHref(prov, field.path),
-      actionLabel: prov.source_doc_id ? "Open document" : "View citation",
+      actionLabel: "Review source",
     });
   }
   return out;
@@ -804,11 +799,7 @@ function sourceLabel(provenance?: FieldProvenance): string | undefined {
   return `${provenance.source_doc_name}${provenance.source_page ? ` p.${provenance.source_page}` : ""}`;
 }
 
-function sourceHref(provenance: FieldProvenance | undefined, path: string): string {
-  if (provenance?.source_doc_id) {
-    const page = provenance.source_page ? `#page=${provenance.source_page}` : "";
-    return `/api/deals/documents/${provenance.source_doc_id}/file${page}`;
-  }
+function sourceHref(_provenance: FieldProvenance | undefined, path: string): string {
   return `#${sourceCitationId(path)}`;
 }
 
