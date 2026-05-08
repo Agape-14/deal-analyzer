@@ -12,6 +12,7 @@ from sqlalchemy.orm.attributes import flag_modified
 from app.database import get_db
 from app.models import Deal
 from app.services.data_integrity import mark_manual_edit, set_lock
+from app.services.deal_scorer import score_deal
 from app.services.deal_validator import validate_deal_metrics
 from app.services.math_checker import run_math_checks
 
@@ -54,12 +55,13 @@ def _json_safe(value):
 def _refresh_integrity(deal: Deal, metrics: dict) -> None:
     """Refresh validation after a user correction without blocking the save.
 
-    Scoring is intentionally handled by /score after the save succeeds. That
-    keeps a scoring/API failure from making a valid field correction look like
-    it failed to save.
+    These checks are deterministic, so they can run in the same request that
+    stores the correction. Any refresh failure is recorded on the deal instead
+    of making a valid manual edit look like it failed to save.
     """
+    math_checks = None
     try:
-        run_math_checks(metrics)
+        math_checks = run_math_checks(metrics)
     except Exception as e:
         metrics["_manual_edit_warning"] = f"Math checks did not rerun: {type(e).__name__}: {e}"
     try:
@@ -68,7 +70,13 @@ def _refresh_integrity(deal: Deal, metrics: dict) -> None:
         metrics.setdefault("validation_flags", [])
         metrics["_manual_edit_warning"] = f"Validation did not rerun: {type(e).__name__}: {e}"
     deal.metrics = _json_safe(jsonable_encoder(metrics))
+    try:
+        deal.scores = _json_safe(jsonable_encoder(score_deal(deal.metrics or {}, math_checks=math_checks)))
+    except Exception as e:
+        metrics["_manual_edit_warning"] = f"Score did not refresh: {type(e).__name__}: {e}"
+        deal.metrics = _json_safe(jsonable_encoder(metrics))
     flag_modified(deal, "metrics")
+    flag_modified(deal, "scores")
 
 
 @router.post("/{deal_id}/fields/edit")
