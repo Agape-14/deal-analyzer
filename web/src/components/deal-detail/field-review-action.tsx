@@ -224,11 +224,17 @@ function scalarToInput(value: unknown): string {
 }
 
 function parseDraftValue(value: string, original: unknown): string | number | boolean | null {
-  const trimmed = value.trim().replace(/[$,%x]/gi, "").replace(/,/g, "");
-  if (trimmed === "") return null;
-  if (typeof original === "boolean") return ["true", "1", "yes"].includes(trimmed.toLowerCase());
-  if (typeof original === "number" || /^-?\d+(\.\d+)?$/.test(trimmed)) return Number(trimmed);
-  return value.trim();
+  const raw = value.trim();
+  if (raw === "") return null;
+  const compact = raw.replace(/[$,%x]/gi, "").replace(/,/g, "").trim();
+  if (typeof original === "boolean") return ["true", "1", "yes"].includes(compact.toLowerCase());
+  const numeric = compact.match(/^(-?\d+(?:\.\d+)?)(k|mm|m|b)?$/i);
+  if (numeric) {
+    const [, amount, suffix = ""] = numeric;
+    const multipliers: Record<string, number> = { k: 1_000, m: 1_000_000, mm: 1_000_000, b: 1_000_000_000 };
+    return Number(amount) * (multipliers[suffix.toLowerCase()] ?? 1);
+  }
+  return raw;
 }
 
 function errorDetail(error: unknown): string {
