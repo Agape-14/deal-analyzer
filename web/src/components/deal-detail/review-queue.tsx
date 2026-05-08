@@ -268,13 +268,7 @@ function ReviewInputEditor({ dealId, inputs }: { dealId: number; inputs: ReviewI
 
     setBusyPath("__all");
     try {
-      for (const edit of edits) {
-        try {
-          await api.post(`/api/deals/${dealId}/fields/edit`, edit);
-        } catch (e) {
-          throw new Error(`${humanizePath(edit.path)}: ${errorDetail(e)}`);
-        }
-      }
+      await api.post(`/api/deals/${dealId}/fields/batch-edit`, { edits });
       toast.success("Inputs saved", { description: `${edits.length} field${edits.length === 1 ? "" : "s"} updated and locked` });
       await rerunScoreAfterSave(dealId);
       router.refresh();
