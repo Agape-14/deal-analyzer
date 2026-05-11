@@ -85,7 +85,11 @@ def primary_strategy(metrics: Dict[str, Any] | None) -> str:
         str(value or "")
         for value in (
             hold.get("description"),
+            hold.get("notes"),
+            hold.get("assumptions"),
             ds.get("exit_strategies"),
+            ds.get("business_plan"),
+            ds.get("investment_strategy"),
             ds.get("investment_term_years"),
             ds.get("hold_period_years"),
         )
@@ -94,11 +98,16 @@ def primary_strategy(metrics: Dict[str, Any] | None) -> str:
         phrase in sale_text
         for phrase in (
             "hypothetical",
+            "theoretical",
             "for example",
             "illustrative",
+            "for illustrative purposes",
             "illustration",
             "not the business plan",
+            "not intended strategy",
+            "not preferred plan",
             "business plan is to hold",
+            "preferred plan is to hold",
             "example purposes",
         )
     )
@@ -111,6 +120,12 @@ def primary_strategy(metrics: Dict[str, Any] | None) -> str:
             "hold long term",
             "hold for cash flow",
             "business plan is to hold",
+            "preferred plan is to hold",
+            "preferred plan",
+            "preferred strategy",
+            "base plan",
+            "base case",
+            "primary plan",
             "refi and hold",
             "refinance and hold",
         )
