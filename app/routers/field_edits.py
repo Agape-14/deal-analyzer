@@ -53,6 +53,31 @@ def _json_safe(value):
     return value
 
 
+def _get_metric_value(metrics: dict, path: str):
+    cur = metrics
+    for part in path.split("."):
+        if not isinstance(cur, dict) or part not in cur:
+            return None
+        cur = cur[part]
+    return cur
+
+
+def _append_field_history(metrics: dict, path: str, old_value, new_value, action: str) -> None:
+    history = list(metrics.get("_field_history") or [])
+    history.append(
+        {
+            "path": path,
+            "old_value": old_value,
+            "new_value": new_value,
+            "action": action,
+            "locked": True,
+            "at": now_iso(),
+            "user": "admin",
+        }
+    )
+    metrics["_field_history"] = history[-200:]
+
+
 def _refresh_integrity(deal: Deal, metrics: dict) -> None:
     """Refresh validation after a user correction without blocking the save.
 
@@ -131,7 +156,9 @@ async def edit_field(deal_id: int, data: FieldEditIn, db: AsyncSession = Depends
 
     try:
         metrics = copy.deepcopy(deal.metrics or {})
+        old_value = _get_metric_value(metrics, data.path)
         metrics = mark_manual_edit(metrics, data.path, data.value, lock=bool(data.lock))
+        _append_field_history(metrics, data.path, old_value, data.value, "manual_edit")
         _refresh_integrity(deal, metrics)
         await db.commit()
     except HTTPException:
@@ -161,7 +188,9 @@ async def batch_edit_fields(deal_id: int, data: BatchFieldEditIn, db: AsyncSessi
             if edit.path in seen:
                 raise HTTPException(status_code=400, detail=f"Duplicate edit path: {edit.path}")
             seen.add(edit.path)
+            old_value = _get_metric_value(metrics, edit.path)
             metrics = mark_manual_edit(metrics, edit.path, edit.value, lock=bool(edit.lock))
+            _append_field_history(metrics, edit.path, old_value, edit.value, "batch_manual_edit")
             changed.append(edit.path)
 
         _refresh_integrity(deal, metrics)
@@ -200,7 +229,9 @@ async def resolve_conflict(deal_id: int, data: ConflictResolveIn, db: AsyncSessi
         raise HTTPException(status_code=404, detail="Deal not found")
 
     metrics = copy.deepcopy(deal.metrics or {})
+    old_value = _get_metric_value(metrics, data.path)
     metrics = mark_manual_edit(metrics, data.path, data.value, lock=True)
+    _append_field_history(metrics, data.path, old_value, data.value, "resolve_conflict")
 
     prov = dict(metrics.get("_provenance") or {})
     if data.path in prov and isinstance(prov[data.path], dict):
