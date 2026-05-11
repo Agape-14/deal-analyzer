@@ -16,7 +16,7 @@ export interface DealSummary {
   minimum_investment: number | null;
   notes: string;
   created_at: string;
-  quality?: DealQualitySummary | DataQualityGate;
+  quality?: DataQualityGate;
   scores?: Partial<DealScores>;
 }
 
@@ -147,9 +147,6 @@ export interface FieldProvenance {
   locked?: boolean;
   verification_source?: string;
   verification_note?: string;
-  // Populated by apply_corrections when /verify?auto_correct=true
-  // replaces a wrong value. The UI shows "corrected from X" and
-  // offers a revert.
   previous_value?: unknown;
   corrected_value?: unknown;
   correction_source?: string;
@@ -183,6 +180,7 @@ export interface DataQualityGate {
     unverified: number;
     conflicted: number;
     bad: number;
+    review_only?: number;
     verified: number;
   };
   math_summary?: {
@@ -193,6 +191,21 @@ export interface DataQualityGate {
     total: number;
     blocking?: Array<{ check?: string; difference?: string; formula?: string }>;
   };
+  confidence_breakdown?: {
+    critical_field_score?: number;
+    broad_verification_score?: number;
+    math_failures?: number;
+    math_warnings?: number;
+  };
+}
+
+export interface PipelineStatus {
+  status?: "idle" | "running" | "extract_complete" | "verify_complete" | "complete" | "failed" | string;
+  step?: "idle" | "extract" | "verify" | "score" | string;
+  message?: string;
+  error?: string | null;
+  started_at?: string | null;
+  updated_at?: string | null;
 }
 
 export interface ValidationFlag {
@@ -220,7 +233,7 @@ export interface DealScores {
   sponsor: ScoreCategory;
 }
 
-/** The full metrics blob. All fields optional — the backend fills them
+/** The full metrics blob. All fields optional - the backend fills them
  * progressively via AI extraction. Kept as nullable to match reality. */
 export interface DealMetrics {
   deal_structure?: Record<string, unknown>;
@@ -248,6 +261,16 @@ export interface DealDetail extends DealSummary {
     };
     _extraction_history?: Array<{ at: string; changes: string[]; doc_count: number; conflicts: string[] }>;
     _data_quality?: DataQualityGate;
+    _pipeline?: PipelineStatus;
+    _field_history?: Array<{
+      path: string;
+      old_value?: unknown;
+      new_value?: unknown;
+      action?: string;
+      locked?: boolean;
+      at?: string;
+      user?: string;
+    }>;
     _math_checks?: {
       checked_at?: string;
       summary?: DataQualityGate["math_summary"];
@@ -255,6 +278,7 @@ export interface DealDetail extends DealSummary {
     };
   };
   scores: Partial<DealScores>;
+  quality?: DealQualitySummary | DataQualityGate;
   lat?: number | null;
   lng?: number | null;
 }
