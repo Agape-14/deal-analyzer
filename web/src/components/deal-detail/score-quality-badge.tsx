@@ -17,7 +17,9 @@ export function ScoreQualityBadge({
 }) {
   const ui = stageUi(gate?.stage, gate?.can_score);
   const Icon = ui.Icon;
-  const detail = gate?.confidence_score != null ? `${gate.confidence_score}% confidence` : ui.detail;
+  const confidence = gate?.confidence_score != null ? `${gate.confidence_score}% confidence` : null;
+  const reasons = confidenceReasons(gate);
+  const detail = [confidence, ...reasons].filter(Boolean).join(" - ") || ui.detail;
 
   return (
     <div
@@ -28,16 +30,45 @@ export function ScoreQualityBadge({
         className,
       )}
       title={detail}
+      aria-label={`${ui.label}${detail ? `: ${detail}` : ""}`}
     >
       <Icon className={size === "sm" ? "h-3 w-3" : "h-3.5 w-3.5"} />
       {ui.label}
-      {size === "md" && detail && <span className="hidden sm:inline opacity-80">· {detail}</span>}
+      {size === "md" && confidence && <span className="hidden sm:inline opacity-80">- {confidence}</span>}
     </div>
   );
 }
 
 export function scoreStageLabel(stage?: string | null): string {
   return stageUi(stage, undefined).label;
+}
+
+function confidenceReasons(gate?: DataQualityGate): string[] {
+  if (!gate) return [];
+  const reasons: string[] = [];
+  const critical = gate.critical_summary;
+  if (critical) {
+    if (critical.missing) reasons.push(`${critical.missing} critical missing`);
+    if (critical.bad) reasons.push(`${critical.bad} flagged wrong`);
+    if (critical.conflicted) reasons.push(`${critical.conflicted} conflicts`);
+    if (critical.unverified) reasons.push(`${critical.unverified} unverified`);
+    if (critical.review_only) reasons.push(`${critical.review_only} review-only`);
+  }
+  const math = gate.math_summary;
+  if (math) {
+    if (math.fail) reasons.push(`${math.fail} failed math checks`);
+    if (math.warn) reasons.push(`${math.warn} math warnings`);
+  }
+  const breakdown = gate.confidence_breakdown;
+  if (breakdown && reasons.length < 3) {
+    if (breakdown.critical_field_score != null) {
+      reasons.push(`critical fields ${Math.round(breakdown.critical_field_score)}%`);
+    }
+    if (breakdown.broad_verification_score != null) {
+      reasons.push(`overall verification ${Math.round(breakdown.broad_verification_score)}%`);
+    }
+  }
+  return reasons.slice(0, 4);
 }
 
 function stageUi(stage: string | null | undefined, canScore: boolean | undefined) {
