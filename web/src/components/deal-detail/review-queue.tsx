@@ -34,6 +34,8 @@ type ReviewItem = {
   source?: string;
   inputs?: ReviewInput[];
   actionHref?: string;
+  resolutionLabel?: string;
+  reviewLabel?: string;
 };
 
 type MathCheck = { check?: string; difference?: string; formula?: string };
@@ -54,9 +56,18 @@ const REVIEW_FIELDS = [
   { path: "deal_structure.debt_amount", label: "Debt amount", format: "money" },
   { path: "deal_structure.interest_rate", label: "Interest rate", format: "pct" },
   { path: "deal_structure.ltv", label: "LTV", format: "pct" },
+  { path: "deal_structure.preferred_return", label: "Preferred return", format: "pct" },
+  { path: "deal_structure.gp_equity_coinvest_pct", label: "GP co-invest", format: "pct" },
+  { path: "deal_structure.gp_cash_at_risk", label: "GP cash at risk", format: "money" },
+  { path: "deal_structure.gp_coinvest_is_rollover", label: "GP rollover?", format: "text" },
+  { path: "deal_structure.gp_coinvest_description", label: "GP co-invest notes", format: "text" },
   { path: "financial_projections.stabilized_noi", label: "Stabilized NOI", format: "money" },
+  { path: "financial_projections.entry_cap_rate", label: "Entry cap rate", format: "pct" },
+  { path: "financial_projections.exit_cap_rate", label: "Exit cap rate", format: "pct" },
   { path: "financial_projections.avg_rent_per_unit", label: "Average rent", format: "money" },
   { path: "financial_projections.occupancy_assumption", label: "Occupancy", format: "pct" },
+  { path: "financial_projections.rent_growth_assumption", label: "Rent growth", format: "pct" },
+  { path: "financial_projections.operating_expense_ratio", label: "Expense ratio", format: "pct" },
   { path: "construction_costs.hard_costs", label: "Hard costs", format: "money" },
   { path: "construction_costs.hard_costs_total", label: "Hard costs total", format: "money" },
   { path: "construction_costs.soft_costs", label: "Soft costs", format: "money" },
@@ -66,8 +77,84 @@ const REVIEW_FIELDS = [
   { path: "construction_costs.contingency", label: "Contingency", format: "money" },
   { path: "construction_costs.contingency_total", label: "Contingency total", format: "money" },
   { path: "underwriting_checks.dscr", label: "DSCR", format: "multiple" },
+  { path: "underwriting_checks.yield_on_cost", label: "Yield on cost", format: "pct" },
+  { path: "underwriting_checks.break_even_occupancy", label: "Break-even occupancy", format: "pct" },
+  { path: "sponsor_evaluation.alignment_score", label: "Alignment score", format: "integer" },
+  { path: "sponsor_evaluation.sponsor_skin_in_game", label: "Sponsor skin in game", format: "text" },
+  { path: "sponsor_evaluation.sponsor_full_cycle_deals", label: "Full-cycle deals", format: "integer" },
+  { path: "sponsor_evaluation.sponsor_default_history", label: "Default history", format: "text" },
   { path: "project_details.unit_count", label: "Unit count", format: "integer" },
 ] as const;
+
+const FALLBACK_INPUTS: Partial<Record<ReviewArea, Array<{ path: string; label: string }>>> = {
+  Sponsor: [
+    { path: "sponsor_evaluation.sponsor_full_cycle_deals", label: "Full-cycle deals" },
+    { path: "sponsor_evaluation.sponsor_default_history", label: "Default history" },
+    { path: "sponsor_evaluation.sponsor_skin_in_game", label: "Sponsor skin in game" },
+    { path: "deal_structure.gp_cash_at_risk", label: "GP cash at risk" },
+  ],
+  Market: [
+    { path: "market_location.market_rent_growth", label: "Market rent growth" },
+    { path: "market_location.market_vacancy_rate", label: "Market vacancy" },
+    { path: "financial_projections.rent_growth_assumption", label: "Rent growth" },
+    { path: "financial_projections.occupancy_assumption", label: "Occupancy" },
+  ],
+  Returns: [
+    { path: "target_returns.target_irr", label: "Target IRR" },
+    { path: "target_returns.net_irr", label: "Net IRR" },
+    { path: "target_returns.target_cash_on_cash", label: "Cash-on-cash" },
+    { path: "target_returns.distribution_yield", label: "Distribution yield" },
+    { path: "target_returns.target_equity_multiple", label: "Equity multiple" },
+  ],
+  "Capital Stack": [
+    { path: "deal_structure.total_project_cost", label: "Total project cost" },
+    { path: "deal_structure.total_equity_required", label: "Equity required" },
+    { path: "deal_structure.preferred_equity_amount", label: "Pref equity" },
+    { path: "deal_structure.debt_amount", label: "Debt" },
+    { path: "deal_structure.preferred_return", label: "Preferred return" },
+  ],
+  Debt: [
+    { path: "underwriting_checks.dscr", label: "DSCR" },
+    { path: "deal_structure.ltv", label: "LTV" },
+    { path: "deal_structure.debt_amount", label: "Debt" },
+    { path: "deal_structure.interest_rate", label: "Interest rate" },
+    { path: "financial_projections.stabilized_noi", label: "Stabilized NOI" },
+  ],
+  Construction: [
+    { path: "construction_costs.hard_costs_total", label: "Hard costs total" },
+    { path: "construction_costs.soft_costs_total", label: "Soft costs total" },
+    { path: "construction_costs.land_cost_total", label: "Land total" },
+    { path: "construction_costs.contingency_total", label: "Contingency total" },
+    { path: "deal_structure.total_project_cost", label: "Total project cost" },
+  ],
+};
+
+const CATEGORY_INPUTS: Record<string, Array<{ path: string; label: string }>> = {
+  alignment: [
+    { path: "deal_structure.gp_equity_coinvest_pct", label: "GP co-invest" },
+    { path: "deal_structure.gp_cash_at_risk", label: "GP cash at risk" },
+    { path: "deal_structure.gp_coinvest_is_rollover", label: "GP rollover?" },
+    { path: "deal_structure.gp_coinvest_description", label: "GP co-invest notes" },
+    { path: "sponsor_evaluation.alignment_score", label: "Alignment score" },
+    { path: "sponsor_evaluation.sponsor_skin_in_game", label: "Sponsor skin in game" },
+  ],
+  underwriting: [
+    { path: "underwriting_checks.dscr", label: "DSCR" },
+    { path: "underwriting_checks.yield_on_cost", label: "Yield on cost" },
+    { path: "financial_projections.entry_cap_rate", label: "Entry cap rate" },
+    { path: "financial_projections.exit_cap_rate", label: "Exit cap rate" },
+    { path: "financial_projections.occupancy_assumption", label: "Occupancy" },
+    { path: "financial_projections.rent_growth_assumption", label: "Rent growth" },
+    { path: "financial_projections.operating_expense_ratio", label: "Expense ratio" },
+  ],
+  structure: [
+    { path: "deal_structure.preferred_return", label: "Preferred return" },
+    { path: "deal_structure.promote_structure", label: "Promote structure" },
+    { path: "deal_structure.waterfall_structure", label: "Waterfall" },
+    { path: "deal_structure.fees_asset_mgmt", label: "Asset management fee" },
+    { path: "deal_structure.fees_construction_mgmt", label: "Construction management fee" },
+  ],
+};
 
 const MATH_INPUTS: Array<{ test: (name: string) => boolean; area: ReviewArea; primaryPath: string; inputs: Array<{ path: string; label: string }> }> = [
   {
@@ -172,7 +259,7 @@ export function ReviewQueue({ deal }: { deal: DealDetail }) {
             <div className="text-[10px] uppercase tracking-[0.14em] text-muted-foreground">Deal Readiness</div>
             <h3 className="text-base font-semibold tracking-tight">Needs review</h3>
             <p className="mt-0.5 text-xs text-muted-foreground">
-              {visible.length} priority item{visible.length === 1 ? "" : "s"} shown. Fix the value or confirm the item to clear it.
+              {visible.length} priority item{visible.length === 1 ? "" : "s"} shown. Review values, fix bad numbers, or accept risk notes to clear them.
             </p>
           </div>
         </div>
@@ -295,16 +382,18 @@ function ReviewActions({
     <div className="flex flex-wrap items-center gap-2 md:justify-end md:pt-8">
       <Button size="sm" onClick={confirmReviewItem} disabled={busy}>
         {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <CheckCircle2 className="h-3.5 w-3.5" />}
-        Confirm
+        {item.resolutionLabel ?? "Confirm"}
       </Button>
       {onReviewInputs ? (
         <Button size="sm" variant={reviewingInputs ? "secondary" : "outline"} onClick={onReviewInputs} disabled={busy}>
-          {reviewingInputs ? "Hide inputs" : "Review inputs"}
+          {reviewingInputs ? "Hide values" : item.reviewLabel ?? "Review values"}
         </Button>
       ) : null}
-      <Button size="sm" variant="outline" asChild>
-        <a href={item.actionHref ?? "#source-citations"}>Open source</a>
-      </Button>
+      {item.actionHref ? (
+        <Button size="sm" variant="outline" asChild>
+          <a href={item.actionHref}>Open source</a>
+        </Button>
+      ) : null}
     </div>
   );
 }
@@ -381,8 +470,8 @@ function ReviewInputEditor({ dealId, itemKey, inputs, onDone }: { dealId: number
     <div className="mt-3 rounded-lg border border-primary/25 bg-primary/5 p-3">
       <div className="mb-2 flex items-center justify-between gap-3">
         <div>
-          <div className="text-xs font-semibold tracking-tight text-foreground">Review and correct inputs</div>
-          <p className="mt-0.5 text-[11px] text-muted-foreground">Edit values that are wrong, or leave them unchanged and save to approve them.</p>
+          <div className="text-xs font-semibold tracking-tight text-foreground">Review values for this issue</div>
+          <p className="mt-0.5 text-[11px] text-muted-foreground">Edit wrong values here, or leave them unchanged and save to approve this row.</p>
         </div>
         <Button size="sm" onClick={saveAll} disabled={busy}>
           {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <CheckCircle2 className="h-3.5 w-3.5" />}
@@ -460,20 +549,25 @@ function flagItems(flags: ValidationFlag[], metrics: Metrics, provenance: Record
     .filter((flag) => ["red", "yellow"].includes(String(flag.severity).toLowerCase()))
     .map((flag, index) => {
       const path = extractBestPath(flag.message);
-      const inputs = reviewInputsForMessage(flag.message, path, metrics, provenance);
+      const area = areaForFlag(flag, path);
+      const inputs = reviewInputsForMessage(flag.message, path, metrics, provenance) ?? fallbackInputsForFlag(flag, area, metrics, provenance);
+      const sourcePath = path ?? firstSourcedInputPath(inputs, provenance);
+      const isQualitative = !path && inputs && inputs.length > 0;
       return {
         key: `flag:${flag.category}:${path ?? flag.message}`,
         priority: flag.severity === "red" ? 80 - index : 45 - index,
         kind: "flag" as const,
-        area: areaForFlag(flag, path),
+        area,
         severity: flag.severity === "red" ? "red" as const : "yellow" as const,
-        title: path ? `${humanizePath(path)} needs review` : `${flag.category} needs review`,
+        title: path ? `${humanizePath(path)} needs review` : `${flag.category} risk note`,
         detail: simplifyMessage(flag.message),
         path,
         value: path ? getPath(metrics, path) : undefined,
         source: path ? sourceLabel(provenance[path]) : undefined,
         inputs,
-        actionHref: path ? sourceHref(path) : "#source-citations",
+        actionHref: sourcePath ? sourceHref(sourcePath) : undefined,
+        resolutionLabel: isQualitative ? "Accept risk note" : "Confirm",
+        reviewLabel: isQualitative ? "Review related values" : "Review values",
       };
     });
 }
@@ -520,6 +614,28 @@ function reviewInputsForMessage(message: string, primaryPath: string | undefined
     provenance: provenance[path],
   }));
   return inputs.length > 0 ? inputs : undefined;
+}
+
+function fallbackInputsForFlag(
+  flag: ValidationFlag,
+  area: ReviewArea,
+  metrics: Metrics,
+  provenance: Record<string, FieldProvenance>,
+): ReviewInput[] | undefined {
+  const category = String(flag.category ?? "").toLowerCase();
+  const definitions = CATEGORY_INPUTS[category] ?? FALLBACK_INPUTS[area];
+  if (!definitions?.length) return undefined;
+  const inputs = definitions
+    .map((input) => ({ ...input, value: getPath(metrics, input.path), provenance: provenance[input.path] }))
+    .filter((input, pos, arr) => arr.findIndex((candidate) => candidate.path === input.path) === pos);
+  return inputs.length > 0 ? inputs : undefined;
+}
+
+function firstSourcedInputPath(inputs: ReviewInput[] | undefined, provenance: Record<string, FieldProvenance>): string | undefined {
+  return (
+    inputs?.find((input) => provenance[input.path]?.source_doc_name)?.path ??
+    inputs?.find((input) => input.value !== null && input.value !== undefined && input.value !== "")?.path
+  );
 }
 
 function findMathConfig(checkName: string) {
