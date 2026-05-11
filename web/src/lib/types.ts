@@ -16,7 +16,7 @@ export interface DealSummary {
   minimum_investment: number | null;
   notes: string;
   created_at: string;
-  quality?: DataQualityGate;
+  quality?: DealQualitySummary | DataQualityGate;
   scores?: Partial<DealScores>;
 }
 
