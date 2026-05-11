@@ -20,6 +20,7 @@ from app.routers import (
     deals,
     deal_uploads,
     field_edits,
+    deal_pipeline,
     chat,
     investments,
     reports,
@@ -136,11 +137,12 @@ templates = Jinja2Templates(directory=os.path.join(base_dir, "templates"))
 # Auth FIRST so it's reachable even when other routers are behind the middleware.
 app.include_router(auth_router.router, prefix="/api/auth", tags=["auth"])
 app.include_router(developers.router, prefix="/api/developers", tags=["developers"])
-# Excel-aware upload routes and persistence-safe field edit routes must be
-# registered before the legacy deals router, which still exposes older handlers
-# at some of the same paths.
+# Excel-aware upload routes, persistence-safe field edits, and visible pipeline
+# routes must be registered before the legacy deals router, which still exposes
+# older handlers at some of the same paths.
 app.include_router(deal_uploads.router, prefix="/api/deals", tags=["deal uploads"])
 app.include_router(field_edits.router, prefix="/api/deals", tags=["field edits"])
+app.include_router(deal_pipeline.router, prefix="/api/deals", tags=["deal pipeline"])
 app.include_router(deals.router, prefix="/api/deals", tags=["deals"])
 app.include_router(chat.router, prefix="/api/chat", tags=["chat"])
 app.include_router(investments.router, prefix="/api/investments", tags=["investments"])
