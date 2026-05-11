@@ -8,7 +8,7 @@ import { FieldReviewAction } from "@/components/deal-detail/field-review-action"
 import { cn, fmtDate, fmtMoney, fmtMultiple, fmtPct } from "@/lib/utils";
 import type { DealDetail, FieldProvenance } from "@/lib/types";
 
-type CitationFormat = "pct" | "multiple" | "money" | "years" | "integer";
+type CitationFormat = "pct" | "multiple" | "money" | "years" | "integer" | "text";
 type CitationField = { path: string; label: string; format: CitationFormat };
 
 const CITATION_FIELDS: CitationField[] = [
@@ -26,10 +26,23 @@ const CITATION_FIELDS: CitationField[] = [
   { path: "deal_structure.interest_rate", label: "Interest rate", format: "pct" },
   { path: "deal_structure.ltv", label: "LTV", format: "pct" },
   { path: "deal_structure.hold_period_years", label: "Hold period", format: "years" },
+  { path: "deal_structure.preferred_return", label: "Preferred return", format: "pct" },
+  { path: "deal_structure.gp_equity_coinvest_pct", label: "GP co-invest", format: "pct" },
+  { path: "deal_structure.gp_cash_at_risk", label: "GP cash at risk", format: "money" },
+  { path: "deal_structure.gp_coinvest_is_rollover", label: "GP rollover?", format: "text" },
+  { path: "deal_structure.gp_coinvest_description", label: "GP co-invest notes", format: "text" },
+  { path: "deal_structure.promote_structure", label: "Promote structure", format: "text" },
+  { path: "deal_structure.waterfall_structure", label: "Waterfall", format: "text" },
   { path: "financial_projections.stabilized_noi", label: "Stabilized NOI", format: "money" },
+  { path: "financial_projections.entry_cap_rate", label: "Entry cap rate", format: "pct" },
+  { path: "financial_projections.exit_cap_rate", label: "Exit cap rate", format: "pct" },
   { path: "financial_projections.avg_rent_per_unit", label: "Average rent", format: "money" },
   { path: "financial_projections.occupancy_assumption", label: "Occupancy", format: "pct" },
+  { path: "financial_projections.rent_growth_assumption", label: "Rent growth", format: "pct" },
+  { path: "financial_projections.operating_expense_ratio", label: "Expense ratio", format: "pct" },
   { path: "underwriting_checks.dscr", label: "DSCR", format: "multiple" },
+  { path: "underwriting_checks.yield_on_cost", label: "Yield on cost", format: "pct" },
+  { path: "underwriting_checks.break_even_occupancy", label: "Break-even occupancy", format: "pct" },
   { path: "construction_costs.hard_costs", label: "Hard costs", format: "money" },
   { path: "construction_costs.hard_costs_total", label: "Hard costs total", format: "money" },
   { path: "construction_costs.soft_costs", label: "Soft costs", format: "money" },
@@ -38,6 +51,10 @@ const CITATION_FIELDS: CitationField[] = [
   { path: "construction_costs.land_cost_total", label: "Land total", format: "money" },
   { path: "construction_costs.contingency", label: "Contingency", format: "money" },
   { path: "construction_costs.contingency_total", label: "Contingency total", format: "money" },
+  { path: "sponsor_evaluation.alignment_score", label: "Alignment score", format: "integer" },
+  { path: "sponsor_evaluation.sponsor_skin_in_game", label: "Sponsor skin in game", format: "text" },
+  { path: "sponsor_evaluation.sponsor_full_cycle_deals", label: "Full-cycle deals", format: "integer" },
+  { path: "sponsor_evaluation.sponsor_default_history", label: "Default history", format: "text" },
   { path: "project_details.unit_count", label: "Unit count", format: "integer" },
 ];
 
