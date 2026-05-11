@@ -311,8 +311,26 @@ function sourceCitationId(path: string): string {
 }
 
 function documentHref(provenance: FieldProvenance): string {
-  const page = provenance.source_page ? `#page=${provenance.source_page}` : "";
-  return `/api/deals/documents/${provenance.source_doc_id}/file${page}`;
+  const hashParts: string[] = [];
+  if (provenance.source_page) hashParts.push(`page=${provenance.source_page}`);
+  const search = sourceSearchText(provenance);
+  if (search) hashParts.push(`search=${encodeURIComponent(search)}`);
+  const hash = hashParts.length ? `#${hashParts.join("&")}` : "";
+  return `/api/deals/documents/${provenance.source_doc_id}/file${hash}`;
+}
+
+function sourceSearchText(provenance: FieldProvenance): string {
+  const raw =
+    provenance.correction_source ||
+    provenance.correction_note ||
+    provenance.verification_source ||
+    provenance.verification_note ||
+    "";
+  const cleaned = String(raw)
+    .replace(/^page\s+\d+\s*:\s*/i, "")
+    .replace(/\s+/g, " ")
+    .trim();
+  return cleaned.slice(0, 120);
 }
 
 function getMetricValue(metrics: CitationMetrics, path: string): unknown {
