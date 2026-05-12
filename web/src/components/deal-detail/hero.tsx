@@ -11,7 +11,7 @@ import { ScoreQualityBadge } from "@/components/deal-detail/score-quality-badge"
 import { FadeIn } from "@/components/motion";
 import { api } from "@/lib/api";
 import { cn, fmtMoney, fmtMultiple, fmtPct } from "@/lib/utils";
-import type { DataQualityGate, DealDetail, DealQualitySummary, FieldProvenance } from "@/lib/types";
+import type { CanonicalReturnSummary, DataQualityGate, DealDetail, DealQualitySummary, FieldProvenance } from "@/lib/types";
 
 const POLL_INTERVAL = 5_000;
 const POLL_TIMEOUT = 8 * 60_000;
@@ -50,8 +50,15 @@ export function DealHero({ deal }: { deal: DealDetail }) {
   const visibleScore = deal.overall_score ?? deal.scores?.provisional_overall ?? null;
   const tr = (metrics.target_returns ?? {}) as Record<string, unknown>;
   const provenance = (metrics._provenance ?? {}) as ProvenanceMap;
-  const headlineIrr = pickTrustedNumber(tr, provenance, ["target_returns.target_irr", "target_returns.net_irr"]) ?? deal.target_irr;
-  const headlineMultiple = pickTrustedNumber(tr, provenance, ["target_returns.target_equity_multiple", "target_returns.net_equity_multiple"]) ?? deal.target_equity_multiple;
+  const canonical = (metrics as { _canonical_returns?: CanonicalReturnSummary })._canonical_returns;
+  const headlineIrr =
+    asNum(canonical?.target_irr) ??
+    pickTrustedNumber(tr, provenance, ["target_returns.target_irr", "target_returns.net_irr"]) ??
+    deal.target_irr;
+  const headlineMultiple =
+    asNum(canonical?.target_equity_multiple) ??
+    pickTrustedNumber(tr, provenance, ["target_returns.target_equity_multiple", "target_returns.net_equity_multiple"]) ??
+    deal.target_equity_multiple;
 
   React.useEffect(() => {
     return () => {
