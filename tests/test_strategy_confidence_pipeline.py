@@ -39,6 +39,7 @@ def test_hypothetical_sale_does_not_override_preferred_hold_strategy():
     summary = canonical_return_summary(metrics)
     assert summary["primary_strategy"] == "hold_with_sale_option"
     assert summary["target_irr"] == 13.0
+    assert summary["target_irr_path"] == "target_returns.hold_scenario.cash_on_cash_return"
 
 
 def test_pipeline_rate_limit_errors_are_user_readable():
