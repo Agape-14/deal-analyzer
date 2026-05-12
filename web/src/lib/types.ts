@@ -147,6 +147,9 @@ export interface FieldProvenance {
   locked?: boolean;
   verification_source?: string;
   verification_note?: string;
+  // Populated by apply_corrections when /verify?auto_correct=true
+  // replaces a wrong value. The UI shows "corrected from X" and
+  // offers a revert.
   previous_value?: unknown;
   corrected_value?: unknown;
   correction_source?: string;
@@ -208,6 +211,16 @@ export interface PipelineStatus {
   updated_at?: string | null;
 }
 
+export interface CanonicalReturnSummary {
+  primary_strategy?: string | null;
+  target_irr?: number | string | null;
+  target_irr_path?: string | null;
+  target_equity_multiple?: number | string | null;
+  target_equity_multiple_path?: string | null;
+  cash_on_cash?: number | string | null;
+  cash_on_cash_path?: string | null;
+}
+
 export interface ValidationFlag {
   severity: "red" | "yellow" | "green" | string;
   category: string;
@@ -247,6 +260,7 @@ export interface DealMetrics {
   sponsor_evaluation?: Record<string, unknown>;
   market_research?: Record<string, unknown>;
   validation_flags?: ValidationFlag[];
+  _canonical_returns?: CanonicalReturnSummary;
 }
 
 export interface DealDetail extends DealSummary {
@@ -262,6 +276,7 @@ export interface DealDetail extends DealSummary {
     _extraction_history?: Array<{ at: string; changes: string[]; doc_count: number; conflicts: string[] }>;
     _data_quality?: DataQualityGate;
     _pipeline?: PipelineStatus;
+    _review_resolutions?: Record<string, unknown>;
     _field_history?: Array<{
       path: string;
       old_value?: unknown;
