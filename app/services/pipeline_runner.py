@@ -29,6 +29,7 @@ from app.services.deal_validator import validate_deal_metrics
 from app.services.deal_verifier import apply_corrections, verify_deal_metrics
 from app.services.math_checker import run_math_checks
 from app.services import notifications as notif_svc
+from app.services.pipeline_runs import attach_run_status, start_pipeline_run, update_pipeline_run
 
 log = logging.getLogger("kenyon.pipeline")
 
@@ -129,6 +130,13 @@ def _needs_backend_verification(metrics: dict[str, Any]) -> bool:
 
 
 async def _verify_score_and_commit(db, deal: Deal) -> None:
+    run = await start_pipeline_run(
+        db,
+        deal,
+        trigger="backend_runner",
+        step="verify",
+        message="Backend verification started after a document update.",
+    )
     metrics = dict(deal.metrics or {})
     pipeline = dict(metrics.get("_pipeline") or {})
     pipeline.update(
@@ -140,7 +148,7 @@ async def _verify_score_and_commit(db, deal: Deal) -> None:
         }
     )
     metrics["_pipeline"] = pipeline
-    deal.metrics = metrics
+    deal.metrics = attach_run_status(metrics, run)
     await db.commit()
 
     try:
@@ -152,7 +160,7 @@ async def _verify_score_and_commit(db, deal: Deal) -> None:
         math_results = run_math_checks(metrics)
         metrics["_math_checks"] = {
             "checked_at": now_iso(),
-            "summary": summarize_math_checks(math_results),
+            "summary": summarize_math_checks(math_results, metrics),
             "results": math_results,
         }
 
@@ -171,8 +179,20 @@ async def _verify_score_and_commit(db, deal: Deal) -> None:
             }
         )
         metrics["_pipeline"] = pipeline
+        run = await update_pipeline_run(
+            db,
+            run.id,
+            status="complete",
+            step="score",
+            message="Backend pipeline complete. Verification, math checks, and scoring finished.",
+            summary={
+                "corrections": len(changes),
+                "math_failures": (metrics.get("_math_checks") or {}).get("summary", {}).get("fail", 0),
+                "math_warnings": (metrics.get("_math_checks") or {}).get("summary", {}).get("warn", 0),
+            },
+        )
 
-        deal.metrics = metrics
+        deal.metrics = attach_run_status(metrics, run)
         deal.scores = score_deal(metrics, math_checks=math_results, require_verified=True)
         await _emit_verification_notification(db, deal, verification, len(changes))
         await db.commit()
@@ -188,7 +208,15 @@ async def _verify_score_and_commit(db, deal: Deal) -> None:
             }
         )
         metrics["_pipeline"] = pipeline
-        deal.metrics = metrics
+        run = await update_pipeline_run(
+            db,
+            run.id,
+            status="failed",
+            step="verify",
+            message="Backend verification failed.",
+            error=str(exc)[:500],
+        )
+        deal.metrics = attach_run_status(metrics, run)
         await db.commit()
 
 

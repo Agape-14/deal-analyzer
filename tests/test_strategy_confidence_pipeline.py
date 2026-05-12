@@ -2,6 +2,7 @@ import math
 
 from app.routers.deal_pipeline import _pipeline_error_message
 from app.services.canonical_metrics import canonical_return_summary, primary_strategy
+from app.services.confidence import assess_data_quality
 
 
 def _json_safe(value):
@@ -53,3 +54,35 @@ def test_json_safe_removes_non_finite_numbers_from_metrics():
     clean = _json_safe({"good": 1.2, "bad": math.nan, "nested": [math.inf]})
 
     assert clean == {"good": 1.2, "bad": None, "nested": [None]}
+
+
+def test_failed_pipeline_blocks_confidence_with_plain_english_reason():
+    gate = assess_data_quality(
+        {
+            "_pipeline": {
+                "status": "failed",
+                "step": "verify",
+                "error": "Anthropic API error 429: rate limit exceeded",
+            }
+        },
+        math_checks=[],
+    )
+
+    assert gate["stage"] == "pipeline_failed"
+    assert gate["can_score"] is False
+    assert gate["confidence_score"] <= 55
+    assert any(item["label"] == "Pipeline did not finish" for item in gate["confidence_explanations"])
+
+
+def test_verified_math_failure_explains_why_confidence_is_capped():
+    gate = assess_data_quality(
+        {
+            "_verification": {"verified_at": "2026-05-12T00:00:00+00:00", "confidence": 90},
+            "_provenance": {},
+        },
+        math_checks=[{"check": "LTV = Debt / Total Cost", "status": "fail", "blocking": True}],
+    )
+
+    assert gate["stage"] == "math_failed"
+    assert gate["can_score"] is False
+    assert any(item["label"] == "Math checks do not reconcile" for item in gate["confidence_explanations"])
