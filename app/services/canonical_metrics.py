@@ -1,10 +1,8 @@
 """Canonical metric selection helpers.
 
-These helpers keep display/API/export choices aligned with the product labels.
-A field labeled "Target IRR" must reflect the deal's stated primary strategy.
-If the documents describe a long-term hold as the plan and also include a
-hypothetical sale case, the hold yield is the headline metric and sale IRR stays
-in the sale scenario.
+The app often has several values that sound similar: target IRR, net IRR,
+cash-on-cash, distribution yield, sale IRR, and so on. These helpers keep the
+headline/display/export choices tied to the deal's stated primary strategy.
 """
 
 from typing import Any, Dict, Iterable, Optional
@@ -40,11 +38,25 @@ def bad_source(provenance: Optional[Dict[str, Any]]) -> bool:
     return status in BAD_STATUSES or bool(conflict)
 
 
-def pick_metric(metrics: Dict[str, Any] | None, paths: Iterable[str]) -> Any:
-    """Pick the first clean present metric, with reviewed values preferred."""
+def _review_rank(provenance: Optional[Dict[str, Any]]) -> int:
+    if not isinstance(provenance, dict):
+        return 0
+    status = str(provenance.get("status") or "").lower()
+    source = str(provenance.get("source") or "").lower()
+    if provenance.get("locked") or source == "manual":
+        return 3
+    if status in REVIEWED_STATUSES:
+        return 2
+    if provenance.get("verified_at"):
+        return 1
+    return 0
+
+
+def pick_metric_detail(metrics: Dict[str, Any] | None, paths: Iterable[str]) -> Dict[str, Any] | None:
+    """Pick the best clean present metric and keep its path/provenance."""
     metrics = metrics or {}
     provenance = metrics.get("_provenance") or {}
-    candidates = []
+    candidates: list[Dict[str, Any]] = []
     for path in paths:
         value = get_path(metrics, path)
         if present(value):
@@ -55,17 +67,14 @@ def pick_metric(metrics: Dict[str, Any] | None, paths: Iterable[str]) -> Any:
         return None
 
     clean = [candidate for candidate in candidates if not bad_source(candidate.get("provenance"))]
-    reviewed = [
-        candidate
-        for candidate in clean
-        if isinstance(candidate.get("provenance"), dict)
-        and (
-            candidate["provenance"].get("locked")
-            or str(candidate["provenance"].get("source") or "").lower() == "manual"
-            or str(candidate["provenance"].get("status") or "").lower() in REVIEWED_STATUSES
-        )
-    ]
-    return (reviewed[0] if reviewed else clean[0] if clean else candidates[0])["value"]
+    pool = clean or candidates
+    pool.sort(key=lambda candidate: _review_rank(candidate.get("provenance")), reverse=True)
+    return pool[0]
+
+
+def pick_metric(metrics: Dict[str, Any] | None, paths: Iterable[str]) -> Any:
+    picked = pick_metric_detail(metrics, paths)
+    return picked.get("value") if picked else None
 
 
 def primary_strategy(metrics: Dict[str, Any] | None) -> str:
@@ -77,10 +86,7 @@ def primary_strategy(metrics: Dict[str, Any] | None) -> str:
 
     sale = tr.get("sale_scenario") if isinstance(tr.get("sale_scenario"), dict) else {}
     hold = tr.get("hold_scenario") if isinstance(tr.get("hold_scenario"), dict) else {}
-    sale_text = " ".join(
-        str(sale.get(key) or "")
-        for key in ("description", "notes", "assumptions")
-    ).lower()
+    sale_text = " ".join(str(sale.get(key) or "") for key in ("description", "notes", "assumptions")).lower()
     hold_text = " ".join(
         str(value or "")
         for value in (
@@ -148,14 +154,26 @@ def is_hold_strategy(metrics: Dict[str, Any] | None) -> bool:
     return primary_strategy(metrics) in {"hold", "hold_with_sale_option"}
 
 
+def _summary_from_picks(strategy: str, target_irr, target_equity_multiple, cash_on_cash) -> Dict[str, Any]:
+    return {
+        "primary_strategy": strategy,
+        "target_irr": target_irr.get("value") if target_irr else None,
+        "target_irr_path": target_irr.get("path") if target_irr else None,
+        "target_equity_multiple": target_equity_multiple.get("value") if target_equity_multiple else None,
+        "target_equity_multiple_path": target_equity_multiple.get("path") if target_equity_multiple else None,
+        "cash_on_cash": cash_on_cash.get("value") if cash_on_cash else None,
+        "cash_on_cash_path": cash_on_cash.get("path") if cash_on_cash else None,
+    }
+
+
 def canonical_return_summary(metrics: Dict[str, Any] | None) -> Dict[str, Any]:
     """Return headline return metrics using one consistent strategy-aware rule."""
     strategy = primary_strategy(metrics)
 
     if strategy in {"hold", "hold_with_sale_option"}:
-        return {
-            "primary_strategy": strategy,
-            "target_irr": pick_metric(
+        return _summary_from_picks(
+            strategy,
+            pick_metric_detail(
                 metrics,
                 (
                     "target_returns.hold_scenario.cash_on_cash_return",
@@ -166,7 +184,7 @@ def canonical_return_summary(metrics: Dict[str, Any] | None) -> Dict[str, Any]:
                     "deal_structure.preferred_return",
                 ),
             ),
-            "target_equity_multiple": pick_metric(
+            pick_metric_detail(
                 metrics,
                 (
                     "target_returns.target_equity_multiple",
@@ -174,7 +192,7 @@ def canonical_return_summary(metrics: Dict[str, Any] | None) -> Dict[str, Any]:
                     "target_returns.sale_scenario.sale_equity_multiple",
                 ),
             ),
-            "cash_on_cash": pick_metric(
+            pick_metric_detail(
                 metrics,
                 (
                     "target_returns.hold_scenario.cash_on_cash_return",
@@ -183,12 +201,12 @@ def canonical_return_summary(metrics: Dict[str, Any] | None) -> Dict[str, Any]:
                     "target_returns.distribution_yield",
                 ),
             ),
-        }
+        )
 
     if strategy == "sale":
-        return {
-            "primary_strategy": strategy,
-            "target_irr": pick_metric(
+        return _summary_from_picks(
+            strategy,
+            pick_metric_detail(
                 metrics,
                 (
                     "target_returns.net_irr",
@@ -197,7 +215,7 @@ def canonical_return_summary(metrics: Dict[str, Any] | None) -> Dict[str, Any]:
                     "target_returns.gross_irr",
                 ),
             ),
-            "target_equity_multiple": pick_metric(
+            pick_metric_detail(
                 metrics,
                 (
                     "target_returns.net_equity_multiple",
@@ -206,21 +224,18 @@ def canonical_return_summary(metrics: Dict[str, Any] | None) -> Dict[str, Any]:
                     "target_returns.gross_equity_multiple",
                 ),
             ),
-            "cash_on_cash": pick_metric(
-                metrics,
-                ("target_returns.target_cash_on_cash", "target_returns.distribution_yield"),
-            ),
-        }
+            pick_metric_detail(metrics, ("target_returns.target_cash_on_cash", "target_returns.distribution_yield")),
+        )
 
-    return {
-        "primary_strategy": strategy,
-        "target_irr": pick_metric(metrics, ("target_returns.target_irr", "target_returns.net_irr")),
-        "target_equity_multiple": pick_metric(
-            metrics,
-            ("target_returns.target_equity_multiple", "target_returns.net_equity_multiple"),
-        ),
-        "cash_on_cash": pick_metric(
-            metrics,
-            ("target_returns.target_cash_on_cash", "target_returns.distribution_yield"),
-        ),
-    }
+    return _summary_from_picks(
+        strategy,
+        pick_metric_detail(metrics, ("target_returns.target_irr", "target_returns.net_irr")),
+        pick_metric_detail(metrics, ("target_returns.target_equity_multiple", "target_returns.net_equity_multiple")),
+        pick_metric_detail(metrics, ("target_returns.target_cash_on_cash", "target_returns.distribution_yield")),
+    )
+
+
+def annotate_canonical_metrics(metrics: Dict[str, Any] | None) -> Dict[str, Any]:
+    next_metrics = dict(metrics or {})
+    next_metrics["_canonical_returns"] = canonical_return_summary(next_metrics)
+    return next_metrics
