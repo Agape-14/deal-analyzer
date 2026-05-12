@@ -11,6 +11,7 @@ from typing import Any
 MAX_SHEETS = 20
 MAX_ROWS_PER_SHEET = 150
 MAX_COLS_PER_SHEET = 40
+MAX_CELL_PROVENANCE = 2000
 
 
 @dataclass
@@ -20,6 +21,7 @@ class SpreadsheetExtractionResult:
     ocr_page_count: int = 0
     tables: list[dict] = field(default_factory=list)
     images: list[dict] = field(default_factory=list)
+    cells: list[dict] = field(default_factory=list)
     page_diagnostics: list[dict] = field(default_factory=list)
     quality_score: int = 100
 
@@ -44,13 +46,16 @@ def _extract_xlsx(file_path: str) -> SpreadsheetExtractionResult:
 
     result = SpreadsheetExtractionResult()
     wb = load_workbook(file_path, data_only=True, read_only=True)
+    formula_wb = load_workbook(file_path, data_only=False, read_only=True)
     sheet_names = list(wb.sheetnames)[:MAX_SHEETS]
 
     text_parts: list[str] = []
     try:
         for sheet_index, sheet_name in enumerate(sheet_names, 1):
             ws = wb[sheet_name]
-            rows, table_rows = _worksheet_rows(ws)
+            formula_ws = formula_wb[sheet_name] if sheet_name in formula_wb.sheetnames else None
+            rows, table_rows, cells = _worksheet_rows(ws, formula_ws=formula_ws)
+            result.cells.extend(cells)
             result.page_diagnostics.append(
                 {"page": sheet_index, "source": "spreadsheet", "chars": sum(len(r) for r in rows)}
             )
@@ -59,6 +64,7 @@ def _extract_xlsx(file_path: str) -> SpreadsheetExtractionResult:
             text_parts.append(_render_sheet(sheet_name, rows))
     finally:
         wb.close()
+        formula_wb.close()
 
     result.page_count = len(sheet_names)
     result.text = "\n\n".join(part for part in text_parts if part.strip())
@@ -89,6 +95,15 @@ def _extract_xls(file_path: str) -> SpreadsheetExtractionResult:
             if not any(v != "" for v in values):
                 continue
             table_rows.append(values)
+            for col_idx, value in enumerate(values):
+                if value != "" and len(result.cells) < MAX_CELL_PROVENANCE:
+                    result.cells.append(
+                        {
+                            "sheet": sheet.name,
+                            "cell": f"R{row_idx + 1}C{col_idx + 1}",
+                            "value": value,
+                        }
+                    )
             rows.append("\t".join(str(v) for v in values))
         if table_rows:
             result.tables.append({"sheet": sheet.name, "rows": table_rows})
@@ -116,6 +131,15 @@ def _extract_csv(file_path: str) -> SpreadsheetExtractionResult:
             if not any(cell.strip() for cell in trimmed):
                 continue
             table_rows.append(trimmed)
+            for col_idx, value in enumerate(trimmed):
+                if value.strip() and len(result.cells) < MAX_CELL_PROVENANCE:
+                    result.cells.append(
+                        {
+                            "sheet": "CSV",
+                            "cell": f"R{idx + 1}C{col_idx + 1}",
+                            "value": value,
+                        }
+                    )
             rows.append("\t".join(trimmed))
     if table_rows:
         result.tables.append({"sheet": "CSV", "rows": table_rows})
@@ -125,9 +149,12 @@ def _extract_csv(file_path: str) -> SpreadsheetExtractionResult:
     return result
 
 
-def _worksheet_rows(ws) -> tuple[list[str], list[list[Any]]]:
+def _worksheet_rows(ws, *, formula_ws=None) -> tuple[list[str], list[list[Any]], list[dict]]:
+    from openpyxl.utils import get_column_letter
+
     rows: list[str] = []
     table_rows: list[list[Any]] = []
+    cells: list[dict] = []
     max_row = min(ws.max_row or 0, MAX_ROWS_PER_SHEET)
     max_col = min(ws.max_column or 0, MAX_COLS_PER_SHEET)
 
@@ -136,15 +163,26 @@ def _worksheet_rows(ws) -> tuple[list[str], list[list[Any]]]:
         raw_values: list[Any] = []
         for col_idx in range(1, max_col + 1):
             value = ws.cell(row=row_idx, column=col_idx).value
+            formula_value = formula_ws.cell(row=row_idx, column=col_idx).value if formula_ws else None
             rendered = _render_cell(value)
             row_values.append(rendered)
             raw_values.append(value)
+            formula = formula_value if isinstance(formula_value, str) and formula_value.startswith("=") else None
+            if rendered and len(cells) < MAX_CELL_PROVENANCE:
+                item = {
+                    "sheet": ws.title,
+                    "cell": f"{get_column_letter(col_idx)}{row_idx}",
+                    "value": rendered,
+                }
+                if formula:
+                    item["formula"] = formula
+                cells.append(item)
         if not any(v != "" for v in row_values):
             continue
         table_rows.append(raw_values)
         rows.append("\t".join(row_values))
 
-    return rows, table_rows
+    return rows, table_rows, cells
 
 
 def _render_sheet(sheet_name: str, rows: list[str]) -> str:
