@@ -6,7 +6,7 @@ import { AlertTriangle, Calculator, CheckCircle2, ExternalLink, FileText, HelpCi
 import { Card } from "@/components/ui/card";
 import { FieldReviewAction } from "@/components/deal-detail/field-review-action";
 import { cn, fmtDate, fmtMoney, fmtMultiple, fmtPct } from "@/lib/utils";
-import type { DealDetail, FieldProvenance } from "@/lib/types";
+import type { CanonicalReturnSummary, DealDetail, FieldProvenance } from "@/lib/types";
 
 type CitationFormat = "pct" | "multiple" | "money" | "years" | "integer" | "text";
 type CitationField = { path: string; label: string; format: CitationFormat };
@@ -58,7 +58,10 @@ const CITATION_FIELDS: CitationField[] = [
   { path: "project_details.unit_count", label: "Unit count", format: "integer" },
 ];
 
-type CitationMetrics = Record<string, unknown> & { _provenance?: Record<string, FieldProvenance> };
+type CitationMetrics = Record<string, unknown> & {
+  _provenance?: Record<string, FieldProvenance>;
+  _canonical_returns?: CanonicalReturnSummary;
+};
 
 export function SourceCitations({ deal }: { deal: DealDetail }) {
   const metrics = (deal.metrics ?? {}) as CitationMetrics;
@@ -122,6 +125,20 @@ export function SourceCitations({ deal }: { deal: DealDetail }) {
 
 function citationRow(metrics: CitationMetrics, provenance: Record<string, FieldProvenance>, field: CitationField) {
   if (field.path === "target_returns.target_irr") {
+    const summary = metrics._canonical_returns;
+    const canonicalPath = summary?.target_irr_path;
+    if (canonicalPath && summary?.target_irr != null) {
+      return {
+        field: { ...field, path: canonicalPath },
+        value: summary.target_irr,
+        prov: provenance[canonicalPath],
+        anchorPath: field.path,
+        note:
+          summary.primary_strategy === "hold" || summary.primary_strategy === "hold_with_sale_option"
+            ? "Using the preferred hold-plan return as the headline metric. Hypothetical sale IRR stays in the sale scenario."
+            : "Using the canonical return selected for the deal's stated primary strategy.",
+      };
+    }
     const canonical = pickCanonicalReturnMetric(metrics, provenance, ["target_returns.target_irr", "target_returns.net_irr"]);
     if (canonical) {
       return {
@@ -129,9 +146,7 @@ function citationRow(metrics: CitationMetrics, provenance: Record<string, FieldP
         value: canonical.value,
         prov: canonical.prov,
         anchorPath: field.path,
-        note: canonical.path === "target_returns.target_irr"
-          ? "Using Target IRR as the headline return metric. Net IRR and cash-on-cash remain separate checks."
-          : "Target IRR is missing, so investor net IRR is being used as the fallback headline return.",
+        note: "Using the best verified return available until the canonical return summary is refreshed.",
       };
     }
   }
