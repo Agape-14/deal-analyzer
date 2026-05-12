@@ -199,7 +199,6 @@ async def reprocess_document(doc_id: int, db: AsyncSession = Depends(get_db)):
         "ocr_pages": extraction.get("ocr_pages", 0),
         "tables": extraction.get("tables", 0),
         "images": extraction.get("images", 0),
-        "cells": extraction.get("cells", 0),
         "text_length_before": old_len,
         "text_length_after": len(extracted_text),
         "delta": len(extracted_text) - old_len,
@@ -244,7 +243,6 @@ def _extract_uploaded_file(file_path: str, ext: str) -> tuple[dict, dict, str, i
             "ocr_pages": result_x.ocr_page_count,
             "tables": len(result_x.tables),
             "images": len(result_x.images),
-            "cells": len(getattr(result_x, "cells", []) or []),
             "quality_score": result_x.quality_score,
             "empty_pages": empty_pages,
         }
@@ -256,8 +254,6 @@ def _extract_uploaded_file(file_path: str, ext: str) -> tuple[dict, dict, str, i
             "page_diagnostics": result_x.page_diagnostics,
             "document_kind": "spreadsheet" if ext in SPREADSHEET_EXTS else "pdf",
         }
-        if ext in SPREADSHEET_EXTS:
-            quality["cell_provenance"] = (getattr(result_x, "cells", []) or [])[:500]
         return extraction, quality, extracted_text, page_count
     except Exception as e:
         return (

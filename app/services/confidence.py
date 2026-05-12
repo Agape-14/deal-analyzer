@@ -191,16 +191,6 @@ def _blend_confidence(critical_score, verification_score, verification_complete)
     return critical_score * 0.95 + verification_score * 0.05
 
 
-def _issue(severity, label, detail, action=None, count=None):
-    # type: (str, str, str, Optional[str], Optional[int]) -> Dict[str, Any]
-    item = {"severity": severity, "label": label, "detail": detail}
-    if action:
-        item["action"] = action
-    if count is not None:
-        item["count"] = count
-    return item
-
-
 def assess_data_quality(metrics, math_checks=None, require_verified=True):
     # type: (Optional[Dict[str, Any]], Optional[List[Dict[str, Any]]], bool) -> Dict[str, Any]
     metrics = metrics or {}
@@ -278,16 +268,12 @@ def assess_data_quality(metrics, math_checks=None, require_verified=True):
         })
 
     math_summary = summarize_math_checks(math_checks, metrics)
-    pipeline = metrics.get("_pipeline") if isinstance(metrics.get("_pipeline"), dict) else {}
-    pipeline_failed = str((pipeline or {}).get("status") or "").lower() == "failed"
     has_math_failures = math_summary["fail"] > 0
-    has_blockers = missing > 0 or conflicted > 0 or bad > 0 or has_math_failures or pipeline_failed
+    has_blockers = missing > 0 or conflicted > 0 or bad > 0 or has_math_failures
     has_review_items = unverified > 0 or review_only > 0
     verification_complete = bool(verified_at)
 
-    if pipeline_failed:
-        stage = "pipeline_failed"
-    elif conflicted:
+    if conflicted:
         stage = "conflicting"
     elif missing or bad:
         stage = "insufficient_source"
@@ -321,8 +307,6 @@ def assess_data_quality(metrics, math_checks=None, require_verified=True):
     # it visibly below the verified range without claiming the extraction is bad.
     if require_verified and not verification_complete:
         confidence_score = min(confidence_score, 65.0)
-    if pipeline_failed:
-        confidence_score = min(confidence_score, 55.0)
 
     # Active blockers must remain obvious, but do not let a noisy broad verifier
     # turn otherwise reviewable data into a single-digit score by itself.
@@ -332,104 +316,6 @@ def assess_data_quality(metrics, math_checks=None, require_verified=True):
         confidence_score = min(confidence_score, 60.0)
 
     confidence_score = max(0, min(100, round(confidence_score, 1)))
-    confidence_explanations = []
-    next_actions = []
-
-    if pipeline_failed:
-        error = str((pipeline or {}).get("error") or (pipeline or {}).get("last_error") or "The last pipeline run did not finish.")
-        confidence_explanations.append(
-            _issue(
-                "blocker",
-                "Pipeline did not finish",
-                error[:420],
-                "Fix the provider/API issue, then re-run the pipeline.",
-            )
-        )
-        next_actions.append("Re-run the pipeline after the provider/API issue is resolved.")
-    if missing:
-        labels = [c["label"] for c in critical if c.get("reason") == "missing"][:4]
-        confidence_explanations.append(
-            _issue(
-                "blocker",
-                "Missing critical source values",
-                ", ".join(labels) if labels else "One or more critical values were not found.",
-                "Upload the missing source document or enter the value manually.",
-                missing,
-            )
-        )
-        next_actions.append("Resolve missing critical fields in the review queue.")
-    if conflicted:
-        labels = [c["label"] for c in critical if c.get("reason") == "conflicting source values"][:4]
-        confidence_explanations.append(
-            _issue(
-                "blocker",
-                "Conflicting source values",
-                ", ".join(labels) if labels else "The same metric has competing source values.",
-                "Choose the trusted source or edit the value.",
-                conflicted,
-            )
-        )
-        next_actions.append("Resolve source conflicts before trusting the score.")
-    if bad:
-        labels = [c["label"] for c in critical if c.get("severity") == "blocker" and c.get("reason") in BAD_STATUSES][:4]
-        confidence_explanations.append(
-            _issue(
-                "blocker",
-                "Incorrect source values flagged",
-                ", ".join(labels) if labels else "A verifier marked critical values wrong or missing.",
-                "Correct the value or confirm the source.",
-                bad,
-            )
-        )
-    if has_math_failures:
-        confidence_explanations.append(
-            _issue(
-                "blocker",
-                "Math checks do not reconcile",
-                f"{math_summary['fail']} deterministic check{'s' if math_summary['fail'] != 1 else ''} still fail.",
-                "Review the input values used by the failed checks.",
-                math_summary["fail"],
-            )
-        )
-        next_actions.append("Fix or approve the failed math checks.")
-    if has_review_items:
-        confidence_explanations.append(
-            _issue(
-                "warning",
-                "Some values still need analyst review",
-                f"{unverified + review_only} source-backed value{'s' if (unverified + review_only) != 1 else ''} need confirmation.",
-                "Confirm the values in the review queue when they are acceptable.",
-                unverified + review_only,
-            )
-        )
-    if require_verified and not verification_complete:
-        confidence_explanations.append(
-            _issue(
-                "warning",
-                "Source verification has not completed",
-                "The score is provisional until extraction, verification, math checks, and scoring all finish.",
-                "Run the full pipeline.",
-            )
-        )
-        next_actions.append("Run the full pipeline.")
-    if math_summary["warn"]:
-        confidence_explanations.append(
-            _issue(
-                "info",
-                "Analyst cautions remain",
-                f"{math_summary['warn']} non-blocking check{'s' if math_summary['warn'] != 1 else ''} should be reviewed.",
-                "Review warnings before investment committee use.",
-                math_summary["warn"],
-            )
-        )
-    if not confidence_explanations:
-        confidence_explanations.append(
-            _issue(
-                "success",
-                "Ready to trust",
-                "Critical fields are verified and blocking math checks are clear.",
-            )
-        )
 
     return {
         "stage": stage,
@@ -453,6 +339,4 @@ def assess_data_quality(metrics, math_checks=None, require_verified=True):
             "math_failures": math_summary["fail"],
             "math_warnings": math_summary["warn"],
         },
-        "confidence_explanations": confidence_explanations,
-        "next_actions": next_actions,
     }

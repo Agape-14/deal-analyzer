@@ -54,7 +54,6 @@ class Deal(Base):
     documents = relationship("DealDocument", back_populates="deal", cascade="all, delete-orphan")
     chats = relationship("DealChat", back_populates="deal", cascade="all, delete-orphan")
     investments = relationship("Investment", back_populates="deal", cascade="all, delete-orphan")
-    pipeline_runs = relationship("PipelineRun", back_populates="deal", cascade="all, delete-orphan")
 
 
 class DealDocument(Base):
@@ -135,27 +134,6 @@ class Notification(Base):
     payload = Column(JSON, default=dict)
     read_at = Column(DateTime, nullable=True)
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), index=True)
-
-
-class PipelineRun(Base):
-    """Durable audit trail for extraction, verification, and scoring runs."""
-
-    __tablename__ = "pipeline_runs"
-
-    id = Column(Integer, primary_key=True, index=True)
-    deal_id = Column(Integer, ForeignKey("deals.id"), nullable=False, index=True)
-    status = Column(String(50), default="running", index=True)
-    current_step = Column(String(50), default="extract")
-    trigger = Column(String(50), default="manual")
-    message = Column(Text, default="")
-    error = Column(Text, default="")
-    steps = Column(JSON, default=list)
-    summary = Column(JSON, default=dict)
-    started_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), index=True)
-    updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), index=True)
-    finished_at = Column(DateTime, nullable=True, index=True)
-
-    deal = relationship("Deal", back_populates="pipeline_runs")
 
 
 class Distribution(Base):

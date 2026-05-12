@@ -27,14 +27,6 @@ from app.services.deal_scorer import score_deal
 from app.services.deal_validator import validate_deal_metrics
 from app.services.deal_verifier import apply_corrections, verify_deal_metrics
 from app.services.math_checker import run_math_checks
-from app.services.pipeline_runs import (
-    attach_run_status,
-    get_latest_pipeline_run,
-    get_pipeline_run,
-    run_to_dict,
-    start_pipeline_run,
-    update_pipeline_run,
-)
 
 router = APIRouter()
 log = logging.getLogger("kenyon.deal_pipeline")
@@ -68,16 +60,6 @@ def _set_pipeline_status(metrics: dict | None, status: dict) -> dict:
     return next_metrics
 
 
-def _active_run_id(metrics: dict | None) -> int | None:
-    pipeline = (metrics or {}).get("_pipeline")
-    if not isinstance(pipeline, dict):
-        return None
-    try:
-        return int(pipeline.get("run_id"))
-    except (TypeError, ValueError):
-        return None
-
-
 def _pipeline_error_message(error: Exception) -> str:
     text = str(error) or error.__class__.__name__
     lower = text.lower()
@@ -105,57 +87,11 @@ async def deal_quality(deal_id: int, db: AsyncSession = Depends(get_db)):
     if not deal:
         raise HTTPException(status_code=404, detail="Deal not found")
     metrics = deal.metrics or {}
-    latest_run = await get_latest_pipeline_run(db, deal.id)
     return {
         "summary": quality_summary(metrics),
         "stale_flags": staleness_flags(metrics, deal.documents or []),
         "pipeline": metrics.get("_pipeline"),
-        "latest_pipeline_run": run_to_dict(latest_run),
     }
-
-
-@router.get("/{deal_id}/validate")
-async def validate_deal(deal_id: int, db: AsyncSession = Depends(get_db)):
-    result = await db.execute(select(Deal).where(Deal.id == deal_id))
-    deal = result.scalar_one_or_none()
-    if not deal:
-        raise HTTPException(status_code=404, detail="Deal not found")
-    if not deal.metrics:
-        raise HTTPException(status_code=400, detail="No metrics extracted yet. Run extraction first.")
-
-    flags = validate_deal_metrics(deal.metrics, deal.property_type)
-    metrics = dict(deal.metrics or {})
-    metrics["validation_flags"] = flags
-    deal.metrics = metrics
-    await db.commit()
-    return {
-        "flags": flags,
-        "summary": {
-            "red": len([f for f in flags if f.get("severity") == "red"]),
-            "yellow": len([f for f in flags if f.get("severity") == "yellow"]),
-            "green": len([f for f in flags if f.get("severity") == "green"]),
-        },
-    }
-
-
-@router.get("/{deal_id}/math-check")
-async def math_check_deal(deal_id: int, db: AsyncSession = Depends(get_db)):
-    result = await db.execute(select(Deal).where(Deal.id == deal_id))
-    deal = result.scalar_one_or_none()
-    if not deal:
-        raise HTTPException(status_code=404, detail="Deal not found")
-    if not deal.metrics:
-        raise HTTPException(status_code=400, detail="No metrics extracted yet.")
-
-    checks = run_math_checks(deal.metrics)
-    summary = {
-        "pass": len([c for c in checks if c.get("status") == "pass"]),
-        "fail": len([c for c in checks if c.get("status") == "fail"]),
-        "warn": len([c for c in checks if c.get("status") == "warn"]),
-        "info": len([c for c in checks if c.get("status") == "info"]),
-        "total": len(checks),
-    }
-    return {"checks": checks, "summary": summary}
 
 
 @router.post("/{deal_id}/extract", dependencies=[Depends(limit("ai"))])
@@ -174,24 +110,16 @@ async def extract_deal_metrics(deal_id: int, db: AsyncSession = Depends(get_db))
     if not usable_docs and not usable_pdfs:
         raise HTTPException(status_code=400, detail="No extracted text or PDF files available")
 
-    run = await start_pipeline_run(
-        db,
-        deal,
-        trigger="manual",
-        step="extract",
-        message="Extraction started. Reading all uploaded documents.",
+    deal.metrics = _set_pipeline_status(
+        deal.metrics,
+        _pipeline_status("running", "extract", "Extraction started. Reading all uploaded documents."),
     )
     await db.commit()
-    asyncio.ensure_future(_run_extract_background(deal_id, run.id))
-    return {
-        "message": "Extraction started",
-        "status": "started",
-        "deal_id": deal_id,
-        "pipeline_run": run_to_dict(run),
-    }
+    asyncio.ensure_future(_run_extract_background(deal_id))
+    return {"message": "Extraction started", "status": "started", "deal_id": deal_id}
 
 
-async def _run_extract_background(deal_id: int, run_id: int | None = None):
+async def _run_extract_background(deal_id: int):
     async with async_session() as db:
         try:
             result = await db.execute(
@@ -268,30 +196,14 @@ async def _run_extract_background(deal_id: int, run_id: int | None = None):
             validation_flags.extend(staleness_flags(merged, deal.documents))
             merged["validation_flags"] = validation_flags
             merged = annotate_canonical_metrics(merged)
-            run = await update_pipeline_run(
-                db,
-                run_id,
-                status="extract_complete",
-                step="extract",
-                message="Extraction complete. Values are ready for source verification.",
-                summary={
-                    "changes": len(changes),
-                    "doc_count": len(deal.documents),
-                    "conflicts": len(conflicts),
-                    "red_flags": len([f for f in validation_flags if f.get("severity") == "red"]),
-                },
+            merged["_pipeline"] = _pipeline_status(
+                "extract_complete",
+                "extract",
+                "Extraction complete. Values are ready for source verification.",
+                started_at=(deal.metrics or {}).get("_pipeline", {}).get("started_at")
+                if isinstance((deal.metrics or {}).get("_pipeline"), dict)
+                else None,
             )
-            if run:
-                merged = attach_run_status(merged, run)
-            else:
-                merged["_pipeline"] = _pipeline_status(
-                    "extract_complete",
-                    "extract",
-                    "Extraction complete. Values are ready for source verification.",
-                    started_at=(deal.metrics or {}).get("_pipeline", {}).get("started_at")
-                    if isinstance((deal.metrics or {}).get("_pipeline"), dict)
-                    else None,
-                )
 
             deal.metrics = merged
             ml = merged.get("market_location", {}) or {}
@@ -324,7 +236,7 @@ async def _run_extract_background(deal_id: int, run_id: int | None = None):
             await db.commit()
         except Exception as e:
             log.exception("extract pipeline failed for deal %s", deal_id)
-            await _persist_pipeline_failure(db, deal_id, "extract", "Extraction failed.", e, run_id=run_id)
+            await _persist_pipeline_failure(db, deal_id, "extract", "Extraction failed.", e)
 
 
 @router.post("/{deal_id}/verify", dependencies=[Depends(limit("ai"))])
@@ -338,35 +250,16 @@ async def verify_deal_endpoint(deal_id: int, auto_correct: bool = True, db: Asyn
     if not deal.metrics:
         raise HTTPException(status_code=400, detail="No metrics extracted yet. Run extraction first.")
 
-    run = await get_pipeline_run(db, _active_run_id(deal.metrics))
-    if run and run.status not in {"failed", "complete", "cancelled"}:
-        run = await update_pipeline_run(
-            db,
-            run.id,
-            status="running",
-            step="verify",
-            message="Verification started. Checking extracted values against source documents.",
-        )
-        deal.metrics = attach_run_status(deal.metrics, run)
-    else:
-        run = await start_pipeline_run(
-            db,
-            deal,
-            trigger="manual_verify",
-            step="verify",
-            message="Verification started. Checking extracted values against source documents.",
-        )
+    deal.metrics = _set_pipeline_status(
+        deal.metrics,
+        _pipeline_status("running", "verify", "Verification started. Checking extracted values against source documents."),
+    )
     await db.commit()
-    asyncio.ensure_future(_run_verify_background(deal_id, auto_correct, run.id))
-    return {
-        "message": "Verification started",
-        "status": "started",
-        "deal_id": deal_id,
-        "pipeline_run": run_to_dict(run),
-    }
+    asyncio.ensure_future(_run_verify_background(deal_id, auto_correct))
+    return {"message": "Verification started", "status": "started", "deal_id": deal_id}
 
 
-async def _run_verify_background(deal_id: int, auto_correct: bool, run_id: int | None = None):
+async def _run_verify_background(deal_id: int, auto_correct: bool):
     async with async_session() as db:
         try:
             result = await db.execute(
@@ -393,29 +286,14 @@ async def _run_verify_background(deal_id: int, auto_correct: bool, run_id: int |
             flags.extend(staleness_flags(metrics, deal.documents or []))
             metrics["validation_flags"] = flags
             metrics = annotate_canonical_metrics(metrics)
-            run = await update_pipeline_run(
-                db,
-                run_id,
-                status="verify_complete",
-                step="verify",
-                message="Verification complete. Values are ready to be scored.",
-                summary={
-                    "corrections": len(changes),
-                    "math_failures": (metrics.get("_math_checks") or {}).get("summary", {}).get("fail", 0),
-                    "math_warnings": (metrics.get("_math_checks") or {}).get("summary", {}).get("warn", 0),
-                },
+            metrics["_pipeline"] = _pipeline_status(
+                "verify_complete",
+                "verify",
+                "Verification complete. Values are ready to be scored.",
+                started_at=(deal.metrics or {}).get("_pipeline", {}).get("started_at")
+                if isinstance((deal.metrics or {}).get("_pipeline"), dict)
+                else None,
             )
-            if run:
-                metrics = attach_run_status(metrics, run)
-            else:
-                metrics["_pipeline"] = _pipeline_status(
-                    "verify_complete",
-                    "verify",
-                    "Verification complete. Values are ready to be scored.",
-                    started_at=(deal.metrics or {}).get("_pipeline", {}).get("started_at")
-                    if isinstance((deal.metrics or {}).get("_pipeline"), dict)
-                    else None,
-                )
             deal.metrics = metrics
             deal.scores = score_deal(metrics, math_checks=math_results)
             await notif_svc.emit(
@@ -429,7 +307,7 @@ async def _run_verify_background(deal_id: int, auto_correct: bool, run_id: int |
             await db.commit()
         except Exception as e:
             log.exception("verify pipeline failed for deal %s", deal_id)
-            await _persist_pipeline_failure(db, deal_id, "verify", "Verification failed.", e, run_id=run_id)
+            await _persist_pipeline_failure(db, deal_id, "verify", "Verification failed.", e)
 
 
 @router.post("/{deal_id}/score", dependencies=[Depends(limit("write"))])
@@ -441,58 +319,28 @@ async def score_deal_endpoint(deal_id: int, db: AsyncSession = Depends(get_db)):
     if not deal.metrics:
         raise HTTPException(status_code=400, detail="No metrics extracted yet. Run extraction first.")
 
-    run = await get_pipeline_run(db, _active_run_id(deal.metrics))
-    if run and run.status not in {"failed", "complete", "cancelled"}:
-        run = await update_pipeline_run(
-            db,
-            run.id,
-            status="running",
-            step="score",
-            message="Scoring started. Recalculating validation, math checks, and score.",
-        )
-        deal.metrics = attach_run_status(deal.metrics, run)
-    else:
-        run = await start_pipeline_run(
-            db,
-            deal,
-            trigger="manual_score",
-            step="score",
-            message="Scoring started. Recalculating validation, math checks, and score.",
-        )
+    deal.metrics = _set_pipeline_status(
+        deal.metrics,
+        _pipeline_status("running", "score", "Scoring started. Recalculating validation, math checks, and score."),
+    )
     await db.commit()
     try:
         metrics = annotate_canonical_metrics(deal.metrics)
         scores = score_deal(metrics)
     except Exception as e:
-        await _persist_pipeline_failure(db, deal_id, "score", "Scoring failed.", e, run_id=run.id if run else None)
+        await _persist_pipeline_failure(db, deal_id, "score", "Scoring failed.", e)
         raise HTTPException(status_code=503, detail=_pipeline_error_message(e))
 
     deal.scores = scores
-    run = await update_pipeline_run(
-        db,
-        run.id if run else None,
-        status="complete",
-        step="score",
-        message="Pipeline complete. Extraction, verification, math checks, and scoring finished.",
-        summary={"score": scores.get("overall_score") if isinstance(scores, dict) else None},
-    )
-    deal.metrics = attach_run_status(metrics, run) if run else _set_pipeline_status(
+    deal.metrics = _set_pipeline_status(
         metrics,
         _pipeline_status("complete", "score", "Pipeline complete. Extraction, verification, math checks, and scoring finished."),
     )
     await db.commit()
-    return {"message": "Deal scored", "scores": scores, "pipeline_run": run_to_dict(run)}
+    return {"message": "Deal scored", "scores": scores}
 
 
-async def _persist_pipeline_failure(
-    db: AsyncSession,
-    deal_id: int,
-    step: str,
-    message: str,
-    error: Exception,
-    *,
-    run_id: int | None = None,
-) -> None:
+async def _persist_pipeline_failure(db: AsyncSession, deal_id: int, step: str, message: str, error: Exception) -> None:
     try:
         await db.rollback()
         result = await db.execute(select(Deal).where(Deal.id == deal_id))
@@ -500,15 +348,7 @@ async def _persist_pipeline_failure(
         if not deal:
             return
         error_message = _pipeline_error_message(error)
-        run = await update_pipeline_run(
-            db,
-            run_id or _active_run_id(deal.metrics),
-            status="failed",
-            step=step,
-            message=message,
-            error=error_message,
-        )
-        deal.metrics = attach_run_status(deal.metrics, run) if run else _set_pipeline_status(
+        deal.metrics = _set_pipeline_status(
             deal.metrics,
             _pipeline_status("failed", step, message, error=error_message),
         )

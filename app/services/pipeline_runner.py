@@ -29,7 +29,6 @@ from app.services.deal_validator import validate_deal_metrics
 from app.services.deal_verifier import apply_corrections, verify_deal_metrics
 from app.services.math_checker import run_math_checks
 from app.services import notifications as notif_svc
-from app.services.pipeline_runs import attach_run_status, start_pipeline_run, update_pipeline_run
 
 log = logging.getLogger("kenyon.pipeline")
 
@@ -40,10 +39,7 @@ RUNNING_TIMEOUT_SECONDS = 30 * 60
 
 def start_pipeline_runner() -> Optional[asyncio.Task]:
     """Start the background verifier unless disabled by env."""
-    # Keep Railway health checks independent from AI/provider calls. Manual
-    # pipeline runs still work; the scanner can be enabled once a real queue
-    # worker is available for long-running verification.
-    enabled = os.getenv("DEAL_PIPELINE_RUNNER", "0").strip().lower() in {"1", "true", "yes"}
+    enabled = os.getenv("DEAL_PIPELINE_RUNNER", "1").strip().lower() not in {"0", "false", "no"}
     if not enabled:
         log.info("deal pipeline runner disabled")
         return None
@@ -133,13 +129,6 @@ def _needs_backend_verification(metrics: dict[str, Any]) -> bool:
 
 
 async def _verify_score_and_commit(db, deal: Deal) -> None:
-    run = await start_pipeline_run(
-        db,
-        deal,
-        trigger="backend_runner",
-        step="verify",
-        message="Backend verification started after a document update.",
-    )
     metrics = dict(deal.metrics or {})
     pipeline = dict(metrics.get("_pipeline") or {})
     pipeline.update(
@@ -151,7 +140,7 @@ async def _verify_score_and_commit(db, deal: Deal) -> None:
         }
     )
     metrics["_pipeline"] = pipeline
-    deal.metrics = attach_run_status(metrics, run)
+    deal.metrics = metrics
     await db.commit()
 
     try:
@@ -182,20 +171,8 @@ async def _verify_score_and_commit(db, deal: Deal) -> None:
             }
         )
         metrics["_pipeline"] = pipeline
-        run = await update_pipeline_run(
-            db,
-            run.id,
-            status="complete",
-            step="score",
-            message="Backend pipeline complete. Verification, math checks, and scoring finished.",
-            summary={
-                "corrections": len(changes),
-                "math_failures": (metrics.get("_math_checks") or {}).get("summary", {}).get("fail", 0),
-                "math_warnings": (metrics.get("_math_checks") or {}).get("summary", {}).get("warn", 0),
-            },
-        )
 
-        deal.metrics = attach_run_status(metrics, run)
+        deal.metrics = metrics
         deal.scores = score_deal(metrics, math_checks=math_results, require_verified=True)
         await _emit_verification_notification(db, deal, verification, len(changes))
         await db.commit()
@@ -211,15 +188,7 @@ async def _verify_score_and_commit(db, deal: Deal) -> None:
             }
         )
         metrics["_pipeline"] = pipeline
-        run = await update_pipeline_run(
-            db,
-            run.id,
-            status="failed",
-            step="verify",
-            message="Backend verification failed.",
-            error=str(exc)[:500],
-        )
-        deal.metrics = attach_run_status(metrics, run)
+        deal.metrics = metrics
         await db.commit()
 
 
