@@ -40,7 +40,10 @@ RUNNING_TIMEOUT_SECONDS = 30 * 60
 
 def start_pipeline_runner() -> Optional[asyncio.Task]:
     """Start the background verifier unless disabled by env."""
-    enabled = os.getenv("DEAL_PIPELINE_RUNNER", "1").strip().lower() not in {"0", "false", "no"}
+    # Keep Railway health checks independent from AI/provider calls. Manual
+    # pipeline runs still work; the scanner can be enabled once a real queue
+    # worker is available for long-running verification.
+    enabled = os.getenv("DEAL_PIPELINE_RUNNER", "0").strip().lower() in {"1", "true", "yes"}
     if not enabled:
         log.info("deal pipeline runner disabled")
         return None
@@ -160,7 +163,7 @@ async def _verify_score_and_commit(db, deal: Deal) -> None:
         math_results = run_math_checks(metrics)
         metrics["_math_checks"] = {
             "checked_at": now_iso(),
-            "summary": summarize_math_checks(math_results, metrics),
+            "summary": summarize_math_checks(math_results),
             "results": math_results,
         }
 
