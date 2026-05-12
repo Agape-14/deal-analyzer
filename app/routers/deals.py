@@ -1,9 +1,8 @@
 import os
-import uuid
 import io
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, Response
+from fastapi import APIRouter, Depends, HTTPException, Response
 from fastapi.responses import StreamingResponse
 from app.rate_limit import limit
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -13,47 +12,19 @@ from pydantic import BaseModel, Field, field_validator
 from typing import Optional
 from app.database import get_db
 from app.models import Deal, DealDocument
-from app.services.pdf_extractor import extract_pdf
-from app.services.deal_extractor import extract_metrics_from_docs
-from app.services.deal_scorer import score_deal
 from app.services.deal_validator import validate_deal_metrics
-from app.services.deal_verifier import verify_deal_metrics, apply_corrections
 from app.services.math_checker import run_math_checks
 from app.services.market_data import fetch_market_data
 from app.services.cashflow_projector import project_cash_flows
 from app.services.waterfall_calculator import waterfall_from_deal
-from app.services.data_integrity import (
-    smart_merge,
-    detect_conflicts,
-    auto_resolve_conflicts,
-    conflicts_to_flags,
-    staleness_flags,
-    quality_summary,
-    stamp_verification,
-    set_lock,
-    mark_manual_edit,
-    now_iso,
-)
-from app.services.location_intelligence import (
-    build_location_bundle,
-    geocode as geocode_address,
-)
-from app.services import notifications as notif_svc
+from app.services.canonical_metrics import canonical_return_summary
+from app.services.data_integrity import quality_summary
+from app.services.location_intelligence import build_location_bundle
 
 router = APIRouter()
 
-BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-# UPLOADS_DIR override lets Railway mount a Volume at /data/uploads so files
-# survive redeploys. Falls back to DB_DIR/uploads (same volume as SQLite when
-# DB_DIR is set), else repo-root/uploads for local dev.
-UPLOAD_DIR = os.environ.get(
-    "UPLOADS_DIR",
-    os.path.join(os.environ.get("DB_DIR", BASE_DIR), "uploads"),
-)
-os.makedirs(UPLOAD_DIR, exist_ok=True)
 
-
-# Allowed status values for a Deal — closes the "any string accepted" hole.
+# Allowed status values for a Deal - closes the "any string accepted" hole.
 # Keeps the legacy "reviewing/interested/passed/committed/closed" taxonomy.
 DEAL_STATUSES = {"reviewing", "interested", "passed", "committed", "closed"}
 PROPERTY_TYPES = {
@@ -122,7 +93,7 @@ class CompareRequest(BaseModel):
 def _deal_to_dict(deal: Deal, developer_name: str = None) -> dict:
     metrics = deal.metrics or {}
     scores = deal.scores or {}
-    target_returns = metrics.get("target_returns", {}) or {}
+    return_summary = canonical_return_summary(metrics)
     deal_structure = metrics.get("deal_structure", {}) or {}
 
     return {
@@ -138,8 +109,8 @@ def _deal_to_dict(deal: Deal, developer_name: str = None) -> dict:
         "metrics": metrics,
         "scores": scores,
         "overall_score": scores.get("overall", None),
-        "target_irr": target_returns.get("target_irr"),
-        "target_equity_multiple": target_returns.get("target_equity_multiple"),
+        "target_irr": return_summary.get("target_irr"),
+        "target_equity_multiple": return_summary.get("target_equity_multiple"),
         "minimum_investment": deal_structure.get("minimum_investment"),
         "notes": deal.notes,
         "lat": deal.lat,
@@ -154,7 +125,7 @@ async def list_deals(
     db: AsyncSession = Depends(get_db),
 ):
     """List deals. Trashed (soft-deleted) rows are excluded unless
-    `?trash=true` is passed — handy for a future 'Trash' view."""
+    `?trash=true` is passed - handy for a future 'Trash' view."""
     q = select(Deal).options(selectinload(Deal.developer)).order_by(Deal.created_at.desc())
     if trash:
         q = q.where(Deal.deleted_at.is_not(None))
@@ -184,7 +155,7 @@ async def pipeline_summary_endpoint(
 ):
     """Dashboard widgets: total deals, velocity (6mo), win rate (12mo),
     aging deals, capital deployed, average analyst score. Derived from
-    the live Deal table on every call — no materialized view yet.
+    the live Deal table on every call - no materialized view yet.
 
     Cached for 30s. The numbers change only when a deal is created /
     scored / status-changed, which is infrequent on an operator tool.
@@ -279,7 +250,7 @@ async def restore_deal(deal_id: int, db: AsyncSession = Depends(get_db)):
 @router.delete("/{deal_id}/purge")
 async def purge_deal(deal_id: int, db: AsyncSession = Depends(get_db)):
     """Hard-delete a soft-deleted deal. Only allowed once the row is
-    already in the trash — prevents accidental irreversible removal."""
+    already in the trash - prevents accidental irreversible removal."""
     result = await db.execute(select(Deal).where(Deal.id == deal_id))
     deal = result.scalar_one_or_none()
     if not deal:
@@ -325,179 +296,6 @@ async def list_documents(deal_id: int, db: AsyncSession = Depends(get_db)):
     return out
 
 
-# Size + type guards for uploaded documents. Anything over 50 MB is almost
-# certainly not a single OM — reject before we spend tokens on it. Any file
-# that's not a PDF won't parse with our pipeline; fail fast with a clear
-# message rather than saving garbage to disk.
-MAX_UPLOAD_BYTES = 50 * 1024 * 1024          # 50 MB
-ALLOWED_MIMETYPES = {"application/pdf", "application/x-pdf"}
-ALLOWED_EXTS = {".pdf"}
-
-
-@router.post("/{deal_id}/documents/upload", dependencies=[Depends(limit("upload"))])
-async def upload_document(
-    deal_id: int,
-    file: UploadFile = File(...),
-    doc_type: str = Form("other"),
-    db: AsyncSession = Depends(get_db),
-):
-    # Verify deal exists
-    result = await db.execute(select(Deal).where(Deal.id == deal_id))
-    deal = result.scalar_one_or_none()
-    if not deal:
-        raise HTTPException(status_code=404, detail="Deal not found")
-
-    # MIME / extension guard — we only parse PDF today.
-    ext = os.path.splitext(file.filename or "")[1].lower()
-    ctype = (file.content_type or "").lower()
-    if ext not in ALLOWED_EXTS and ctype not in ALLOWED_MIMETYPES:
-        raise HTTPException(
-            status_code=415,
-            detail=f"Only PDF uploads are supported (got {ctype or ext or 'unknown type'}).",
-        )
-
-    # Size guard — read in chunks so a 2GB PDF doesn't balloon memory.
-    # FastAPI's UploadFile exposes a SpooledTemporaryFile; we can stream
-    # it to disk while counting bytes.
-    unique_name = f"{uuid.uuid4().hex}{ext or '.pdf'}"
-    file_path = os.path.join(UPLOAD_DIR, unique_name)
-    total = 0
-    with open(file_path, "wb") as f:
-        while True:
-            chunk = await file.read(1 * 1024 * 1024)  # 1 MB chunks
-            if not chunk:
-                break
-            total += len(chunk)
-            if total > MAX_UPLOAD_BYTES:
-                f.close()
-                try:
-                    os.remove(file_path)
-                except OSError:
-                    pass
-                raise HTTPException(
-                    status_code=413,
-                    detail=f"File exceeds {MAX_UPLOAD_BYTES // (1024 * 1024)}MB upload limit.",
-                )
-            f.write(chunk)
-
-    # Extract text (+ OCR fallback + tables + images)
-    extraction: dict = {}
-    quality: dict = {}
-    try:
-        result_x = extract_pdf(file_path)
-        extracted_text = result_x.text
-        page_count = result_x.page_count
-        empty_pages = [d["page"] for d in result_x.page_diagnostics if d["source"] == "empty"]
-        extraction = {
-            "ocr_pages": result_x.ocr_page_count,
-            "tables": len(result_x.tables),
-            "images": len(result_x.images),
-            "quality_score": result_x.quality_score,
-            "empty_pages": empty_pages,
-        }
-        quality = {
-            "quality_score": result_x.quality_score,
-            "ocr_pages": result_x.ocr_page_count,
-            "empty_pages": empty_pages,
-            "page_diagnostics": result_x.page_diagnostics,
-        }
-    except Exception as e:
-        extracted_text = f"Error extracting text: {str(e)}"
-        page_count = 0
-        extraction = {"ocr_pages": 0, "tables": 0, "images": 0, "error": str(e)}
-        quality = {"error": str(e)}
-
-    doc = DealDocument(
-        deal_id=deal_id,
-        filename=file.filename or unique_name,
-        file_path=file_path,
-        doc_type=doc_type,
-        extracted_text=extracted_text,
-        page_count=page_count,
-        extraction_quality=quality,
-    )
-    db.add(doc)
-    await db.commit()
-    await db.refresh(doc)
-
-    # Notification: upload complete (low-noise, but users expect feedback
-    # for long uploads).
-    q_score = quality.get("quality_score") if isinstance(quality, dict) else None
-    body_bits = [f"{page_count} page{'s' if page_count != 1 else ''}"]
-    if q_score is not None:
-        body_bits.append(f"extraction quality {q_score}%")
-    empty = (quality or {}).get("empty_pages") or []
-    kind = "warning" if empty else "info"
-    if empty:
-        body_bits.append(f"{len(empty)} page{'s' if len(empty) != 1 else ''} failed OCR")
-    await notif_svc.emit(
-        db,
-        kind=kind,
-        title=f"Uploaded {doc.filename}",
-        body=" · ".join(body_bits),
-        href=f"/deals/{deal_id}?tab=documents",
-        payload={"deal_id": deal_id, "doc_id": doc.id},
-    )
-    await db.commit()
-
-    return {
-        "id": doc.id,
-        "filename": doc.filename,
-        "doc_type": doc.doc_type,
-        "page_count": page_count,
-        "text_length": len(extracted_text),
-        "extraction": extraction,
-        "message": "Document uploaded and text extracted",
-    }
-
-
-@router.post("/documents/{doc_id}/reprocess")
-async def reprocess_document(doc_id: int, db: AsyncSession = Depends(get_db)):
-    """Re-run text extraction on an existing document.
-
-    Useful when the initial extraction produced poor results (e.g. scanned PDF
-    that needed OCR but OCR wasn't installed yet) or when the extractor has
-    been improved."""
-    result = await db.execute(select(DealDocument).where(DealDocument.id == doc_id))
-    doc = result.scalar_one_or_none()
-    if not doc:
-        raise HTTPException(status_code=404, detail="Document not found")
-    if not doc.file_path or not os.path.exists(doc.file_path):
-        raise HTTPException(
-            status_code=410,
-            detail="Original file is no longer available on disk",
-        )
-
-    try:
-        r = extract_pdf(doc.file_path)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Reprocess failed: {e}")
-
-    old_len = len(doc.extracted_text or "")
-    doc.extracted_text = r.text
-    doc.page_count = r.page_count
-    doc.extraction_quality = {
-        "quality_score": r.quality_score,
-        "ocr_pages": r.ocr_page_count,
-        "empty_pages": [d["page"] for d in r.page_diagnostics if d["source"] == "empty"],
-        "page_diagnostics": r.page_diagnostics,
-    }
-    await db.commit()
-
-    return {
-        "id": doc.id,
-        "filename": doc.filename,
-        "page_count": r.page_count,
-        "ocr_pages": r.ocr_page_count,
-        "tables": len(r.tables),
-        "images": len(r.images),
-        "text_length_before": old_len,
-        "text_length_after": len(r.text),
-        "delta": len(r.text) - old_len,
-        "message": "Document reprocessed",
-    }
-
-
 @router.delete("/documents/{doc_id}")
 async def delete_document(doc_id: int, db: AsyncSession = Depends(get_db)):
     result = await db.execute(select(DealDocument).where(DealDocument.id == doc_id))
@@ -523,230 +321,7 @@ async def get_document_text(doc_id: int, db: AsyncSession = Depends(get_db)):
     return {"id": doc.id, "filename": doc.filename, "text": doc.extracted_text}
 
 
-@router.get("/documents/{doc_id}/file")
-async def get_document_file(doc_id: int, db: AsyncSession = Depends(get_db)):
-    """Stream the original uploaded PDF so the frontend can render it
-    inline via the browser's native viewer. Served with the original
-    filename as a Content-Disposition suggestion for saves."""
-    from fastapi.responses import FileResponse
-
-    result = await db.execute(select(DealDocument).where(DealDocument.id == doc_id))
-    doc = result.scalar_one_or_none()
-    if not doc:
-        raise HTTPException(status_code=404, detail="Document not found")
-    if not doc.file_path or not os.path.exists(doc.file_path):
-        raise HTTPException(
-            status_code=410,
-            detail="Original file is no longer available on disk.",
-        )
-    # Path-traversal guard: even though file_path is only writable by our
-    # own upload handler (which uses a uuid filename under UPLOAD_DIR), a
-    # compromised DB value must not let us serve /etc/passwd or similar.
-    real = os.path.realpath(doc.file_path)
-    upload_root = os.path.realpath(UPLOAD_DIR)
-    if not real.startswith(upload_root + os.sep):
-        raise HTTPException(status_code=404, detail="Document not found")
-    return FileResponse(
-        real,
-        media_type="application/pdf",
-        # `inline` (not attachment) so the browser renders it; safer for
-        # our same-origin UI than forcing a download.
-        headers={
-            "Content-Disposition": f'inline; filename="{doc.filename or "document.pdf"}"',
-            "Cache-Control": "private, max-age=60",
-        },
-    )
-
-
-# ===== AI Features =====
-
-@router.post("/{deal_id}/extract", dependencies=[Depends(limit("ai"))])
-async def extract_deal_metrics(deal_id: int, db: AsyncSession = Depends(get_db)):
-    """AI-extract metrics from all uploaded documents — runs as a background task.
-
-    Returns 202 immediately and runs the (slow) extraction in the
-    background. This avoids the Railway edge-proxy timeout killing the
-    request mid-extraction (which was causing ECONNRESET errors).
-    The UI polls for completion via the quality endpoint / page refresh.
-    """
-    result = await db.execute(
-        select(Deal).options(selectinload(Deal.documents)).where(Deal.id == deal_id)
-    )
-    deal = result.scalar_one_or_none()
-    if not deal:
-        raise HTTPException(status_code=404, detail="Deal not found")
-
-    if not deal.documents:
-        raise HTTPException(status_code=400, detail="No documents uploaded yet")
-
-    usable_docs = [d for d in deal.documents if (d.extracted_text or "")]
-    usable_pdfs = [
-        d for d in deal.documents if d.file_path and d.file_path.endswith(".pdf")
-    ]
-    if not usable_docs and not usable_pdfs:
-        raise HTTPException(
-            status_code=400, detail="No extracted text or PDF files available"
-        )
-
-    import asyncio
-    asyncio.ensure_future(_run_extract_background(deal_id))
-
-    return {
-        "message": "Extraction started — this runs in the background (~2-3 min). "
-                   "Refresh the page to see updated metrics.",
-        "status": "started",
-        "deal_id": deal_id,
-    }
-
-
-async def _run_extract_background(deal_id: int):
-    """Background extraction task. Runs independently of the HTTP request lifecycle."""
-    import logging
-    logger = logging.getLogger("kenyon.extract_bg")
-
-    from app.database import async_session
-    async with async_session() as db:
-        try:
-            result = await db.execute(
-                select(Deal).options(selectinload(Deal.documents)).where(Deal.id == deal_id)
-            )
-            deal = result.scalar_one_or_none()
-            if not deal or not deal.documents:
-                logger.warning("extract_bg: deal %s not found or no documents", deal_id)
-                return
-
-            usable_docs = [d for d in deal.documents if (d.extracted_text or "")]
-            usable_pdfs = [
-                d for d in deal.documents if d.file_path and d.file_path.endswith(".pdf")
-            ]
-
-            per_doc_results: list[tuple[int, str, dict]] = []
-            if len(deal.documents) > 1:
-                for doc in deal.documents:
-                    text = doc.extracted_text or ""
-                    path = (
-                        doc.file_path
-                        if doc.file_path and doc.file_path.endswith(".pdf")
-                        else None
-                    )
-                    if not text and not path:
-                        continue
-                    one_doc_text = (
-                        [{"filename": doc.filename, "doc_type": doc.doc_type, "text": text}]
-                        if text else []
-                    )
-                    one_doc_path = [path] if path else []
-                    try:
-                        mx = await extract_metrics_from_docs(one_doc_text, doc_paths=one_doc_path)
-                        per_doc_results.append((doc.id, doc.filename, mx))
-                    except Exception:
-                        pass
-
-            doc_texts = [
-                {"filename": d.filename, "doc_type": d.doc_type, "text": d.extracted_text or ""}
-                for d in usable_docs
-            ]
-            doc_paths = [d.file_path for d in usable_pdfs]
-            incoming_metrics = await extract_metrics_from_docs(doc_texts, doc_paths=doc_paths)
-
-            primary_doc = usable_docs[0] if len(usable_docs) == 1 else None
-            merged, changes = smart_merge(
-                deal.metrics,
-                incoming_metrics,
-                source_doc_id=primary_doc.id if primary_doc else None,
-                source_doc_name=primary_doc.filename if primary_doc else "multiple documents",
-            )
-
-            conflicts = detect_conflicts(per_doc_results) if len(per_doc_results) >= 2 else {}
-            n_auto_resolved = 0
-            if conflicts:
-                doc_upload_dates = {d.id: d.upload_date for d in deal.documents}
-                n_auto_resolved = auto_resolve_conflicts(conflicts, merged, doc_upload_dates)
-                prov = dict(merged.get("_provenance") or {})
-                for path, entries in conflicts.items():
-                    if any(e.get("auto_resolved") for e in entries):
-                        continue
-                    existing_prov = prov.get(path, {})
-                    existing_prov["conflict"] = entries
-                    prov[path] = existing_prov
-                merged["_provenance"] = prov
-
-            history = list(merged.get("_extraction_history") or [])
-            history.append({
-                "at": now_iso(),
-                "changes": changes[:50],
-                "doc_count": len(deal.documents),
-                "conflicts": list(conflicts.keys()),
-            })
-            merged["_extraction_history"] = history[-20:]
-
-            validation_flags = validate_deal_metrics(merged, deal.property_type)
-            validation_flags.extend(conflicts_to_flags(conflicts))
-            validation_flags.extend(staleness_flags(merged, deal.documents))
-            merged["validation_flags"] = validation_flags
-
-            deal.metrics = merged
-
-            ml = merged.get("market_location", {}) or {}
-            if not deal.city and ml.get("city"):
-                deal.city = ml["city"]
-            if not deal.state and ml.get("state"):
-                deal.state = ml["state"]
-
-            try:
-                deal.scores = score_deal(merged)
-            except Exception:
-                pass
-
-            reds = [f for f in validation_flags if f.get("severity") == "red"]
-            n_unresolved_conflicts = len(conflicts) - n_auto_resolved
-            body_parts = [f"{len(changes)} field{'s' if len(changes) != 1 else ''} updated"]
-            if n_auto_resolved:
-                body_parts.append(f"{n_auto_resolved} conflict{'s' if n_auto_resolved != 1 else ''} auto-resolved (newer doc wins)")
-            if n_unresolved_conflicts:
-                body_parts.append(f"{n_unresolved_conflicts} unresolved conflict{'s' if n_unresolved_conflicts != 1 else ''}")
-            if reds:
-                body_parts.append(f"{len(reds)} red flag{'s' if len(reds) != 1 else ''}")
-            await notif_svc.emit(
-                db,
-                kind="error" if n_unresolved_conflicts or reds else "success",
-                title=f"Metrics extracted for {deal.project_name}",
-                body=" · ".join(body_parts),
-                href=f"/deals/{deal.id}?tab=overview",
-                payload={
-                    "deal_id": deal.id,
-                    "changes": len(changes),
-                    "conflicts": n_unresolved_conflicts,
-                    "auto_resolved": n_auto_resolved,
-                    "red_flags": len(reds),
-                },
-            )
-
-            await db.commit()
-            logger.info(
-                "extract_bg: deal %s complete — %d changes, %d conflicts (%d auto-resolved)",
-                deal_id, len(changes), len(conflicts), n_auto_resolved,
-            )
-        except Exception:
-            logger.exception("extract_bg: deal %s failed", deal_id)
-
-
-@router.post("/{deal_id}/score", dependencies=[Depends(limit("write"))])
-async def score_deal_endpoint(deal_id: int, db: AsyncSession = Depends(get_db)):
-    """Score the deal based on extracted metrics."""
-    result = await db.execute(select(Deal).where(Deal.id == deal_id))
-    deal = result.scalar_one_or_none()
-    if not deal:
-        raise HTTPException(status_code=404, detail="Deal not found")
-
-    if not deal.metrics:
-        raise HTTPException(status_code=400, detail="No metrics extracted yet. Run extraction first.")
-
-    scores = score_deal(deal.metrics)
-    deal.scores = scores
-    await db.commit()
-    return {"message": "Deal scored", "scores": scores}
-
+# ===== Validation and math =====
 
 @router.get("/{deal_id}/validate")
 async def validate_deal(deal_id: int, db: AsyncSession = Depends(get_db)):
@@ -774,123 +349,9 @@ async def validate_deal(deal_id: int, db: AsyncSession = Depends(get_db)):
     }}
 
 
-@router.post("/{deal_id}/verify", dependencies=[Depends(limit("ai"))])
-async def verify_deal_endpoint(deal_id: int, auto_correct: bool = True, db: AsyncSession = Depends(get_db)):
-    """Second-pass AI verification — runs as a background task.
-
-    Returns 202 immediately and runs the (slow) verification in the
-    background. The UI polls for completion via the quality endpoint.
-    This avoids the Railway edge-proxy 60s timeout killing the request
-    mid-verify and losing 4 of 5 section chunks.
-    """
-    result = await db.execute(
-        select(Deal).options(selectinload(Deal.documents)).where(Deal.id == deal_id)
-    )
-    deal = result.scalar_one_or_none()
-    if not deal:
-        raise HTTPException(status_code=404, detail="Deal not found")
-
-    if not deal.metrics:
-        raise HTTPException(status_code=400, detail="No metrics extracted yet. Run extraction first.")
-
-    # Launch verification as a fire-and-forget background coroutine.
-    # FastAPI's BackgroundTasks run AFTER the response is sent, which
-    # is perfect here — the client gets 202 immediately, and the 5
-    # section-chunked verify calls have all the time they need
-    # without worrying about proxy timeouts.
-    import asyncio
-    asyncio.ensure_future(_run_verify_background(deal_id, auto_correct))
-
-    return {
-        "message": "Verification started — this runs in the background (~2-5 min). "
-                   "Refresh the page to see updated verification status.",
-        "status": "started",
-        "deal_id": deal_id,
-    }
-
-
-async def _run_verify_background(deal_id: int, auto_correct: bool):
-    """Background verify task. Runs independently of the HTTP request lifecycle.
-
-    Uses its own DB session (can't share the request-scoped one) and
-    commits results directly. Any exception is logged to operation_log
-    + stderr but never propagates to a client (there's no client).
-    """
-    import logging
-    logger = logging.getLogger("kenyon.verify_bg")
-
-    from app.database import async_session
-    async with async_session() as db:
-        try:
-            result = await db.execute(
-                select(Deal).options(selectinload(Deal.documents)).where(Deal.id == deal_id)
-            )
-            deal = result.scalar_one_or_none()
-            if not deal or not deal.metrics:
-                logger.warning("verify_bg: deal %s not found or no metrics", deal_id)
-                return
-
-            verification = await verify_deal_metrics(deal, db)
-
-            metrics = deal.metrics.copy() if deal.metrics else {}
-            changes: list[str] = []
-            if auto_correct:
-                metrics, changes = apply_corrections(metrics, verification)
-
-            metrics = stamp_verification(metrics, verification)
-
-            flags = validate_deal_metrics(metrics, deal.property_type)
-            flags.extend(staleness_flags(metrics, deal.documents))
-            metrics["validation_flags"] = flags
-
-            deal.metrics = metrics
-            await db.commit()
-
-            # Re-run math checks
-            math_results = run_math_checks(deal.metrics or {})
-
-            # Notification
-            vsummary = (verification or {}).get("summary") or {}
-            confidence = vsummary.get("confidence_score")
-            totals = {}
-            for row in (verification or {}).get("audit_results", []) or []:
-                st = str(row.get("status") or "").lower()
-                totals[st] = totals.get(st, 0) + 1
-            wrong = totals.get("wrong", 0)
-            missing = totals.get("missing", 0)
-            body_parts = []
-            if confidence is not None:
-                body_parts.append(f"{confidence}% confidence")
-            if wrong:
-                body_parts.append(f"{wrong} corrected")
-            if missing:
-                body_parts.append(f"{missing} missing")
-            if changes:
-                body_parts.append(f"{len(changes)} auto-applied")
-            await notif_svc.emit(
-                db,
-                kind="warning" if wrong or missing else "success",
-                title=f"Verification complete — {deal.project_name}",
-                body=" · ".join(body_parts) if body_parts else "All extracted values match the source docs.",
-                href=f"/deals/{deal.id}?tab=overview",
-                payload={"deal_id": deal.id, **totals, "confidence": confidence},
-            )
-            await db.commit()
-
-            logger.info(
-                "verify_bg: deal %s complete — %d confirmed, %d wrong, %d unverifiable",
-                deal_id, totals.get("confirmed", 0), wrong, totals.get("unverifiable", 0),
-            )
-        except Exception:
-            logger.exception("verify_bg: deal %s failed", deal_id)
-            # The per-chunk operation_log entries already captured the
-            # error. Nothing else to do — the user will see the stale
-            # verified_at timestamp and know to retry.
-
-
 @router.get("/{deal_id}/math-check")
 async def math_check_deal(deal_id: int, db: AsyncSession = Depends(get_db)):
-    """Run deterministic math verification — zero AI, pure arithmetic.
+    """Run deterministic math verification - zero AI, pure arithmetic.
     
     Cross-checks all calculations, internal consistency, and benchmark ranges.
     """
@@ -915,114 +376,6 @@ async def math_check_deal(deal_id: int, db: AsyncSession = Depends(get_db)):
     return {"checks": checks, "summary": summary}
 
 
-# ===== Data Integrity =====
-
-@router.get("/{deal_id}/quality")
-async def deal_quality(deal_id: int, db: AsyncSession = Depends(get_db)):
-    """Data-quality summary: counts of verified / extracted / calculated /
-    conflicting / locked fields, plus staleness timestamps.
-
-    This is the single endpoint the dashboard calls to render the
-    data-integrity panel.
-    """
-    result = await db.execute(select(Deal).options(selectinload(Deal.documents)).where(Deal.id == deal_id))
-    deal = result.scalar_one_or_none()
-    if not deal:
-        raise HTTPException(status_code=404, detail="Deal not found")
-    metrics = deal.metrics or {}
-    summary = quality_summary(metrics)
-    # Add live staleness flags so the UI can show a "data may be outdated" banner
-    stale = staleness_flags(metrics, deal.documents or [])
-    return {"summary": summary, "stale_flags": stale}
-
-
-class FieldEditIn(BaseModel):
-    path: str          # dotted, e.g. "deal_structure.ltv"
-    value: Optional[float | str | int | bool] = None
-    lock: Optional[bool] = True
-
-
-@router.post("/{deal_id}/fields/edit")
-async def edit_field(deal_id: int, data: FieldEditIn, db: AsyncSession = Depends(get_db)):
-    """Apply a manual edit to a single metric field and lock it against
-    future automatic overwrites.
-
-    Locking is the mechanism that prevents a subsequent `/extract` call
-    from clobbering a user correction. Sending `lock=false` just records
-    the edit without protecting it.
-    """
-    result = await db.execute(select(Deal).where(Deal.id == deal_id))
-    deal = result.scalar_one_or_none()
-    if not deal:
-        raise HTTPException(status_code=404, detail="Deal not found")
-
-    metrics = deal.metrics or {}
-    metrics = mark_manual_edit(metrics, data.path, data.value, lock=bool(data.lock))
-    # Re-validate + re-score so downstream views stay consistent
-    flags = validate_deal_metrics(metrics, deal.property_type)
-    metrics["validation_flags"] = flags
-    deal.metrics = metrics
-    await db.commit()
-    return {"message": "Field updated", "path": data.path, "locked": bool(data.lock)}
-
-
-class FieldLockIn(BaseModel):
-    path: str
-    locked: bool
-
-
-@router.post("/{deal_id}/fields/lock")
-async def lock_field(deal_id: int, data: FieldLockIn, db: AsyncSession = Depends(get_db)):
-    """Toggle the lock on a field without changing its value."""
-    result = await db.execute(select(Deal).where(Deal.id == deal_id))
-    deal = result.scalar_one_or_none()
-    if not deal:
-        raise HTTPException(status_code=404, detail="Deal not found")
-
-    metrics = deal.metrics or {}
-    metrics = set_lock(metrics, data.path, bool(data.locked))
-    deal.metrics = metrics
-    await db.commit()
-    return {"message": "Lock updated", "path": data.path, "locked": bool(data.locked)}
-
-
-class ConflictResolveIn(BaseModel):
-    path: str           # dotted
-    value: Optional[float | str | int | bool] = None  # the chosen value
-
-
-@router.post("/{deal_id}/fields/resolve-conflict")
-async def resolve_conflict(deal_id: int, data: ConflictResolveIn, db: AsyncSession = Depends(get_db)):
-    """Pick one value from a conflict set. Clears the conflict flag on
-    the field, locks it, and removes the corresponding `Data conflict`
-    validation flag.
-    """
-    result = await db.execute(select(Deal).where(Deal.id == deal_id))
-    deal = result.scalar_one_or_none()
-    if not deal:
-        raise HTTPException(status_code=404, detail="Deal not found")
-
-    metrics = deal.metrics.copy() if deal.metrics else {}
-    metrics = mark_manual_edit(metrics, data.path, data.value, lock=True)
-
-    # Clear the conflict on the provenance entry
-    prov = dict(metrics.get("_provenance") or {})
-    if data.path in prov and isinstance(prov[data.path], dict):
-        prov[data.path].pop("conflict", None)
-        metrics["_provenance"] = prov
-
-    # Remove the matching "Data conflict" flag
-    flags = [
-        f for f in (metrics.get("validation_flags") or [])
-        if not (f.get("category") == "Data conflict" and data.path in (f.get("message") or ""))
-    ]
-    metrics["validation_flags"] = flags
-
-    deal.metrics = metrics
-    await db.commit()
-    return {"message": "Conflict resolved", "path": data.path}
-
-
 # ===== Location intelligence =====
 
 @router.get("/{deal_id}/location")
@@ -1035,13 +388,13 @@ async def get_deal_location(
     """Return cached or freshly-fetched location data for a deal.
 
     Payload shape (all sources free / unauthenticated by default):
-      - lat, lng             — resolved via Nominatim or user-placed
-      - display_name         — free-form, good enough for a map attribution
-      - radius_m             — currently fetched radius
-      - categories           — {apartments|restaurants|grocery|transit|schools|
-                                healthcare|parks|employers: [POI…]}
-      - fmr                  — HUD Fair Market Rent (if HUD_API_TOKEN set)
-      - fetched_at           — unix timestamp, used for staleness UI
+      - lat, lng             - resolved via Nominatim or user-placed
+      - display_name         - free-form, good enough for a map attribution
+      - radius_m             - currently fetched radius
+      - categories           - {apartments|restaurants|grocery|transit|schools|
+                                healthcare|parks|employers: [POI...]}
+      - fmr                  - HUD Fair Market Rent (if HUD_API_TOKEN set)
+      - fetched_at           - unix timestamp, used for staleness UI
 
     Results are cached in `deal.location_data` for 7 days unless
     `refresh=true` is passed.
@@ -1088,7 +441,7 @@ async def set_manual_location(
         raise HTTPException(status_code=404, detail="Deal not found")
     deal.lat = float(data.lat)
     deal.lng = float(data.lng)
-    # Invalidate any cached categories — they were centered on the old point.
+    # Invalidate any cached categories - they were centered on the old point.
     ld = deal.location_data or {}
     if isinstance(ld, dict):
         ld.pop("categories", None)
@@ -1253,9 +606,9 @@ async def export_comparison(data: CompareRequest, db: AsyncSession = Depends(get
             ("Asset Mgmt Fee", lambda d: ((d.metrics or {}).get("deal_structure") or {}).get("fees_asset_mgmt")),
         ]),
         ("TARGET RETURNS", [
-            ("Target IRR", lambda d: ((d.metrics or {}).get("target_returns") or {}).get("target_irr")),
-            ("Equity Multiple", lambda d: ((d.metrics or {}).get("target_returns") or {}).get("target_equity_multiple")),
-            ("Cash-on-Cash", lambda d: ((d.metrics or {}).get("target_returns") or {}).get("target_cash_on_cash")),
+            ("Target IRR", lambda d: canonical_return_summary(d.metrics or {}).get("target_irr")),
+            ("Equity Multiple", lambda d: canonical_return_summary(d.metrics or {}).get("target_equity_multiple")),
+            ("Cash-on-Cash", lambda d: canonical_return_summary(d.metrics or {}).get("cash_on_cash")),
             ("Avg Annual Return", lambda d: ((d.metrics or {}).get("target_returns") or {}).get("target_avg_annual_return")),
             ("Projected Profit", lambda d: ((d.metrics or {}).get("target_returns") or {}).get("projected_profit")),
         ]),
