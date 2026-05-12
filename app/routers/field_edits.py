@@ -12,6 +12,7 @@ from sqlalchemy.orm.attributes import flag_modified
 from app.database import get_db
 from app.models import Deal
 from app.services.confidence import assess_data_quality, summarize_math_checks
+from app.services.canonical_metrics import annotate_canonical_metrics
 from app.services.data_integrity import mark_manual_edit, now_iso, set_lock
 from app.services.deal_scorer import score_deal
 from app.services.deal_validator import validate_deal_metrics
@@ -38,6 +39,12 @@ class FieldLockIn(BaseModel):
 class ConflictResolveIn(BaseModel):
     path: str
     value: Optional[float | str | int | bool] = None
+
+
+class ReviewResolveIn(BaseModel):
+    key: str = Field(..., min_length=1, max_length=300)
+    action: str = Field("confirmed", max_length=40)
+    note: Optional[str] = Field(None, max_length=1000)
 
 
 def _json_safe(value):
@@ -141,6 +148,7 @@ def _refresh_integrity(deal: Deal, metrics: dict) -> None:
     data_quality = scores.get("data_quality") if isinstance(scores, dict) else None
     if data_quality:
         metrics["_data_quality"] = data_quality
+    metrics = annotate_canonical_metrics(metrics)
     deal.metrics = _json_safe(jsonable_encoder(metrics))
     deal.scores = _json_safe(jsonable_encoder(scores))
     flag_modified(deal, "metrics")
@@ -204,6 +212,41 @@ async def batch_edit_fields(deal_id: int, data: BatchFieldEditIn, db: AsyncSessi
             detail=f"Could not save inputs: {type(e).__name__}: {e}",
         )
     return {"message": "Fields updated", "paths": changed, "locked": True}
+
+
+@router.post("/{deal_id}/reviews/resolve")
+async def resolve_review_item(deal_id: int, data: ReviewResolveIn, db: AsyncSession = Depends(get_db)):
+    """Mark one review-queue item resolved without pretending it is a metric."""
+    result = await db.execute(select(Deal).where(Deal.id == deal_id))
+    deal = result.scalar_one_or_none()
+    if not deal:
+        raise HTTPException(status_code=404, detail="Deal not found")
+
+    try:
+        metrics = copy.deepcopy(deal.metrics or {})
+        resolutions = dict(metrics.get("_review_resolutions") or {})
+        old_value = resolutions.get(data.key)
+        new_value = {
+            "resolved": True,
+            "action": data.action or "confirmed",
+            "note": data.note,
+            "at": now_iso(),
+            "user": "admin",
+        }
+        resolutions[data.key] = new_value
+        metrics["_review_resolutions"] = resolutions
+        _append_field_history(metrics, f"_review_resolutions.{data.key}", old_value, new_value, "resolve_review_item")
+        _refresh_integrity(deal, metrics)
+        await db.commit()
+    except HTTPException:
+        raise
+    except Exception as e:
+        await db.rollback()
+        raise HTTPException(
+            status_code=500,
+            detail=f"Could not resolve review item: {type(e).__name__}: {e}",
+        )
+    return {"message": "Review item resolved", "key": data.key, "resolved": True}
 
 
 @router.post("/{deal_id}/fields/lock")
