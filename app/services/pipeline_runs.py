@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, Dict, Optional
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -14,8 +14,8 @@ def _now_dt() -> datetime:
     return datetime.now(timezone.utc)
 
 
-def _step_entry(status: str, step: str, message: str, error: str | None = None) -> dict[str, Any]:
-    entry: dict[str, Any] = {
+def _step_entry(status: str, step: str, message: str, error: Optional[str] = None) -> Dict[str, Any]:
+    entry: Dict[str, Any] = {
         "status": status,
         "step": step,
         "message": message,
@@ -26,7 +26,7 @@ def _step_entry(status: str, step: str, message: str, error: str | None = None) 
     return entry
 
 
-def run_to_dict(run: PipelineRun | None) -> dict[str, Any] | None:
+def run_to_dict(run: Optional[PipelineRun]) -> Optional[Dict[str, Any]]:
     if not run:
         return None
     return {
@@ -45,7 +45,7 @@ def run_to_dict(run: PipelineRun | None) -> dict[str, Any] | None:
     }
 
 
-def attach_run_status(metrics: dict | None, run: PipelineRun | None) -> dict:
+def attach_run_status(metrics: Optional[dict], run: Optional[PipelineRun]) -> dict:
     next_metrics = dict(metrics or {})
     if not run:
         return next_metrics
@@ -87,7 +87,7 @@ async def start_pipeline_run(
     return run
 
 
-async def get_latest_pipeline_run(db: AsyncSession, deal_id: int) -> PipelineRun | None:
+async def get_latest_pipeline_run(db: AsyncSession, deal_id: int) -> Optional[PipelineRun]:
     result = await db.execute(
         select(PipelineRun)
         .where(PipelineRun.deal_id == deal_id)
@@ -97,7 +97,7 @@ async def get_latest_pipeline_run(db: AsyncSession, deal_id: int) -> PipelineRun
     return result.scalar_one_or_none()
 
 
-async def get_pipeline_run(db: AsyncSession, run_id: int | None) -> PipelineRun | None:
+async def get_pipeline_run(db: AsyncSession, run_id: Optional[int]) -> Optional[PipelineRun]:
     if not run_id:
         return None
     result = await db.execute(select(PipelineRun).where(PipelineRun.id == run_id))
@@ -106,14 +106,14 @@ async def get_pipeline_run(db: AsyncSession, run_id: int | None) -> PipelineRun 
 
 async def update_pipeline_run(
     db: AsyncSession,
-    run_id: int | None,
+    run_id: Optional[int],
     *,
-    status: str | None = None,
-    step: str | None = None,
-    message: str | None = None,
-    error: str | None = None,
-    summary: dict[str, Any] | None = None,
-) -> PipelineRun | None:
+    status: Optional[str] = None,
+    step: Optional[str] = None,
+    message: Optional[str] = None,
+    error: Optional[str] = None,
+    summary: Optional[Dict[str, Any]] = None,
+) -> Optional[PipelineRun]:
     run = await get_pipeline_run(db, run_id)
     if not run:
         return None
