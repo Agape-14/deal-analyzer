@@ -176,6 +176,7 @@ function CitationRow({
   const correction = provenance?.previous_value !== undefined && provenance.previous_value !== null;
   const rowId = sourceCitationId(anchorPath);
   const isActive = activeCitation === rowId;
+  const evidence = provenance ? sourceSearchText(provenance) : "";
 
   return (
     <div
@@ -219,9 +220,20 @@ function CitationRow({
                 <span className="shrink-0 text-muted-foreground">p.{provenance.source_page}</span>
               )}
             </div>
+            {(provenance.source_sheet || provenance.source_cell || provenance.source_range) && (
+              <div className="mt-1 text-[11px] text-muted-foreground">
+                {[provenance.source_sheet, provenance.source_cell || provenance.source_range].filter(Boolean).join(" / ")}
+              </div>
+            )}
             {(provenance.verification_note || provenance.verification_source || provenance.correction_note || provenance.correction_source) && (
               <div className="mt-1 line-clamp-2 text-xs leading-relaxed text-muted-foreground">
                 {provenance.correction_note || provenance.correction_source || provenance.verification_note || provenance.verification_source}
+              </div>
+            )}
+            {isActive && evidence && (
+              <div className="mt-2 rounded-md border border-primary/30 bg-primary/10 px-2.5 py-2 text-xs leading-relaxed text-foreground">
+                <span className="font-medium text-primary">Evidence to check: </span>
+                {evidence}
               </div>
             )}
             {provenance.source_doc_id && (
@@ -328,6 +340,10 @@ function sourceCitationId(path: string): string {
 function documentHref(provenance: FieldProvenance): string {
   const hashParts: string[] = [];
   if (provenance.source_page) hashParts.push(`page=${provenance.source_page}`);
+  if (provenance.source_sheet) hashParts.push(`sheet=${encodeURIComponent(provenance.source_sheet)}`);
+  if (provenance.source_cell || provenance.source_range) {
+    hashParts.push(`cell=${encodeURIComponent(String(provenance.source_cell || provenance.source_range))}`);
+  }
   const search = sourceSearchText(provenance);
   if (search) hashParts.push(`search=${encodeURIComponent(search)}`);
   const hash = hashParts.length ? `#${hashParts.join("&")}` : "";

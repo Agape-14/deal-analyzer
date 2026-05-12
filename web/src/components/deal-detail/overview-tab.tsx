@@ -10,7 +10,7 @@ import { ReviewQueue } from "@/components/deal-detail/review-queue";
 import { PipelineTimeline } from "@/components/deal-detail/pipeline-timeline";
 import { SourceCitations } from "@/components/deal-detail/source-citations";
 import { UploadCompleteness } from "@/components/deal-detail/upload-completeness";
-import type { DealDetail, FieldProvenance } from "@/lib/types";
+import type { DataQualityGate, DealDetail, FieldProvenance } from "@/lib/types";
 import { fmtMoney, fmtMultiple, fmtPct } from "@/lib/utils";
 
 const HERO_KEYS = [
@@ -39,10 +39,12 @@ export function OverviewTab({ deal }: { deal: DealDetail }) {
   const quality = deal.quality && deal.scores?.data_quality
     ? { ...deal.quality, data_quality: deal.scores.data_quality }
     : deal.quality ?? deal.scores?.data_quality;
+  const gate = deal.scores?.data_quality ?? (hasConfidenceExplanations(deal.quality) ? deal.quality : undefined);
 
   return (
     <div className="space-y-6">
       <ReviewQueue deal={deal} />
+      <ConfidenceExplainer gate={gate} />
       <details id="technical-details" className="group rounded-xl border border-border/80 bg-card/70 p-4">
         <summary className="cursor-pointer list-none text-sm font-semibold tracking-tight text-foreground marker:hidden">
           <span className="inline-flex items-center gap-2">
@@ -133,6 +135,39 @@ export function OverviewTab({ deal }: { deal: DealDetail }) {
       </div>
     </div>
   );
+}
+
+function ConfidenceExplainer({ gate }: { gate?: DataQualityGate }) {
+  const explanations = gate?.confidence_explanations ?? [];
+  if (!gate || explanations.length === 0) return null;
+  const primary = explanations[0];
+  if (gate.stage === "verified" && primary.severity === "success") return null;
+  return (
+    <Card className="p-4">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+        <div>
+          <div className="text-sm font-semibold tracking-tight">Why confidence is {Math.round(gate.confidence_score)}%</div>
+          <div className="mt-1 text-sm text-muted-foreground">{primary.detail}</div>
+        </div>
+        <div className="rounded-lg border border-border/80 bg-muted/40 px-3 py-2 text-xs text-muted-foreground">
+          {primary.action ?? gate.next_actions?.[0] ?? "Resolve the review queue items above."}
+        </div>
+      </div>
+      {explanations.length > 1 && (
+        <div className="mt-3 flex flex-wrap gap-2">
+          {explanations.slice(1, 4).map((item, index) => (
+            <span key={`${item.label}-${index}`} className="rounded-full border border-border/80 bg-background px-2.5 py-1 text-xs text-muted-foreground">
+              {item.label}
+            </span>
+          ))}
+        </div>
+      )}
+    </Card>
+  );
+}
+
+function hasConfidenceExplanations(value: unknown): value is DataQualityGate {
+  return Boolean(value && typeof value === "object" && "confidence_explanations" in value);
 }
 
 function Stat({ label, value, sub, small }: { label: string; value: string; sub?: string; small?: boolean }) {

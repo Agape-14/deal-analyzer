@@ -139,6 +139,11 @@ export interface FieldProvenance {
   source_doc_id?: number | null;
   source_doc_name?: string;
   source_page?: number | null;
+  source_sheet?: string | null;
+  source_cell?: string | null;
+  source_range?: string | null;
+  formula?: string | null;
+  document_kind?: "pdf" | "spreadsheet" | "csv" | string;
   extracted_at?: string;
   confidence?: number | null;
   verified_at?: string | null;
@@ -200,15 +205,40 @@ export interface DataQualityGate {
     math_failures?: number;
     math_warnings?: number;
   };
+  confidence_explanations?: Array<{
+    severity?: "blocker" | "warning" | "info" | "success" | string;
+    label: string;
+    detail?: string;
+    action?: string;
+    count?: number;
+  }>;
+  next_actions?: string[];
 }
 
 export interface PipelineStatus {
+  run_id?: number | null;
   status?: "idle" | "running" | "extract_complete" | "verify_complete" | "complete" | "failed" | string;
   step?: "idle" | "extract" | "verify" | "score" | string;
   message?: string;
   error?: string | null;
   started_at?: string | null;
   updated_at?: string | null;
+  finished_at?: string | null;
+}
+
+export interface PipelineRun {
+  id: number;
+  deal_id: number;
+  status: string;
+  current_step: string;
+  trigger: string;
+  message?: string;
+  error?: string | null;
+  steps?: Array<Record<string, unknown>>;
+  summary?: Record<string, unknown>;
+  started_at?: string | null;
+  updated_at?: string | null;
+  finished_at?: string | null;
 }
 
 export interface CanonicalReturnSummary {
