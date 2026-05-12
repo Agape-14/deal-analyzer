@@ -9,6 +9,7 @@ from sqlalchemy.orm import selectinload
 from app.database import async_session, get_db
 from app.models import Deal
 from app.rate_limit import limit
+from app.services.canonical_metrics import annotate_canonical_metrics
 from app.services import notifications as notif_svc
 from app.services.confidence import summarize_math_checks
 from app.services.data_integrity import (
@@ -194,6 +195,7 @@ async def _run_extract_background(deal_id: int):
             validation_flags.extend(conflicts_to_flags(conflicts))
             validation_flags.extend(staleness_flags(merged, deal.documents))
             merged["validation_flags"] = validation_flags
+            merged = annotate_canonical_metrics(merged)
             merged["_pipeline"] = _pipeline_status(
                 "extract_complete",
                 "extract",
@@ -283,6 +285,7 @@ async def _run_verify_background(deal_id: int, auto_correct: bool):
             flags = validate_deal_metrics(metrics, deal.property_type)
             flags.extend(staleness_flags(metrics, deal.documents or []))
             metrics["validation_flags"] = flags
+            metrics = annotate_canonical_metrics(metrics)
             metrics["_pipeline"] = _pipeline_status(
                 "verify_complete",
                 "verify",
@@ -322,14 +325,15 @@ async def score_deal_endpoint(deal_id: int, db: AsyncSession = Depends(get_db)):
     )
     await db.commit()
     try:
-        scores = score_deal(deal.metrics)
+        metrics = annotate_canonical_metrics(deal.metrics)
+        scores = score_deal(metrics)
     except Exception as e:
         await _persist_pipeline_failure(db, deal_id, "score", "Scoring failed.", e)
         raise HTTPException(status_code=503, detail=_pipeline_error_message(e))
 
     deal.scores = scores
     deal.metrics = _set_pipeline_status(
-        deal.metrics,
+        metrics,
         _pipeline_status("complete", "score", "Pipeline complete. Extraction, verification, math checks, and scoring finished."),
     )
     await db.commit()
