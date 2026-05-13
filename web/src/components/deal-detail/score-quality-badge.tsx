@@ -113,14 +113,14 @@ function stageUi(stage: string | null | undefined, canScore: boolean | undefined
       return {
         Icon: Clock3,
         label: "Checking",
-        detail: "Pipeline has extracted data, but verification is not complete",
+        detail: "Documents were read, but verification is not complete",
         className: "bg-warning/15 text-warning ring-warning/30",
       };
     default:
       return {
         Icon: CheckCircle2,
         label: "Pending",
-        detail: "Waiting for pipeline results",
+        detail: "Waiting for document review results",
         className: "bg-muted text-muted-foreground ring-border",
       };
   }
