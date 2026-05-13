@@ -31,6 +31,7 @@ type PipelineStatus = {
   step?: string;
   message?: string;
   error?: string | null;
+  error_kind?: string | null;
   started_at?: string | null;
   updated_at?: string | null;
 };
@@ -104,8 +105,8 @@ export function DealHero({ deal }: { deal: DealDetail }) {
       router.refresh();
     } catch (e) {
       const detail = (e as { detail?: string; message?: string })?.detail ?? (e as Error)?.message;
-      setPipelineStatus({ status: "failed", step: pipelineStep, message: "Pipeline did not finish.", error: detail });
-      toast.error("Pipeline did not finish", { description: detail });
+      setPipelineStatus({ status: "failed", step: pipelineStep, message: "Pipeline incomplete.", error: detail });
+      toast.error("Pipeline incomplete", { description: detail });
     } finally {
       if (mountedRef.current) {
         setPipelineRunning(false);
@@ -234,31 +235,99 @@ function PipelineNotice({ status, running }: { status: PipelineStatus | null; ru
 
   const failed = status.status === "failed";
   const complete = status.status === "complete";
-  const message = failed ? status.error || status.message || "Pipeline did not finish." : status.message;
+  const category = pipelineFailureCategory(status);
+  const copy = pipelineNoticeCopy(status, category);
   const Icon = failed ? AlertCircle : complete ? CheckCircle2 : Loader2;
 
   return (
     <div
+      role={failed ? "alert" : "status"}
       className={cn(
-        "max-w-sm rounded-lg border px-3 py-2 text-[11px] leading-relaxed",
+        "w-full max-w-md rounded-xl border px-4 py-3 text-xs leading-relaxed shadow-sm",
         failed
-          ? "border-destructive/40 bg-destructive/10 text-destructive"
+          ? "border-destructive/45 bg-destructive/10 text-destructive shadow-destructive/10"
           : complete
             ? "border-success/35 bg-success/10 text-success"
             : "border-primary/35 bg-primary/10 text-primary",
       )}
     >
-      <div className="flex items-start gap-2">
-        <Icon className={cn("mt-0.5 h-3.5 w-3.5 shrink-0", running && !failed && !complete && "animate-spin")} />
-        <div>
-          <div className="font-semibold">
-            {failed ? "Pipeline stopped" : complete ? "Pipeline complete" : "Pipeline running"}
-          </div>
-          {message && <div className="mt-0.5 text-current/80">{message}</div>}
+      <div className="flex items-start gap-3">
+        <Icon className={cn("mt-0.5 h-4 w-4 shrink-0", running && !failed && !complete && "animate-spin")} />
+        <div className="min-w-0">
+          <div className="font-semibold">{copy.title}</div>
+          <div className="mt-1 text-current/85">{copy.message}</div>
+          {failed && (
+            <div className="mt-2 rounded-lg bg-card/70 px-3 py-2 text-[11px] text-foreground ring-1 ring-border/70">
+              <div className="font-medium">What this means</div>
+              <div className="mt-0.5 text-muted-foreground">
+                The score may still be based on old or partial extraction results. Do not rely on it until the pipeline finishes successfully.
+              </div>
+              <div className="mt-2 font-medium">Next step</div>
+              <div className="mt-0.5 text-muted-foreground">{copy.nextStep}</div>
+              {status.step && <div className="mt-2 text-muted-foreground">Stopped during: {status.step}</div>}
+            </div>
+          )}
         </div>
       </div>
     </div>
   );
+}
+
+function pipelineNoticeCopy(status: PipelineStatus, category: string) {
+  if (status.status === "complete") {
+    return {
+      title: "Pipeline complete",
+      message: status.message || "Extraction, verification, math checks, and scoring finished.",
+      nextStep: "Review any remaining Needs attention items.",
+    };
+  }
+  if (status.status !== "failed") {
+    return {
+      title: "Pipeline running",
+      message: status.message || "The deal is being re-read, verified, and scored.",
+      nextStep: "Wait for this message to change before relying on the score.",
+    };
+  }
+  if (category === "ai_quota") {
+    return {
+      title: "Pipeline incomplete: API quota or credits exhausted",
+      message: status.error || "The AI provider quota or credit balance was exhausted before the pipeline finished.",
+      nextStep: "Add API credits or update billing, then click Re-run pipeline.",
+    };
+  }
+  if (category === "ai_rate_limit") {
+    return {
+      title: "Pipeline incomplete: API rate limit hit",
+      message: status.error || "The AI provider rate limit was reached before the pipeline finished.",
+      nextStep: "Wait for the rate-limit window to reset, then click Re-run pipeline.",
+    };
+  }
+  if (category === "ai_temporarily_unavailable") {
+    return {
+      title: "Pipeline incomplete: AI provider unavailable",
+      message: status.error || "The AI provider was temporarily unavailable before the pipeline finished.",
+      nextStep: "Wait a few minutes, then click Re-run pipeline.",
+    };
+  }
+  return {
+    title: "Pipeline incomplete",
+    message: status.error || status.message || "The pipeline did not finish.",
+    nextStep: "Fix the issue shown above, then click Re-run pipeline.",
+  };
+}
+
+function pipelineFailureCategory(status: PipelineStatus): string {
+  const explicit = String(status.error_kind || "").toLowerCase();
+  if (explicit) return explicit;
+  const text = `${status.error || ""} ${status.message || ""}`.toLowerCase();
+  if (["credit", "credits", "quota", "balance", "billing", "payment", "insufficient_quota", "insufficient quota"].some((token) => text.includes(token))) {
+    return "ai_quota";
+  }
+  if ((text.includes("rate") && text.includes("limit")) || text.includes("429") || text.includes("too many requests")) {
+    return "ai_rate_limit";
+  }
+  if (text.includes("overloaded") || text.includes("529")) return "ai_temporarily_unavailable";
+  return "unknown";
 }
 
 async function waitForQualityTimestamp(
