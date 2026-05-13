@@ -132,7 +132,7 @@ function issueNextAction(gate: DataQualityGate): string {
   if (gate.stage === "conflicting") return "Confirm the correct source value or edit the extracted input.";
   if (gate.stage === "insufficient_source") return "Add support, edit the value, or confirm the row manually.";
   if (gate.stage === "needs_review") return "Inspect the cited evidence and confirm each remaining item.";
-  if (gate.stage === "provisional") return "Run the full pipeline so extraction, verification, and scoring finish.";
+  if (gate.stage === "provisional") return "Run document review so extraction, verification, and scoring finish.";
   return "Open the deal review queue.";
 }
 
