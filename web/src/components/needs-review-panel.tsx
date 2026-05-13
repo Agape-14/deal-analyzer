@@ -31,22 +31,29 @@ export function NeedsReviewPanel({ deals }: { deals: DealSummary[] }) {
   const critical = issues.filter((i) => i.severity === "critical").length;
 
   return (
-    <Card elevated className="mb-8 p-5">
+    <Card elevated className="relative z-0 mb-10 overflow-hidden p-5">
       <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
         <div>
           <div className="flex items-center gap-2">
-            <div className={cn("grid h-8 w-8 place-items-center rounded-lg ring-1", issues.length ? "bg-warning/15 text-warning ring-warning/30" : "bg-success/15 text-success ring-success/30")}>
+            <div
+              className={cn(
+                "grid h-8 w-8 shrink-0 place-items-center rounded-lg ring-1",
+                issues.length
+                  ? "bg-warning/15 text-warning ring-warning/30"
+                  : "bg-success/15 text-success ring-success/30",
+              )}
+            >
               {issues.length ? <ShieldAlert className="h-4 w-4" /> : <CheckCircle2 className="h-4 w-4" />}
             </div>
-            <div>
+            <div className="min-w-0">
               <h2 className="text-base font-semibold tracking-tight">Needs attention</h2>
-              <p className="mt-0.5 text-xs text-muted-foreground">
+              <p className="mt-0.5 text-xs leading-relaxed text-muted-foreground">
                 Clear these review queues before relying on a deal score or comparing alternatives.
               </p>
             </div>
           </div>
         </div>
-        <div className="flex items-center gap-2 text-xs text-muted-foreground">
+        <div className="flex shrink-0 items-center gap-2 text-xs text-muted-foreground">
           <span className="rounded-full bg-destructive/15 px-2 py-1 font-medium text-destructive ring-1 ring-destructive/30">
             {critical} critical
           </span>
@@ -57,33 +64,42 @@ export function NeedsReviewPanel({ deals }: { deals: DealSummary[] }) {
       </div>
 
       {issues.length === 0 ? (
-        <div className="mt-4 rounded-lg border border-border/70 bg-background/35 px-4 py-3 text-sm text-muted-foreground">
+        <div className="mt-5 rounded-lg border border-border/70 bg-background/35 px-4 py-3 text-sm text-muted-foreground">
           No deal-level scoring exceptions right now.
         </div>
       ) : (
-        <div className="mt-4 grid grid-cols-1 lg:grid-cols-2 2xl:grid-cols-3 gap-3">
+        <div className="mt-5 grid grid-cols-1 gap-4 lg:grid-cols-2 2xl:grid-cols-3">
           {issues.slice(0, 6).map(({ deal, gate, reason, nextAction, severity }) => (
             <Link
               key={deal.id}
               href={`/deals/${deal.id}`}
-              className="group rounded-lg border border-border/70 bg-background/35 p-4 transition-colors hover:border-border hover:bg-muted/20"
+              className="group flex min-h-[128px] flex-col justify-between rounded-lg border border-border/70 bg-background/35 p-4 transition-colors hover:border-border hover:bg-muted/20"
             >
               <div className="flex items-start justify-between gap-3">
                 <div className="min-w-0">
                   <div className="truncate text-sm font-semibold tracking-tight">{deal.project_name}</div>
-                  <div className="mt-1 truncate text-xs text-muted-foreground">{deal.developer_name || [deal.city, deal.state].filter(Boolean).join(", ")}</div>
+                  <div className="mt-1 truncate text-xs text-muted-foreground">
+                    {deal.developer_name || [deal.city, deal.state].filter(Boolean).join(", ")}
+                  </div>
                 </div>
                 <ArrowUpRight className="h-4 w-4 shrink-0 text-muted-foreground transition-transform group-hover:-translate-y-0.5 group-hover:translate-x-0.5 group-hover:text-foreground" />
               </div>
-              <div className="mt-3 flex flex-wrap items-center gap-2">
-                <ScoreQualityBadge gate={gate} size="sm" />
-                <span className={cn("inline-flex items-center gap-1 text-xs", severity === "critical" ? "text-destructive" : "text-warning")}>
-                  {severity === "critical" ? <AlertTriangle className="h-3 w-3" /> : <HelpCircle className="h-3 w-3" />}
-                  {reason}
-                </span>
-              </div>
-              <div className="mt-3 rounded-md border border-border/70 bg-card/60 px-2.5 py-2 text-xs text-muted-foreground">
-                <span className="font-medium text-foreground">Next:</span> {nextAction}
+              <div className="mt-3 space-y-3">
+                <div className="flex min-h-6 flex-wrap items-center gap-2">
+                  <ScoreQualityBadge gate={gate} size="sm" />
+                  <span
+                    className={cn(
+                      "inline-flex min-w-0 items-center gap-1 text-xs leading-relaxed",
+                      severity === "critical" ? "text-destructive" : "text-warning",
+                    )}
+                  >
+                    {severity === "critical" ? <AlertTriangle className="h-3 w-3 shrink-0" /> : <HelpCircle className="h-3 w-3 shrink-0" />}
+                    <span className="min-w-0 break-words">{reason}</span>
+                  </span>
+                </div>
+                <div className="rounded-md border border-border/70 bg-card/60 px-2.5 py-2 text-xs leading-relaxed text-muted-foreground">
+                  <span className="font-medium text-foreground">Next:</span> {nextAction}
+                </div>
               </div>
             </Link>
           ))}
