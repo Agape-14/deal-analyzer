@@ -121,15 +121,15 @@ export function FieldReviewAction({
         type="button"
         onClick={toggleOpen}
         className={cn(
-          "inline-flex h-5 items-center gap-1 rounded-full px-1.5 text-[10px] font-medium ring-1 transition-colors",
+          "inline-flex h-7 items-center gap-1.5 rounded-md px-2.5 text-xs font-medium ring-1 transition-colors",
           needsReview
             ? "bg-warning/15 text-warning ring-warning/30 hover:bg-warning/25"
             : "bg-primary/10 text-primary ring-primary/25 hover:bg-primary/20",
         )}
         title="Edit or confirm field"
       >
-        <ShieldCheck className="h-2.5 w-2.5" />
-        Edit/confirm
+        <ShieldCheck className="h-3.5 w-3.5" />
+        Edit / confirm
       </button>
 
       {open && (

@@ -29,6 +29,9 @@ class FieldEditIn(BaseModel):
 
 class BatchFieldEditIn(BaseModel):
     edits: list[FieldEditIn] = Field(..., min_length=1, max_length=25)
+    review_key: Optional[str] = Field(None, min_length=1, max_length=300)
+    review_action: str = Field("inputs_saved", max_length=40)
+    review_note: Optional[str] = Field(None, max_length=1000)
 
 
 class FieldLockIn(BaseModel):
@@ -83,6 +86,151 @@ def _append_field_history(metrics: dict, path: str, old_value, new_value, action
         }
     )
     metrics["_field_history"] = history[-200:]
+
+
+def _mark_review_resolved(metrics: dict, key: str, action: str, note: Optional[str] = None) -> bool:
+    resolutions = dict(metrics.get("_review_resolutions") or {})
+    if key in resolutions and isinstance(resolutions[key], dict) and resolutions[key].get("resolved") is True:
+        return False
+    old_value = resolutions.get(key)
+    new_value = {
+        "resolved": True,
+        "action": action,
+        "note": note,
+        "at": now_iso(),
+        "user": "admin",
+    }
+    resolutions[key] = new_value
+    metrics["_review_resolutions"] = resolutions
+    _append_field_history(metrics, f"_review_resolutions.{key}", old_value, new_value, "resolve_review_item")
+    return True
+
+
+def _candidate_review_keys_for_paths(metrics: dict, scores: dict | None, paths: list[str]) -> list[str]:
+    """Infer visible review rows that should clear when their inputs are saved."""
+    affected = set(paths)
+    keys: set[str] = {f"source:{path}" for path in affected}
+
+    for flag in metrics.get("validation_flags") or []:
+        if not isinstance(flag, dict):
+            continue
+        message = str(flag.get("message") or "")
+        category = str(flag.get("category") or "")
+        found_paths = set(_paths_in_message(message))
+        if affected & found_paths:
+            path = _best_path_from_message(message)
+            keys.add(f"flag:{category}:{path or message}")
+
+    for check in _blocking_math_checks(metrics, scores):
+        check_name = str(check.get("check") or "")
+        if check_name and _math_check_touches_paths(check_name, affected):
+            keys.add(f"math:{check_name}")
+
+    return sorted(keys)
+
+
+def _blocking_math_checks(metrics: dict, scores: dict | None) -> list[dict]:
+    data_quality = {}
+    if isinstance(scores, dict):
+        data_quality = scores.get("data_quality") or {}
+    if not data_quality:
+        data_quality = metrics.get("_data_quality") or {}
+    math_summary = data_quality.get("math_summary") if isinstance(data_quality, dict) else {}
+    blocking = math_summary.get("blocking") if isinstance(math_summary, dict) else None
+    if isinstance(blocking, list):
+        return [item for item in blocking if isinstance(item, dict)]
+    math_checks = metrics.get("_math_checks") or {}
+    summary = math_checks.get("summary") if isinstance(math_checks, dict) else {}
+    blocking = summary.get("blocking") if isinstance(summary, dict) else None
+    return [item for item in blocking if isinstance(item, dict)] if isinstance(blocking, list) else []
+
+
+def _paths_in_message(message: str) -> list[str]:
+    import re
+
+    return re.findall(r"[a-z_]+\.[a-z_]+", message)
+
+
+def _best_path_from_message(message: str) -> Optional[str]:
+    matches = _paths_in_message(message)
+    for token in ("target_", "net_"):
+        for path in matches:
+            if token in path:
+                return path
+    return matches[0] if matches else None
+
+
+def _math_check_touches_paths(check_name: str, affected: set[str]) -> bool:
+    name = " ".join(check_name.lower().split())
+    groups = [
+        (
+            ("dscr", "debt service"),
+            {
+                "underwriting_checks.dscr",
+                "financial_projections.stabilized_noi",
+                "deal_structure.debt_amount",
+                "deal_structure.interest_rate",
+            },
+        ),
+        (
+            ("ltv",),
+            {"deal_structure.ltv", "deal_structure.debt_amount", "deal_structure.total_project_cost"},
+        ),
+        (
+            ("total project cost", "equity"),
+            {
+                "deal_structure.total_project_cost",
+                "deal_structure.total_equity_required",
+                "deal_structure.preferred_equity_amount",
+                "deal_structure.debt_amount",
+            },
+        ),
+        (
+            ("hard", "soft", "land"),
+            {
+                "construction_costs.hard_costs",
+                "construction_costs.hard_costs_total",
+                "construction_costs.soft_costs",
+                "construction_costs.soft_costs_total",
+                "construction_costs.land_cost",
+                "construction_costs.land_cost_total",
+                "construction_costs.contingency",
+                "construction_costs.contingency_total",
+                "deal_structure.total_project_cost",
+            },
+        ),
+        (
+            ("cost components",),
+            {
+                "construction_costs.hard_costs",
+                "construction_costs.hard_costs_total",
+                "construction_costs.soft_costs",
+                "construction_costs.soft_costs_total",
+                "construction_costs.land_cost",
+                "construction_costs.land_cost_total",
+                "construction_costs.contingency",
+                "construction_costs.contingency_total",
+                "deal_structure.total_project_cost",
+            },
+        ),
+        (
+            ("irr",),
+            {
+                "target_returns.target_irr",
+                "target_returns.net_irr",
+                "target_returns.target_cash_on_cash",
+                "target_returns.distribution_yield",
+            },
+        ),
+        (
+            ("multiple",),
+            {"target_returns.target_equity_multiple", "target_returns.net_equity_multiple"},
+        ),
+    ]
+    for tokens, paths in groups:
+        if all(token in name for token in tokens) and affected & paths:
+            return True
+    return False
 
 
 def _refresh_integrity(deal: Deal, metrics: dict) -> None:
@@ -164,9 +312,19 @@ async def edit_field(deal_id: int, data: FieldEditIn, db: AsyncSession = Depends
 
     try:
         metrics = copy.deepcopy(deal.metrics or {})
+        auto_review_keys = _candidate_review_keys_for_paths(metrics, deal.scores or {}, [data.path])
         old_value = _get_metric_value(metrics, data.path)
         metrics = mark_manual_edit(metrics, data.path, data.value, lock=bool(data.lock))
         _append_field_history(metrics, data.path, old_value, data.value, "manual_edit")
+        resolved_count = 0
+        for key in auto_review_keys:
+            if _mark_review_resolved(
+                metrics,
+                key,
+                "input_saved",
+                f"{data.path} was saved from the Needs review workflow.",
+            ):
+                resolved_count += 1
         _refresh_integrity(deal, metrics)
         await db.commit()
     except HTTPException:
@@ -177,7 +335,7 @@ async def edit_field(deal_id: int, data: FieldEditIn, db: AsyncSession = Depends
             status_code=500,
             detail=f"Could not save {data.path}: {type(e).__name__}: {e}",
         )
-    return {"message": "Field updated", "path": data.path, "locked": bool(data.lock)}
+    return {"message": "Field updated", "path": data.path, "locked": bool(data.lock), "review_resolved_count": resolved_count}
 
 
 @router.post("/{deal_id}/fields/batch-edit")
@@ -192,6 +350,7 @@ async def batch_edit_fields(deal_id: int, data: BatchFieldEditIn, db: AsyncSessi
         metrics = copy.deepcopy(deal.metrics or {})
         changed: list[str] = []
         seen: set[str] = set()
+        auto_review_keys = _candidate_review_keys_for_paths(metrics, deal.scores or {}, [edit.path for edit in data.edits])
         for edit in data.edits:
             if edit.path in seen:
                 raise HTTPException(status_code=400, detail=f"Duplicate edit path: {edit.path}")
@@ -200,6 +359,19 @@ async def batch_edit_fields(deal_id: int, data: BatchFieldEditIn, db: AsyncSessi
             metrics = mark_manual_edit(metrics, edit.path, edit.value, lock=bool(edit.lock))
             _append_field_history(metrics, edit.path, old_value, edit.value, "batch_manual_edit")
             changed.append(edit.path)
+
+        review_keys = set(auto_review_keys)
+        if data.review_key:
+            review_keys.add(data.review_key)
+        resolved_count = 0
+        for key in sorted(review_keys):
+            if _mark_review_resolved(
+                metrics,
+                key,
+                data.review_action or "inputs_saved",
+                data.review_note or f"{len(changed)} field{'s' if len(changed) != 1 else ''} saved from the Needs review workflow.",
+            ):
+                resolved_count += 1
 
         _refresh_integrity(deal, metrics)
         await db.commit()
@@ -211,7 +383,7 @@ async def batch_edit_fields(deal_id: int, data: BatchFieldEditIn, db: AsyncSessi
             status_code=500,
             detail=f"Could not save inputs: {type(e).__name__}: {e}",
         )
-    return {"message": "Fields updated", "paths": changed, "locked": True}
+    return {"message": "Fields updated", "paths": changed, "locked": True, "review_resolved": resolved_count > 0, "review_resolved_count": resolved_count}
 
 
 @router.post("/{deal_id}/reviews/resolve")
@@ -224,18 +396,7 @@ async def resolve_review_item(deal_id: int, data: ReviewResolveIn, db: AsyncSess
 
     try:
         metrics = copy.deepcopy(deal.metrics or {})
-        resolutions = dict(metrics.get("_review_resolutions") or {})
-        old_value = resolutions.get(data.key)
-        new_value = {
-            "resolved": True,
-            "action": data.action or "confirmed",
-            "note": data.note,
-            "at": now_iso(),
-            "user": "admin",
-        }
-        resolutions[data.key] = new_value
-        metrics["_review_resolutions"] = resolutions
-        _append_field_history(metrics, f"_review_resolutions.{data.key}", old_value, new_value, "resolve_review_item")
+        _mark_review_resolved(metrics, data.key, data.action or "confirmed", data.note)
         _refresh_integrity(deal, metrics)
         await db.commit()
     except HTTPException:

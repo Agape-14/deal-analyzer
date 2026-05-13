@@ -197,6 +197,11 @@ function CitationRow({
         </div>
         <div className="mt-0.5 text-[11px] text-muted-foreground">{field.path}</div>
         {note && <div className="mt-1 text-[11px] leading-relaxed text-primary">{note}</div>}
+        {isActive && (
+          <div className="mt-2 rounded-md border border-primary/25 bg-background/80 px-2.5 py-2 text-[11px] leading-relaxed text-muted-foreground">
+            This is the cited row from Needs review. Check the value and evidence here, then use <span className="font-medium text-foreground">Edit / confirm</span> in the Status column to clear it.
+          </div>
+        )}
       </div>
 
       <div>
