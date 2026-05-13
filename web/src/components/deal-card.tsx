@@ -26,7 +26,7 @@ type SummaryWithMetrics = DealSummary & {
 function ScoreRing({ value }: { value: number | null }) {
   if (value == null) {
     return (
-      <div className="h-12 w-12 rounded-full border border-dashed border-border grid place-items-center text-muted-foreground text-[10px]">
+      <div className="grid h-12 w-12 place-items-center rounded-full border border-dashed border-border text-[10px] text-muted-foreground">
         -
       </div>
     );
@@ -37,7 +37,7 @@ function ScoreRing({ value }: { value: number | null }) {
   const offset = circumference * (1 - pct);
 
   return (
-    <div className="relative h-12 w-12">
+    <div className="relative h-12 w-12 shrink-0">
       <svg viewBox="0 0 48 48" className="h-12 w-12 -rotate-90">
         <circle
           cx="24"
@@ -79,20 +79,20 @@ export function DealCard({ deal }: { deal: DealSummary }) {
   const targetMultiple = pickReturnMetric(deal, ["target_returns.target_equity_multiple", "target_returns.net_equity_multiple"]) ?? deal.target_equity_multiple;
 
   return (
-    <Link href={`/deals/${deal.id}`} className="block group outline-none">
+    <Link href={`/deals/${deal.id}`} className="block h-full outline-none group">
       <Card
         elevated
-        className="p-5 transition-all duration-200 hover:border-border group-hover:-translate-y-1 group-hover:shadow-[0_20px_60px_-30px_hsl(var(--primary)/.4)] group-focus-visible:ring-2 group-focus-visible:ring-ring"
+        className="h-full p-5 transition-all duration-200 hover:border-border group-hover:-translate-y-1 group-hover:shadow-[0_20px_60px_-30px_hsl(var(--primary)/.4)] group-focus-visible:ring-2 group-focus-visible:ring-ring"
       >
         <div className="flex items-start justify-between gap-4">
           <div className="min-w-0">
-            <h3 className="text-base font-semibold tracking-tight truncate">{deal.project_name}</h3>
-            <div className="mt-1 flex items-center gap-1.5 text-xs text-muted-foreground">
-              <MapPin className="h-3 w-3" />
+            <h3 className="truncate text-base font-semibold tracking-tight">{deal.project_name}</h3>
+            <div className="mt-1 flex min-w-0 items-center gap-1.5 text-xs text-muted-foreground">
+              <MapPin className="h-3 w-3 shrink-0" />
               <span className="truncate">{locationBits || "-"}</span>
               {deal.developer_name && (
                 <>
-                  <span className="opacity-40">·</span>
+                  <span className="shrink-0 opacity-40">·</span>
                   <span className="truncate">{deal.developer_name}</span>
                 </>
               )}
@@ -107,11 +107,11 @@ export function DealCard({ deal }: { deal: DealSummary }) {
           <Stat label="Min Invest" value={fmtMoney(deal.minimum_investment)} />
         </div>
 
-        <div className="mt-5 flex items-center justify-between">
-          <div className="flex min-w-0 items-center gap-2">
+        <div className="mt-5 flex min-h-7 flex-wrap items-center justify-between gap-2">
+          <div className="flex min-w-0 flex-wrap items-center gap-2">
             <span
               className={cn(
-                "px-2 py-0.5 rounded-full text-[10px] uppercase tracking-wider font-medium",
+                "rounded-full px-2 py-0.5 text-[10px] font-medium uppercase tracking-wider",
                 STATUS_STYLES[deal.status] ?? STATUS_STYLES.reviewing,
               )}
             >
@@ -119,7 +119,7 @@ export function DealCard({ deal }: { deal: DealSummary }) {
             </span>
             <ScoreQualityBadge gate={qualityGate} size="sm" />
           </div>
-          <ArrowUpRight className="h-4 w-4 text-muted-foreground group-hover:text-foreground group-hover:translate-x-0.5 group-hover:-translate-y-0.5 transition-transform" />
+          <ArrowUpRight className="h-4 w-4 shrink-0 text-muted-foreground transition-transform group-hover:-translate-y-0.5 group-hover:translate-x-0.5 group-hover:text-foreground" />
         </div>
       </Card>
     </Link>
@@ -162,9 +162,9 @@ function asNum(value: unknown): number | null {
 
 function Stat({ label, value }: { label: string; value: string }) {
   return (
-    <div>
+    <div className="min-w-0">
       <div className="text-[10px] uppercase tracking-wider text-muted-foreground">{label}</div>
-      <div className="text-sm font-semibold tabular-nums tracking-tight mt-1">{value}</div>
+      <div className="mt-1 truncate text-sm font-semibold tabular-nums tracking-tight">{value}</div>
     </div>
   );
 }
