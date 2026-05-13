@@ -83,10 +83,10 @@ export function DealGrid({ deals }: { deals: DealSummary[] }) {
   const visibleExposure = filtered.reduce((sum, deal) => sum + (deal.minimum_investment ?? 0), 0);
 
   return (
-    <div>
-      <div className="mb-6 flex flex-col xl:flex-row xl:items-center xl:justify-between gap-3">
+    <div className="relative z-10 clear-both">
+      <div className="relative z-20 mb-8 flex flex-col gap-3 rounded-xl bg-background/90 xl:flex-row xl:items-center xl:justify-between">
         <div className="relative w-full xl:max-w-[440px]">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground pointer-events-none" />
+          <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
           <Input
             value={query}
             onChange={(e) => setQuery(e.target.value)}
@@ -95,8 +95,8 @@ export function DealGrid({ deals }: { deals: DealSummary[] }) {
           />
         </div>
 
-        <div className="flex items-center gap-2 flex-wrap">
-          <div className="flex items-center gap-1 p-1 rounded-lg bg-secondary/40 border border-border/70 relative">
+        <div className="flex flex-wrap items-center gap-2">
+          <div className="relative flex items-center gap-1 rounded-lg border border-border/70 bg-secondary/40 p-1">
             {STATUSES.map((s) => {
               const active = status === s.key;
               return (
@@ -104,14 +104,14 @@ export function DealGrid({ deals }: { deals: DealSummary[] }) {
                   key={s.key}
                   onClick={() => setStatus(s.key)}
                   className={cn(
-                    "relative z-10 px-2.5 h-7 text-xs font-medium rounded-md transition-colors",
+                    "relative z-10 h-7 rounded-md px-2.5 text-xs font-medium transition-colors",
                     active ? "text-foreground" : "text-muted-foreground hover:text-foreground",
                   )}
                 >
                   {active && (
                     <motion.span
                       layoutId="status-pill"
-                      className="absolute inset-0 rounded-md bg-card ring-1 ring-border/80 shadow-sm"
+                      className="absolute inset-0 rounded-md bg-card shadow-sm ring-1 ring-border/80"
                       transition={{ type: "spring", stiffness: 420, damping: 32 }}
                     />
                   )}
@@ -139,7 +139,7 @@ export function DealGrid({ deals }: { deals: DealSummary[] }) {
                   animate={{ opacity: 1, y: 0, scale: 1 }}
                   exit={{ opacity: 0, y: -4, scale: 0.97 }}
                   transition={{ duration: 0.12, ease: [0.22, 1, 0.36, 1] }}
-                  className="absolute right-0 top-full mt-1.5 w-48 rounded-lg border border-border/80 bg-card shadow-[0_20px_60px_-20px_rgba(0,0,0,0.9)] p-1 z-30"
+                  className="absolute right-0 top-full z-30 mt-1.5 w-48 rounded-lg border border-border/80 bg-card p-1 shadow-[0_20px_60px_-20px_rgba(0,0,0,0.9)]"
                 >
                   {SORTS.map((s) => (
                     <button
@@ -150,10 +150,10 @@ export function DealGrid({ deals }: { deals: DealSummary[] }) {
                         setSortOpen(false);
                       }}
                       className={cn(
-                        "w-full flex items-center gap-2 px-2.5 h-8 rounded-md text-xs transition-colors",
+                        "flex h-8 w-full items-center gap-2 rounded-md px-2.5 text-xs transition-colors",
                         s.key === sort
                           ? "bg-muted text-foreground"
-                          : "text-muted-foreground hover:text-foreground hover:bg-muted/60",
+                          : "text-muted-foreground hover:bg-muted/60 hover:text-foreground",
                       )}
                     >
                       <s.icon className="h-3.5 w-3.5" />
@@ -168,9 +168,9 @@ export function DealGrid({ deals }: { deals: DealSummary[] }) {
         </div>
       </div>
 
-      <div className="grid gap-6 xl:grid-cols-[minmax(360px,0.95fr)_minmax(300px,0.72fr)_minmax(300px,0.72fr)] 2xl:grid-cols-[minmax(420px,0.95fr)_minmax(340px,0.72fr)_minmax(340px,0.72fr)] xl:items-start">
-        <div>
-          <div className="mb-3 flex items-center justify-between gap-3 text-xs text-muted-foreground">
+      <div className="relative z-0 grid gap-6 xl:grid-cols-[minmax(360px,0.95fr)_minmax(300px,0.72fr)_minmax(300px,0.72fr)] xl:items-start 2xl:grid-cols-[minmax(420px,0.95fr)_minmax(340px,0.72fr)_minmax(340px,0.72fr)]">
+        <div className="min-w-0">
+          <div className="mb-4 flex min-h-5 items-center justify-between gap-3 text-xs text-muted-foreground">
             <span>
               {filtered.length} of {deals.length} deal{deals.length === 1 ? "" : "s"}
               {query && (
@@ -181,11 +181,11 @@ export function DealGrid({ deals }: { deals: DealSummary[] }) {
               )}
             </span>
             <span className="hidden sm:inline tabular-nums">
-              Visible exposure: <span className="text-foreground font-medium">{fmtMoney(visibleExposure)}</span>
+              Visible exposure: <span className="font-medium text-foreground">{fmtMoney(visibleExposure)}</span>
             </span>
           </div>
 
-          <motion.div layout className="grid grid-cols-1 2xl:grid-cols-2 gap-4">
+          <motion.div layout className="relative z-0 grid grid-cols-1 gap-4 2xl:grid-cols-2">
             <AnimatePresence mode="popLayout">
               {filtered.map((deal) => (
                 <motion.div
@@ -224,7 +224,7 @@ function FocusPanel({
   visibleExposure: number;
 }) {
   return (
-    <aside className="rounded-xl border border-border/80 bg-card/70 p-5 shadow-[0_0_0_1px_hsl(var(--border))_inset,0_20px_40px_-24px_hsl(0_0%_0%/0.7)] xl:sticky xl:top-[92px]">
+    <aside className="overflow-hidden rounded-xl border border-border/80 bg-card/70 p-5 shadow-[0_0_0_1px_hsl(var(--border))_inset,0_20px_40px_-24px_hsl(0_0%_0%/0.7)] xl:sticky xl:top-[92px]">
       <div className="flex items-center justify-between gap-3">
         <div>
           <div className="text-[11px] uppercase tracking-[0.12em] text-muted-foreground">Focus</div>
@@ -319,7 +319,7 @@ function NextActionsPanel({
       ];
 
   return (
-    <aside className="rounded-xl border border-border/80 bg-card/70 p-5 shadow-[0_0_0_1px_hsl(var(--border))_inset,0_20px_40px_-24px_hsl(0_0%_0%/0.7)] xl:sticky xl:top-[92px]">
+    <aside className="overflow-hidden rounded-xl border border-border/80 bg-card/70 p-5 shadow-[0_0_0_1px_hsl(var(--border))_inset,0_20px_40px_-24px_hsl(0_0%_0%/0.7)] xl:sticky xl:top-[92px]">
       <div className="flex items-center justify-between gap-3">
         <div>
           <div className="text-[11px] uppercase tracking-[0.12em] text-muted-foreground">Workflow</div>
