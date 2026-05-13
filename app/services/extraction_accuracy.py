@@ -26,7 +26,8 @@ from __future__ import annotations
 
 import math
 import re
-from typing import Any, Dict, Iterable, Mapping, Optional, Sequence, Tuple
+from collections.abc import Iterable, Mapping, Sequence
+from typing import Any, Dict, Optional, Tuple
 
 FieldSpec = Mapping[str, Any]
 Metrics = Mapping[str, Any]
