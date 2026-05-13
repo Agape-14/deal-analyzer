@@ -2,7 +2,7 @@
 
 import * as React from "react";
 import { useRouter } from "next/navigation";
-import { AlertTriangle, Calculator, CheckCircle2, FileText, Loader2, ShieldAlert } from "lucide-react";
+import { AlertTriangle, Calculator, CheckCircle2, ExternalLink, FileText, Loader2, Search, ShieldAlert } from "lucide-react";
 import { toast } from "sonner";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -12,7 +12,8 @@ import type { DealDetail, FieldProvenance, ValidationFlag } from "@/lib/types";
 
 type ReviewArea = "Returns" | "Capital Stack" | "Debt" | "Construction" | "Sponsor" | "Market" | "Math" | "Source";
 type Severity = "red" | "yellow";
-type Metrics = NonNullable<DealDetail["metrics"]>;
+type Metrics = NonNullable<DealDetail["metrics"]> & Record<string, unknown>;
+type MathCheck = { check?: string; difference?: string; formula?: string };
 
 type ReviewInput = {
   path: string;
@@ -36,8 +37,6 @@ type ReviewItem = {
   actionHref?: string;
   confirmLabel?: string;
 };
-
-type MathCheck = { check?: string; difference?: string; formula?: string };
 
 const REVIEW_LIMIT = 3;
 
@@ -100,11 +99,15 @@ const FALLBACK_INPUTS: Partial<Record<ReviewArea, Array<{ path: string; label: s
     { path: "financial_projections.stabilized_noi", label: "Stabilized NOI" },
   ],
   Construction: [
+    { path: "construction_costs.hard_costs", label: "Hard costs" },
     { path: "construction_costs.hard_costs_total", label: "Hard costs total" },
+    { path: "construction_costs.soft_costs", label: "Soft costs" },
     { path: "construction_costs.soft_costs_total", label: "Soft costs total" },
+    { path: "construction_costs.land_cost", label: "Land" },
     { path: "construction_costs.land_cost_total", label: "Land total" },
+    { path: "construction_costs.contingency", label: "Contingency" },
     { path: "construction_costs.contingency_total", label: "Contingency total" },
-    { path: "deal_structure.total_project_cost", label: "Total project cost" },
+    { path: "deal_structure.total_project_cost", label: "Total cost" },
   ],
   Sponsor: [
     { path: "sponsor_evaluation.alignment_score", label: "Alignment score" },
@@ -155,17 +158,7 @@ const MATH_INPUTS: Array<{ test: (name: string) => boolean; area: ReviewArea; pr
     test: (name) => name.includes("hard") && name.includes("soft") && name.includes("land"),
     area: "Construction",
     primaryPath: "deal_structure.total_project_cost",
-    inputs: [
-      { path: "construction_costs.hard_costs", label: "Hard costs" },
-      { path: "construction_costs.hard_costs_total", label: "Hard costs total" },
-      { path: "construction_costs.soft_costs", label: "Soft costs" },
-      { path: "construction_costs.soft_costs_total", label: "Soft costs total" },
-      { path: "construction_costs.land_cost", label: "Land" },
-      { path: "construction_costs.land_cost_total", label: "Land total" },
-      { path: "construction_costs.contingency", label: "Contingency" },
-      { path: "construction_costs.contingency_total", label: "Contingency total" },
-      { path: "deal_structure.total_project_cost", label: "Total cost" },
-    ],
+    inputs: FALLBACK_INPUTS.Construction ?? [],
   },
   {
     test: (name) => name.includes("irr"),
@@ -214,7 +207,7 @@ export function ReviewQueue({ deal }: { deal: DealDetail }) {
             <div className="text-[10px] uppercase tracking-[0.14em] text-muted-foreground">Deal Readiness</div>
             <h3 className="text-base font-semibold tracking-tight">Needs review</h3>
             <p className="mt-0.5 text-xs text-muted-foreground">
-              {visible.length} priority item{visible.length === 1 ? "" : "s"} shown. Correct the value or confirm the item to clear it.
+              {visible.length} priority item{visible.length === 1 ? "" : "s"} shown. Review the source, fix the inputs, or confirm the item to clear it.
             </p>
           </div>
         </div>
@@ -223,6 +216,12 @@ export function ReviewQueue({ deal }: { deal: DealDetail }) {
             {hidden.length} more grouped below
           </a>
         ) : null}
+      </div>
+
+      <div className="mt-5 grid gap-2 sm:grid-cols-3">
+        <ActionHint label="1. Inspect" detail="Open the cited evidence for the row." />
+        <ActionHint label="2. Correct" detail="Edit any value that is wrong." />
+        <ActionHint label="3. Clear" detail="Confirm when the item is acceptable." />
       </div>
 
       <div className="mt-5 space-y-3">
@@ -248,10 +247,21 @@ export function ReviewQueue({ deal }: { deal: DealDetail }) {
   );
 }
 
+function ActionHint({ label, detail }: { label: string; detail: string }) {
+  return (
+    <div className="rounded-lg border border-border/70 bg-muted/20 px-3 py-2">
+      <div className="text-xs font-semibold tracking-tight text-foreground">{label}</div>
+      <div className="mt-0.5 text-[11px] leading-relaxed text-muted-foreground">{detail}</div>
+    </div>
+  );
+}
+
 function ReviewRow({ item, index, dealId }: { item: ReviewItem; index: number; dealId: number }) {
   const Icon = item.kind === "math" ? Calculator : item.kind === "source" ? FileText : AlertTriangle;
   const [editing, setEditing] = React.useState(false);
+  const [sourceOpen, setSourceOpen] = React.useState(false);
   const hasInputs = Boolean(item.inputs?.length);
+  const hasSource = Boolean(item.actionHref);
 
   return (
     <div className="rounded-lg border border-border/70 bg-card/40 p-4">
@@ -272,14 +282,36 @@ function ReviewRow({ item, index, dealId }: { item: ReviewItem; index: number; d
           )}
           {hasInputs && !editing ? <ReviewInputSummary inputs={item.inputs ?? []} /> : null}
         </div>
-        <ReviewActions item={item} dealId={dealId} editing={editing} onEdit={hasInputs ? () => setEditing((value) => !value) : undefined} />
+        <ReviewActions
+          item={item}
+          dealId={dealId}
+          editing={editing}
+          sourceOpen={sourceOpen}
+          onEdit={hasInputs ? () => setEditing((value) => !value) : undefined}
+          onSourceToggle={hasSource ? () => setSourceOpen((value) => !value) : undefined}
+        />
       </div>
+      {sourceOpen && hasSource ? <SourceReviewPanel item={item} onEdit={hasInputs ? () => setEditing(true) : undefined} /> : null}
       {editing && hasInputs ? <ReviewInputEditor dealId={dealId} item={item} onDone={() => setEditing(false)} /> : null}
     </div>
   );
 }
 
-function ReviewActions({ item, dealId, editing, onEdit }: { item: ReviewItem; dealId: number; editing?: boolean; onEdit?: () => void }) {
+function ReviewActions({
+  item,
+  dealId,
+  editing,
+  sourceOpen,
+  onEdit,
+  onSourceToggle,
+}: {
+  item: ReviewItem;
+  dealId: number;
+  editing?: boolean;
+  sourceOpen?: boolean;
+  onEdit?: () => void;
+  onSourceToggle?: () => void;
+}) {
   const router = useRouter();
   const [busy, setBusy] = React.useState(false);
 
@@ -307,11 +339,68 @@ function ReviewActions({ item, dealId, editing, onEdit }: { item: ReviewItem; de
         {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <CheckCircle2 className="h-3.5 w-3.5" />}
         {item.confirmLabel ?? "Confirm"}
       </Button>
-      {item.actionHref ? (
-        <Button size="sm" variant="outline" asChild>
-          <a href={item.actionHref}>Open source</a>
+      {onSourceToggle ? (
+        <Button size="sm" variant={sourceOpen ? "secondary" : "outline"} onClick={onSourceToggle} disabled={busy}>
+          <Search className="h-3.5 w-3.5" />
+          {sourceOpen ? "Hide source" : "Inspect source"}
         </Button>
       ) : null}
+    </div>
+  );
+}
+
+function SourceReviewPanel({ item, onEdit }: { item: ReviewItem; onEdit?: () => void }) {
+  const firstSourceInput = item.inputs?.find((input) => input.provenance?.source_doc_name || input.provenance?.verification_note || input.provenance?.correction_note);
+  const provenance = firstSourceInput?.provenance;
+  const sourceName = item.source ?? sourceLabel(provenance) ?? "No source captured";
+  const evidence = provenance ? sourceSnippet(provenance) : "";
+  const location = provenance ? sourceLocation(provenance) : "";
+
+  return (
+    <div className="mt-4 rounded-lg border border-primary/25 bg-primary/5 p-3">
+      <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+        <div className="min-w-0">
+          <div className="flex items-center gap-2 text-xs font-semibold tracking-tight text-foreground">
+            <FileText className="h-3.5 w-3.5 text-primary" />
+            Source to review
+          </div>
+          <div className="mt-2 text-sm font-medium text-foreground">{sourceName}</div>
+          {location ? <div className="mt-0.5 text-xs text-muted-foreground">{location}</div> : null}
+          {item.value !== undefined ? (
+            <div className="mt-2 text-xs text-muted-foreground">
+              Current value: <span className="font-medium text-foreground">{formatReviewValue(item.value, item.path)}</span>
+            </div>
+          ) : null}
+        </div>
+        <div className="flex flex-wrap gap-2">
+          {onEdit ? (
+            <Button size="sm" variant="secondary" onClick={onEdit}>
+              Review inputs
+            </Button>
+          ) : null}
+          {item.actionHref ? (
+            <Button size="sm" variant="outline" asChild>
+              <a href={item.actionHref}>
+                <ExternalLink className="h-3.5 w-3.5" />
+                Open citation
+              </a>
+            </Button>
+          ) : null}
+        </div>
+      </div>
+      <div className="mt-3 rounded-md border border-border/70 bg-background/70 p-3 text-xs leading-relaxed text-muted-foreground">
+        {evidence ? (
+          <>
+            <span className="font-semibold text-foreground">Evidence: </span>
+            {evidence}
+          </>
+        ) : (
+          "Use the source link to inspect this item. If it is correct, confirm the row; if it is wrong, review and save the inputs."
+        )}
+      </div>
+      <div className="mt-2 text-[11px] leading-relaxed text-muted-foreground">
+        Confirming clears this row from Needs review. Editing inputs saves the corrected values everywhere else in the deal.
+      </div>
     </div>
   );
 }
@@ -320,7 +409,7 @@ function ReviewInputSummary({ inputs }: { inputs: ReviewInput[] }) {
   const visible = inputs.slice(0, 8);
   return (
     <div className="mt-3 rounded-lg border border-border/70 bg-muted/20 p-2.5">
-      <div className="mb-1.5 text-[10px] uppercase tracking-[0.14em] text-muted-foreground">Inputs to check</div>
+      <div className="mb-1.5 text-[10px] uppercase tracking-[0.14em] text-muted-foreground">Inputs this row depends on</div>
       <div className="flex flex-wrap gap-1.5">
         {visible.map((input) => (
           <span key={input.path} className="rounded-md border border-border bg-background px-2 py-1 text-[11px] text-muted-foreground">
@@ -349,7 +438,7 @@ function ReviewInputEditor({ dealId, item, onDone }: { dealId: number; item: Rev
       .filter((edit) => edit.value !== null);
 
     if (edits.length === 0) {
-      toast.error("Nothing to save", { description: "Enter or confirm at least one value." });
+      toast.error("Nothing to save", { description: "Enter a value or use Confirm to approve the row as-is." });
       return;
     }
 
@@ -378,11 +467,11 @@ function ReviewInputEditor({ dealId, item, onDone }: { dealId: number; item: Rev
       <div className="mb-2 flex items-center justify-between gap-3">
         <div>
           <div className="text-xs font-semibold tracking-tight text-foreground">Review and correct inputs</div>
-          <p className="mt-0.5 text-[11px] text-muted-foreground">Edit wrong values here, or leave them unchanged and save to approve this item.</p>
+          <p className="mt-0.5 text-[11px] text-muted-foreground">Edit wrong values here, or leave them unchanged and confirm the row above.</p>
         </div>
         <Button size="sm" onClick={saveAll} disabled={busy}>
           {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <CheckCircle2 className="h-3.5 w-3.5" />}
-          Save and clear
+          Save and clear row
         </Button>
       </div>
       <div className="grid gap-2 lg:grid-cols-2">
@@ -473,32 +562,32 @@ function flagItems(flags: ValidationFlag[], metrics: Metrics, provenance: Record
 }
 
 function sourceItems(metrics: Metrics, provenance: Record<string, FieldProvenance>): ReviewItem[] {
-  const out: ReviewItem[] = [];
-  for (const field of REVIEW_FIELDS) {
+  return REVIEW_FIELDS.flatMap((field) => {
     const prov = provenance[field.path];
     const value = getPath(metrics, field.path);
-    if (!prov || prov.locked) continue;
+    if (!prov || prov.locked) return [];
     const status = String(prov.status ?? "").toLowerCase();
     const confidence = typeof prov.confidence === "number" ? prov.confidence : null;
     const conflictCount = Array.isArray(prov.conflict) ? prov.conflict.length : 0;
     const needsReview = conflictCount > 1 || ["wrong", "missing", "unverifiable", "stale"].includes(status) || (confidence !== null && confidence < 85);
-    if (!needsReview) continue;
-    out.push({
-      key: `source:${field.path}`,
-      priority: conflictCount > 1 || status === "wrong" ? 75 : confidence !== null ? 40 - confidence / 10 : 35,
-      kind: "source",
-      area: areaForPath(field.path),
-      severity: conflictCount > 1 || status === "wrong" || status === "missing" ? "red" : "yellow",
-      title: `${field.label} needs review`,
-      detail: sourceDetail(prov),
-      path: field.path,
-      value,
-      source: sourceLabel(prov),
-      inputs: [{ path: field.path, label: field.label, value, provenance: prov }],
-      actionHref: sourceHref(field.path),
-    });
-  }
-  return out;
+    if (!needsReview) return [];
+    return [
+      {
+        key: `source:${field.path}`,
+        priority: conflictCount > 1 || status === "wrong" ? 75 : confidence !== null ? 40 - confidence / 10 : 35,
+        kind: "source" as const,
+        area: areaForPath(field.path),
+        severity: conflictCount > 1 || status === "wrong" || status === "missing" ? "red" as const : "yellow" as const,
+        title: `${field.label} needs review`,
+        detail: sourceDetail(prov),
+        path: field.path,
+        value,
+        source: sourceLabel(prov),
+        inputs: [{ path: field.path, label: field.label, value, provenance: prov }],
+        actionHref: sourceHref(field.path),
+      },
+    ];
+  });
 }
 
 function reviewInputsForMessage(message: string, primaryPath: string | undefined, metrics: Metrics, provenance: Record<string, FieldProvenance>): ReviewInput[] | undefined {
@@ -514,8 +603,7 @@ function reviewInputsForMessage(message: string, primaryPath: string | undefined
 function fallbackInputs(area: ReviewArea, metrics: Metrics, provenance: Record<string, FieldProvenance>): ReviewInput[] | undefined {
   const definitions = FALLBACK_INPUTS[area];
   if (!definitions?.length) return undefined;
-  const inputs = definitions.map((input) => ({ ...input, value: getPath(metrics, input.path), provenance: provenance[input.path] }));
-  return inputs.length > 0 ? inputs : undefined;
+  return definitions.map((input) => ({ ...input, value: getPath(metrics, input.path), provenance: provenance[input.path] }));
 }
 
 function mathCheckPassesNow(check: MathCheck, metrics: Metrics): boolean {
@@ -634,6 +722,19 @@ function sourceDetail(provenance: FieldProvenance): string {
 function sourceLabel(provenance?: FieldProvenance): string | undefined {
   if (!provenance?.source_doc_name) return undefined;
   return `${provenance.source_doc_name}${provenance.source_page ? ` p.${provenance.source_page}` : ""}`;
+}
+
+function sourceLocation(provenance: FieldProvenance): string {
+  const parts: string[] = [];
+  if (provenance.source_page) parts.push(`Page ${provenance.source_page}`);
+  if (provenance.source_sheet) parts.push(`Sheet ${provenance.source_sheet}`);
+  if (provenance.source_cell || provenance.source_range) parts.push(`Cell ${provenance.source_cell || provenance.source_range}`);
+  return parts.join(" / ");
+}
+
+function sourceSnippet(provenance: FieldProvenance): string {
+  const raw = provenance.correction_source || provenance.correction_note || provenance.verification_source || provenance.verification_note || "";
+  return String(raw).replace(/\s+/g, " ").trim();
 }
 
 function sourceHref(path: string): string {
