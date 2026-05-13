@@ -81,9 +81,9 @@ export function PipelineTimeline({ deal }: { deal: DealDetail }) {
     <Card elevated className="p-6">
       <div className="flex items-start justify-between gap-4">
         <div>
-          <h3 className="text-base font-semibold tracking-tight">Pipeline status</h3>
+          <h3 className="text-base font-semibold tracking-tight">Document review status</h3>
           <p className="mt-0.5 text-xs text-muted-foreground">
-            Upload, extraction, verification, math checks, and scoring progress for this deal.
+            Upload, extraction, source verification, math checks, and scoring progress for this deal.
           </p>
         </div>
         <PipelineBadge state={overallState(steps)} />
