@@ -37,7 +37,7 @@ export default async function Home() {
             <div className="text-[11px] uppercase tracking-[0.14em] text-muted-foreground mb-2">
               Overview
             </div>
-            <h1 className="text-display tracking-tight">Deal Pipeline</h1>
+            <h1 className="text-display tracking-tight">Deal Review</h1>
             <p className="text-sm text-muted-foreground mt-1.5 max-w-xl">
               {deals.length
                 ? `${deals.length} deal${deals.length === 1 ? "" : "s"} across your sponsors. Upload offering memos to extract, verify, and score them automatically.`
@@ -47,7 +47,7 @@ export default async function Home() {
         </div>
       </FadeIn>
 
-      {/* Pipeline widgets: velocity, win rate, capital, aging */}
+      {/* Deal widgets: velocity, win rate, capital, aging */}
       {pipeline ? (
         <PipelineWidgets summary={pipeline} />
       ) : (
