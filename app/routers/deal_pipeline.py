@@ -80,13 +80,13 @@ def _pipeline_error_message(error: Exception) -> str:
     text = str(error) or error.__class__.__name__
     kind = _pipeline_error_kind(error)
     if kind == "ai_quota":
-        return "Pipeline incomplete: the AI provider quota or credit balance was exhausted. The deal was not fully re-read, verified, or rescored. Add API credits or update billing, then re-run the pipeline."
+        return "Document review incomplete: the AI provider quota or credit balance was exhausted. The deal was not fully re-read, verified, or rescored. Add API credits or update billing, then review documents again."
     if kind == "ai_rate_limit":
-        return "Pipeline incomplete: the AI provider rate limit was reached. The deal was not fully re-read, verified, or rescored. Wait for the limit window to reset, then re-run the pipeline."
+        return "Document review incomplete: the AI provider rate limit was reached. The deal was not fully re-read, verified, or rescored. Wait for the limit window to reset, then review documents again."
     if kind == "ai_temporarily_unavailable":
-        return "Pipeline incomplete: the AI provider was temporarily unavailable or overloaded. The deal was not fully re-read, verified, or rescored. Wait a few minutes, then re-run the pipeline."
+        return "Document review incomplete: the AI provider was temporarily unavailable or overloaded. The deal was not fully re-read, verified, or rescored. Wait a few minutes, then review documents again."
     if kind == "ai_provider":
-        return f"Pipeline incomplete during the Anthropic AI call. The deal was not fully re-read, verified, or rescored. Details: {text[:420]}"
+        return f"Document review incomplete during the Anthropic AI call. The deal was not fully re-read, verified, or rescored. Details: {text[:420]}"
     return text[:500]
 
 
@@ -352,7 +352,7 @@ async def score_deal_endpoint(deal_id: int, db: AsyncSession = Depends(get_db)):
     deal.scores = scores
     deal.metrics = _set_pipeline_status(
         metrics,
-        _pipeline_status("complete", "score", "Pipeline complete. Extraction, verification, math checks, and scoring finished."),
+        _pipeline_status("complete", "score", "Document review complete. Extraction, verification, math checks, and scoring finished."),
     )
     await db.commit()
     return {"message": "Deal scored", "scores": scores}
@@ -374,7 +374,7 @@ async def _persist_pipeline_failure(db: AsyncSession, deal_id: int, step: str, m
         await notif_svc.emit(
             db,
             kind="error",
-            title=f"Pipeline stopped - {deal.project_name}",
+            title=f"Document review stopped - {deal.project_name}",
             body=error_message,
             href=f"/deals/{deal.id}?tab=overview",
             payload={"deal_id": deal.id, "step": step, "error": error_message, "error_kind": error_kind},
