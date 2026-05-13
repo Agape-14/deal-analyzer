@@ -39,6 +39,7 @@ def _pipeline_status(
     *,
     started_at: str | None = None,
     error: str | None = None,
+    error_kind: str | None = None,
 ) -> dict:
     now = now_iso()
     return {
@@ -48,6 +49,7 @@ def _pipeline_status(
         "started_at": started_at or now,
         "updated_at": now,
         "error": error,
+        "error_kind": error_kind,
     }
 
 
@@ -60,15 +62,31 @@ def _set_pipeline_status(metrics: dict | None, status: dict) -> dict:
     return next_metrics
 
 
-def _pipeline_error_message(error: Exception) -> str:
+def _pipeline_error_kind(error: Exception) -> str:
     text = str(error) or error.__class__.__name__
     lower = text.lower()
-    if "rate" in lower and "limit" in lower:
-        return "Pipeline stopped because the AI provider rate limit was reached. Wait a few minutes, then re-run the pipeline."
-    if "429" in lower or "too many requests" in lower:
-        return "Pipeline stopped because the AI provider returned a rate-limit error. Wait a few minutes, then re-run the pipeline."
+    if any(token in lower for token in ("credit", "credits", "quota", "balance", "billing", "payment", "insufficient_quota", "insufficient quota")):
+        return "ai_quota"
+    if ("rate" in lower and "limit" in lower) or "429" in lower or "too many requests" in lower:
+        return "ai_rate_limit"
+    if "overloaded" in lower or "529" in lower:
+        return "ai_temporarily_unavailable"
     if "anthropic" in lower:
-        return f"Pipeline stopped during the Anthropic AI call: {text[:420]}"
+        return "ai_provider"
+    return "unknown"
+
+
+def _pipeline_error_message(error: Exception) -> str:
+    text = str(error) or error.__class__.__name__
+    kind = _pipeline_error_kind(error)
+    if kind == "ai_quota":
+        return "Pipeline incomplete: the AI provider quota or credit balance was exhausted. The deal was not fully re-read, verified, or rescored. Add API credits or update billing, then re-run the pipeline."
+    if kind == "ai_rate_limit":
+        return "Pipeline incomplete: the AI provider rate limit was reached. The deal was not fully re-read, verified, or rescored. Wait for the limit window to reset, then re-run the pipeline."
+    if kind == "ai_temporarily_unavailable":
+        return "Pipeline incomplete: the AI provider was temporarily unavailable or overloaded. The deal was not fully re-read, verified, or rescored. Wait a few minutes, then re-run the pipeline."
+    if kind == "ai_provider":
+        return f"Pipeline incomplete during the Anthropic AI call. The deal was not fully re-read, verified, or rescored. Details: {text[:420]}"
     return text[:500]
 
 
@@ -348,9 +366,10 @@ async def _persist_pipeline_failure(db: AsyncSession, deal_id: int, step: str, m
         if not deal:
             return
         error_message = _pipeline_error_message(error)
+        error_kind = _pipeline_error_kind(error)
         deal.metrics = _set_pipeline_status(
             deal.metrics,
-            _pipeline_status("failed", step, message, error=error_message),
+            _pipeline_status("failed", step, message, error=error_message, error_kind=error_kind),
         )
         await notif_svc.emit(
             db,
@@ -358,7 +377,7 @@ async def _persist_pipeline_failure(db: AsyncSession, deal_id: int, step: str, m
             title=f"Pipeline stopped - {deal.project_name}",
             body=error_message,
             href=f"/deals/{deal.id}?tab=overview",
-            payload={"deal_id": deal.id, "step": step, "error": error_message},
+            payload={"deal_id": deal.id, "step": step, "error": error_message, "error_kind": error_kind},
         )
         await db.commit()
     except Exception:
