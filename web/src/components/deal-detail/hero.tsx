@@ -98,15 +98,15 @@ export function DealHero({ deal }: { deal: DealDetail }) {
       setPipelineStep("score");
       setPipelineStatus({ status: "running", step: "score", message: "Scoring started. Recalculating validation, math checks, and score." });
       await api.post(`/api/deals/${deal.id}/score`);
-      setPipelineStatus({ status: "complete", step: "score", message: "Pipeline complete. Extraction, verification, math checks, and scoring finished." });
-      toast.success("Pipeline complete", {
+      setPipelineStatus({ status: "complete", step: "score", message: "Document review complete. Extraction, verification, math checks, and scoring finished." });
+      toast.success("Document review complete", {
         description: "Documents were re-read, verified, math-checked, and scored.",
       });
       router.refresh();
     } catch (e) {
       const detail = (e as { detail?: string; message?: string })?.detail ?? (e as Error)?.message;
-      setPipelineStatus({ status: "failed", step: pipelineStep, message: "Pipeline incomplete.", error: detail });
-      toast.error("Pipeline incomplete", { description: detail });
+      setPipelineStatus({ status: "failed", step: pipelineStep, message: "Document review incomplete.", error: detail });
+      toast.error("Document review incomplete", { description: detail });
     } finally {
       if (mountedRef.current) {
         setPipelineRunning(false);
@@ -130,7 +130,7 @@ export function DealHero({ deal }: { deal: DealDetail }) {
     }
   }
 
-  const pipelineLabel = pipelineRunning ? pipelineStepLabel(pipelineStep) : "Re-run pipeline";
+  const pipelineLabel = pipelineRunning ? pipelineStepLabel(pipelineStep) : "Review documents again";
 
   return (
     <FadeIn>
@@ -212,7 +212,7 @@ export function DealHero({ deal }: { deal: DealDetail }) {
             </div>
             <PipelineNotice status={pipelineStatus} running={pipelineRunning} />
             <p className="max-w-sm text-center lg:text-right text-[11px] leading-relaxed text-muted-foreground">
-              Re-run pipeline reads all uploaded documents again. Recalculate score only uses already-extracted metrics.
+              Review documents again reads all uploaded documents again. Recalculate score only uses already-extracted metrics.
             </p>
           </div>
         </div>
@@ -260,7 +260,7 @@ function PipelineNotice({ status, running }: { status: PipelineStatus | null; ru
             <div className="mt-2 rounded-lg bg-card/70 px-3 py-2 text-[11px] text-foreground ring-1 ring-border/70">
               <div className="font-medium">What this means</div>
               <div className="mt-0.5 text-muted-foreground">
-                The score may still be based on old or partial extraction results. Do not rely on it until the pipeline finishes successfully.
+                The score may still be based on old or partial extraction results. Do not rely on it until document review finishes successfully.
               </div>
               <div className="mt-2 font-medium">Next step</div>
               <div className="mt-0.5 text-muted-foreground">{copy.nextStep}</div>
@@ -276,43 +276,43 @@ function PipelineNotice({ status, running }: { status: PipelineStatus | null; ru
 function pipelineNoticeCopy(status: PipelineStatus, category: string) {
   if (status.status === "complete") {
     return {
-      title: "Pipeline complete",
+      title: "Document review complete",
       message: status.message || "Extraction, verification, math checks, and scoring finished.",
       nextStep: "Review any remaining Needs attention items.",
     };
   }
   if (status.status !== "failed") {
     return {
-      title: "Pipeline running",
+      title: "Reviewing documents",
       message: status.message || "The deal is being re-read, verified, and scored.",
       nextStep: "Wait for this message to change before relying on the score.",
     };
   }
   if (category === "ai_quota") {
     return {
-      title: "Pipeline incomplete: API quota or credits exhausted",
-      message: status.error || "The AI provider quota or credit balance was exhausted before the pipeline finished.",
-      nextStep: "Add API credits or update billing, then click Re-run pipeline.",
+      title: "Document review incomplete: API quota or credits exhausted",
+      message: status.error || "The AI provider quota or credit balance was exhausted before document review finished.",
+      nextStep: "Add API credits or update billing, then click Review documents again.",
     };
   }
   if (category === "ai_rate_limit") {
     return {
-      title: "Pipeline incomplete: API rate limit hit",
-      message: status.error || "The AI provider rate limit was reached before the pipeline finished.",
-      nextStep: "Wait for the rate-limit window to reset, then click Re-run pipeline.",
+      title: "Document review incomplete: API rate limit hit",
+      message: status.error || "The AI provider rate limit was reached before document review finished.",
+      nextStep: "Wait for the rate-limit window to reset, then click Review documents again.",
     };
   }
   if (category === "ai_temporarily_unavailable") {
     return {
-      title: "Pipeline incomplete: AI provider unavailable",
-      message: status.error || "The AI provider was temporarily unavailable before the pipeline finished.",
-      nextStep: "Wait a few minutes, then click Re-run pipeline.",
+      title: "Document review incomplete: AI provider unavailable",
+      message: status.error || "The AI provider was temporarily unavailable before document review finished.",
+      nextStep: "Wait a few minutes, then click Review documents again.",
     };
   }
   return {
-    title: "Pipeline incomplete",
-    message: status.error || status.message || "The pipeline did not finish.",
-    nextStep: "Fix the issue shown above, then click Re-run pipeline.",
+    title: "Document review incomplete",
+    message: status.error || status.message || "Document review did not finish.",
+    nextStep: "Fix the issue shown above, then click Review documents again.",
   };
 }
 
@@ -347,7 +347,7 @@ async function waitForQualityTimestamp(
     const next = qualityTimestamp(res.summary, kind);
     if (next && next !== previous) return next;
   }
-  throw new Error(`${kind === "extract" ? "Extraction" : "Verification"} did not finish before the timeout. The pipeline status will stay visible here; check notifications or re-run after any API limits clear.`);
+  throw new Error(`${kind === "extract" ? "Extraction" : "Verification"} did not finish before the timeout. The document review status will stay visible here; check notifications or review documents again after any API limits clear.`);
 }
 
 function qualityTimestamp(quality: DealDetail["quality"] | DealQualitySummary | DataQualityGate | undefined, kind: "extract" | "verify"): string | null {
