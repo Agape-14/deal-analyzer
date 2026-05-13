@@ -9,6 +9,7 @@ type ReviewIssue = {
   deal: DealSummary;
   gate: DataQualityGate;
   reason: string;
+  nextAction: string;
   severity: "critical" | "warning";
 };
 
@@ -21,6 +22,7 @@ export function NeedsReviewPanel({ deals }: { deals: DealSummary[] }) {
         deal,
         gate,
         reason: issueReason(gate),
+        nextAction: issueNextAction(gate),
         severity: isCritical(gate.stage) ? "critical" : "warning",
       };
     })
@@ -37,9 +39,9 @@ export function NeedsReviewPanel({ deals }: { deals: DealSummary[] }) {
               {issues.length ? <ShieldAlert className="h-4 w-4" /> : <CheckCircle2 className="h-4 w-4" />}
             </div>
             <div>
-              <h2 className="text-base font-semibold tracking-tight">Needs review</h2>
+              <h2 className="text-base font-semibold tracking-tight">Needs attention</h2>
               <p className="mt-0.5 text-xs text-muted-foreground">
-                Deals with blocked, conflicting, unverifiable, or provisional scoring.
+                Clear these review queues before relying on a deal score or comparing alternatives.
               </p>
             </div>
           </div>
@@ -60,7 +62,7 @@ export function NeedsReviewPanel({ deals }: { deals: DealSummary[] }) {
         </div>
       ) : (
         <div className="mt-4 grid grid-cols-1 lg:grid-cols-2 2xl:grid-cols-3 gap-3">
-          {issues.slice(0, 6).map(({ deal, gate, reason, severity }) => (
+          {issues.slice(0, 6).map(({ deal, gate, reason, nextAction, severity }) => (
             <Link
               key={deal.id}
               href={`/deals/${deal.id}`}
@@ -73,12 +75,15 @@ export function NeedsReviewPanel({ deals }: { deals: DealSummary[] }) {
                 </div>
                 <ArrowUpRight className="h-4 w-4 shrink-0 text-muted-foreground transition-transform group-hover:-translate-y-0.5 group-hover:translate-x-0.5 group-hover:text-foreground" />
               </div>
-              <div className="mt-3 flex items-center gap-2">
+              <div className="mt-3 flex flex-wrap items-center gap-2">
                 <ScoreQualityBadge gate={gate} size="sm" />
                 <span className={cn("inline-flex items-center gap-1 text-xs", severity === "critical" ? "text-destructive" : "text-warning")}>
                   {severity === "critical" ? <AlertTriangle className="h-3 w-3" /> : <HelpCircle className="h-3 w-3" />}
                   {reason}
                 </span>
+              </div>
+              <div className="mt-3 rounded-md border border-border/70 bg-card/60 px-2.5 py-2 text-xs text-muted-foreground">
+                <span className="font-medium text-foreground">Next:</span> {nextAction}
               </div>
             </Link>
           ))}
@@ -98,12 +103,21 @@ function getQualityGate(deal: DealSummary): DataQualityGate | undefined {
 
 function issueReason(gate: DataQualityGate): string {
   const summary = gate.critical_summary;
-  if (gate.stage === "math_failed") return `${gate.math_summary?.fail ?? 0} math failure${gate.math_summary?.fail === 1 ? "" : "s"}`;
-  if (gate.stage === "conflicting") return `${summary?.conflicted ?? 0} conflict${summary?.conflicted === 1 ? "" : "s"}`;
-  if (gate.stage === "insufficient_source") return `${summary?.missing ?? 0} missing / ${summary?.bad ?? 0} bad`;
-  if (gate.stage === "needs_review") return `${summary?.unverified ?? 0} unverified critical`;
+  if (gate.stage === "math_failed") return `${gate.math_summary?.fail ?? 0} number${gate.math_summary?.fail === 1 ? "" : "s"} do not tie`;
+  if (gate.stage === "conflicting") return `${summary?.conflicted ?? 0} source conflict${summary?.conflicted === 1 ? "" : "s"}`;
+  if (gate.stage === "insufficient_source") return `${summary?.missing ?? 0} missing support / ${summary?.bad ?? 0} need correction`;
+  if (gate.stage === "needs_review") return `${summary?.unverified ?? 0} need confirmation`;
   if (gate.stage === "provisional") return "verification pending";
   return "review needed";
+}
+
+function issueNextAction(gate: DataQualityGate): string {
+  if (gate.stage === "math_failed") return "Open the deal and clear the top Needs review row.";
+  if (gate.stage === "conflicting") return "Confirm the correct source value or edit the extracted input.";
+  if (gate.stage === "insufficient_source") return "Add support, edit the value, or confirm the row manually.";
+  if (gate.stage === "needs_review") return "Inspect the cited evidence and confirm each remaining item.";
+  if (gate.stage === "provisional") return "Run the full pipeline so extraction, verification, and scoring finish.";
+  return "Open the deal review queue.";
 }
 
 function isCritical(stage?: string): boolean {
