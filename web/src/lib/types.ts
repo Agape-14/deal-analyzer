@@ -221,6 +221,7 @@ export interface PipelineStatus {
   step?: "idle" | "extract" | "verify" | "score" | string;
   message?: string;
   error?: string | null;
+  error_kind?: "ai_quota" | "ai_rate_limit" | "ai_temporarily_unavailable" | "ai_provider" | "unknown" | string | null;
   started_at?: string | null;
   updated_at?: string | null;
   finished_at?: string | null;
