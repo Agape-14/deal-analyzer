@@ -49,7 +49,7 @@ export function OverviewTab({ deal }: { deal: DealDetail }) {
         <summary className="cursor-pointer list-none text-sm font-semibold tracking-tight text-foreground marker:hidden">
           <span className="inline-flex items-center gap-2">
             Technical audit details
-            <span className="text-xs font-normal text-muted-foreground group-open:hidden">Show extraction counters, math status, and pipeline checks</span>
+            <span className="text-xs font-normal text-muted-foreground group-open:hidden">Show extraction counters, math status, and document review checks</span>
             <span className="hidden text-xs font-normal text-muted-foreground group-open:inline">Hide technical details</span>
           </span>
         </summary>
