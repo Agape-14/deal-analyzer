@@ -48,16 +48,16 @@ function confidenceReasons(gate?: DataQualityGate): string[] {
   const reasons: string[] = [];
   const critical = gate.critical_summary;
   if (critical) {
-    if (critical.missing) reasons.push(`${critical.missing} critical missing`);
-    if (critical.bad) reasons.push(`${critical.bad} flagged wrong`);
-    if (critical.conflicted) reasons.push(`${critical.conflicted} conflicts`);
-    if (critical.unverified) reasons.push(`${critical.unverified} unverified`);
-    if (critical.review_only) reasons.push(`${critical.review_only} review-only`);
+    if (critical.missing) reasons.push(`${critical.missing} missing support`);
+    if (critical.bad) reasons.push(`${critical.bad} need correction`);
+    if (critical.conflicted) reasons.push(`${critical.conflicted} source conflict${critical.conflicted === 1 ? "" : "s"}`);
+    if (critical.unverified) reasons.push(`${critical.unverified} need confirmation`);
+    if (critical.review_only) reasons.push(`${critical.review_only} analyst check${critical.review_only === 1 ? "" : "s"}`);
   }
   const math = gate.math_summary;
   if (math) {
-    if (math.fail) reasons.push(`${math.fail} failed math checks`);
-    if (math.warn) reasons.push(`${math.warn} math warnings`);
+    if (math.fail) reasons.push(`${math.fail} number${math.fail === 1 ? "" : "s"} do not tie`);
+    if (math.warn) reasons.push(`${math.warn} math warning${math.warn === 1 ? "" : "s"}`);
   }
   const breakdown = gate.confidence_breakdown;
   if (breakdown && reasons.length < 3) {
@@ -84,36 +84,36 @@ function stageUi(stage: string | null | undefined, canScore: boolean | undefined
     case "math_failed":
       return {
         Icon: AlertTriangle,
-        label: "Needs review",
-        detail: "Final score held until failed math checks are resolved",
+        label: "Numbers do not tie",
+        detail: "Final score held until the review queue items are cleared",
         className: "bg-destructive/15 text-destructive ring-destructive/30",
       };
     case "conflicting":
       return {
         Icon: ShieldAlert,
-        label: "Conflict",
-        detail: "Source documents disagree",
+        label: "Source conflict",
+        detail: "Source documents disagree; confirm the correct value",
         className: "bg-destructive/15 text-destructive ring-destructive/30",
       };
     case "insufficient_source":
       return {
         Icon: HelpCircle,
-        label: "Needs review",
-        detail: "Missing or unverifiable critical fields are holding the final score",
+        label: "Missing support",
+        detail: "A required field needs a source or manual confirmation",
         className: "bg-destructive/15 text-destructive ring-destructive/30",
       };
     case "needs_review":
       return {
         Icon: ShieldAlert,
         label: "Needs review",
-        detail: "Human review needed before relying on score",
+        detail: "Open the review queue to clear the remaining items",
         className: "bg-warning/15 text-warning ring-warning/30",
       };
     case "provisional":
       return {
         Icon: Clock3,
-        label: "Provisional",
-        detail: "Extracted but not fully verified",
+        label: "Checking",
+        detail: "Pipeline has extracted data, but verification is not complete",
         className: "bg-warning/15 text-warning ring-warning/30",
       };
     default:
