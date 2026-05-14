@@ -1,4 +1,5 @@
 import asyncio
+import json
 import logging
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -53,8 +54,41 @@ def _pipeline_status(
     }
 
 
+def _ensure_metrics_dict(value, context: str) -> dict:
+    """Return a metrics dict, accepting double-encoded JSON strings.
+
+    Claude and older upload paths can occasionally hand us a JSON object
+    encoded as a string. Without this guard, later merge code crashes with
+    messages like "'str' object has no attribute 'keys'". Parse one or two
+    layers, then fail with a user-readable error if it still is not an object.
+    """
+    if value is None:
+        return {}
+    if isinstance(value, dict):
+        return value
+    if isinstance(value, str):
+        raw = value.strip()
+        if not raw:
+            return {}
+        parsed = raw
+        for _ in range(2):
+            if not isinstance(parsed, str):
+                break
+            try:
+                parsed = json.loads(parsed)
+            except json.JSONDecodeError as exc:
+                raise ValueError(
+                    f"{context} returned text instead of a JSON object. "
+                    f"First 120 characters: {raw[:120]!r}. Parse error: {exc}"
+                ) from exc
+        if isinstance(parsed, dict):
+            return parsed
+        raise ValueError(f"{context} returned {type(parsed).__name__}, expected a JSON object.")
+    raise ValueError(f"{context} returned {type(value).__name__}, expected a JSON object.")
+
+
 def _set_pipeline_status(metrics: dict | None, status: dict) -> dict:
-    next_metrics = dict(metrics or {})
+    next_metrics = _ensure_metrics_dict(metrics, "Stored deal metrics")
     existing = next_metrics.get("_pipeline") if isinstance(next_metrics.get("_pipeline"), dict) else {}
     if existing and not status.get("started_at"):
         status["started_at"] = existing.get("started_at")
@@ -104,7 +138,7 @@ async def deal_quality(deal_id: int, db: AsyncSession = Depends(get_db)):
     deal = result.scalar_one_or_none()
     if not deal:
         raise HTTPException(status_code=404, detail="Deal not found")
-    metrics = deal.metrics or {}
+    metrics = _ensure_metrics_dict(deal.metrics, "Stored deal metrics")
     return {
         "summary": quality_summary(metrics),
         "stale_flags": staleness_flags(metrics, deal.documents or []),
@@ -147,6 +181,7 @@ async def _run_extract_background(deal_id: int):
             if not deal or not deal.documents:
                 return
 
+            existing_metrics = _ensure_metrics_dict(deal.metrics, "Stored deal metrics")
             usable_docs = [d for d in deal.documents if (d.extracted_text or "")]
             usable_pdfs = _pdf_docs(deal)
             per_doc_results: list[tuple[int, str, dict]] = []
@@ -163,6 +198,7 @@ async def _run_extract_background(deal_id: int):
                     )
                     try:
                         mx = await extract_metrics_from_docs(one_doc_text, doc_paths=[path] if path else [])
+                        mx = _ensure_metrics_dict(mx, f"Extraction for {doc.filename}")
                         per_doc_results.append((doc.id, doc.filename, mx))
                     except Exception:
                         log.exception("per-document extraction failed for deal %s doc %s", deal_id, doc.id)
@@ -175,10 +211,11 @@ async def _run_extract_background(deal_id: int):
                 doc_texts,
                 doc_paths=[d.file_path for d in usable_pdfs],
             )
+            incoming_metrics = _ensure_metrics_dict(incoming_metrics, "Document extraction")
 
             primary_doc = usable_docs[0] if len(usable_docs) == 1 else None
             merged, changes = smart_merge(
-                deal.metrics,
+                existing_metrics,
                 incoming_metrics,
                 source_doc_id=primary_doc.id if primary_doc else None,
                 source_doc_name=primary_doc.filename if primary_doc else "multiple documents",
@@ -218,8 +255,8 @@ async def _run_extract_background(deal_id: int):
                 "extract_complete",
                 "extract",
                 "Extraction complete. Values are ready for source verification.",
-                started_at=(deal.metrics or {}).get("_pipeline", {}).get("started_at")
-                if isinstance((deal.metrics or {}).get("_pipeline"), dict)
+                started_at=existing_metrics.get("_pipeline", {}).get("started_at")
+                if isinstance(existing_metrics.get("_pipeline"), dict)
                 else None,
             )
 
@@ -288,7 +325,7 @@ async def _run_verify_background(deal_id: int, auto_correct: bool):
                 return
 
             verification = await verify_deal_metrics(deal, db)
-            metrics = dict(deal.metrics or {})
+            metrics = _ensure_metrics_dict(deal.metrics, "Stored deal metrics")
             changes: list[str] = []
             if auto_correct:
                 metrics, changes = apply_corrections(metrics, verification)
@@ -343,7 +380,8 @@ async def score_deal_endpoint(deal_id: int, db: AsyncSession = Depends(get_db)):
     )
     await db.commit()
     try:
-        metrics = annotate_canonical_metrics(deal.metrics)
+        metrics = _ensure_metrics_dict(deal.metrics, "Stored deal metrics")
+        metrics = annotate_canonical_metrics(metrics)
         scores = score_deal(metrics)
     except Exception as e:
         await _persist_pipeline_failure(db, deal_id, "score", "Scoring failed.", e)
