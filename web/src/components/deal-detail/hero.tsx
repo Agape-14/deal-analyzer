@@ -43,6 +43,7 @@ export function DealHero({ deal }: { deal: DealDetail }) {
   const [scoring, setScoring] = React.useState(false);
   const [pipelineRunning, setPipelineRunning] = React.useState(false);
   const [pipelineStep, setPipelineStep] = React.useState<PipelineStep>("idle");
+  const pipelineStepRef = React.useRef<PipelineStep>("idle");
   const [pipelineStatus, setPipelineStatus] = React.useState<PipelineStatus | null>(
     (metrics as { _pipeline?: PipelineStatus })._pipeline ?? null,
   );
@@ -61,6 +62,11 @@ export function DealHero({ deal }: { deal: DealDetail }) {
     pickTrustedNumber(tr, provenance, ["target_returns.target_equity_multiple", "target_returns.net_equity_multiple"]) ??
     deal.target_equity_multiple;
 
+  const setCurrentPipelineStep = React.useCallback((step: PipelineStep) => {
+    pipelineStepRef.current = step;
+    setPipelineStep(step);
+  }, []);
+
   React.useEffect(() => {
     return () => {
       mountedRef.current = false;
@@ -69,7 +75,7 @@ export function DealHero({ deal }: { deal: DealDetail }) {
 
   async function runPipeline() {
     setPipelineRunning(true);
-    setPipelineStep("extract");
+    setCurrentPipelineStep("extract");
     const beforeExtract = qualityTimestamp(deal.quality, "extract");
     const beforeVerify = qualityTimestamp(deal.quality, "verify") ?? deal.scores?.data_quality?.verified_at ?? null;
 
@@ -84,7 +90,7 @@ export function DealHero({ deal }: { deal: DealDetail }) {
       await waitForQualityTimestamp(deal.id, "extract", beforeExtract, setPipelineStatus);
       if (!mountedRef.current) return;
 
-      setPipelineStep("verify");
+      setCurrentPipelineStep("verify");
       await api.post(`/api/deals/${deal.id}/verify`);
       setPipelineStatus({ status: "running", step: "verify", message: "Verification started. Checking source documents." });
       toast.success("Verification started", {
@@ -95,7 +101,7 @@ export function DealHero({ deal }: { deal: DealDetail }) {
       await waitForQualityTimestamp(deal.id, "verify", beforeVerify, setPipelineStatus);
       if (!mountedRef.current) return;
 
-      setPipelineStep("score");
+      setCurrentPipelineStep("score");
       setPipelineStatus({ status: "running", step: "score", message: "Scoring started. Recalculating validation, math checks, and score." });
       await api.post(`/api/deals/${deal.id}/score`);
       setPipelineStatus({ status: "complete", step: "score", message: "Document review complete. Extraction, verification, math checks, and scoring finished." });
@@ -105,12 +111,16 @@ export function DealHero({ deal }: { deal: DealDetail }) {
       router.refresh();
     } catch (e) {
       const detail = (e as { detail?: string; message?: string })?.detail ?? (e as Error)?.message;
-      setPipelineStatus({ status: "failed", step: pipelineStep, message: "Document review incomplete.", error: detail });
+      setPipelineStatus((current) => {
+        if (current?.status === "failed") return current;
+        const failedStep = pipelineStepRef.current === "idle" ? "extract" : pipelineStepRef.current;
+        return { status: "failed", step: failedStep, message: "Document review incomplete.", error: detail };
+      });
       toast.error("Document review incomplete", { description: detail });
     } finally {
       if (mountedRef.current) {
         setPipelineRunning(false);
-        setPipelineStep("idle");
+        setCurrentPipelineStep("idle");
       }
     }
   }
