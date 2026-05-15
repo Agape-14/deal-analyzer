@@ -37,6 +37,7 @@ from app.auth import (
     session_secret,
 )
 from app.rate_limit import describe_policies
+from app.services.json_parser_guard import install_deal_verifier_json_guard
 from app.services.pipeline_runner import start_pipeline_runner, stop_pipeline_runner
 
 
@@ -50,6 +51,11 @@ logging.basicConfig(
     datefmt="%Y-%m-%dT%H:%M:%S",
 )
 log = logging.getLogger("kenyon.boot")
+
+# Install review-time JSON and metrics-shape guards after routers import so
+# route-level direct imports are patched too. This prevents one malformed saved
+# value from crashing document review with errors like "str has no keys".
+install_deal_verifier_json_guard()
 
 
 @asynccontextmanager
