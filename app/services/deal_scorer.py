@@ -20,12 +20,39 @@ def _safe_get(metrics: dict, *keys, default=None):
     return current
 
 
+def _num(val):
+    """Coerce extracted values to float for numeric scoring.
+
+    The AI occasionally emits numbers as strings ("12.5", "12.5%",
+    "$50,000"). Bare `>=` against those raises
+    `'>=' not supported between instances of 'str' and 'int'`, which
+    surfaces as "Document review incomplete" on the deal hero card.
+    Strip common units and fall back to None when nothing usable
+    remains so callers can skip that scoring branch instead of
+    crashing the whole pipeline.
+    """
+    if val is None or isinstance(val, bool):
+        return None
+    if isinstance(val, (int, float)):
+        return float(val)
+    if isinstance(val, str):
+        cleaned = val.strip().replace(",", "").replace("$", "").replace("%", "")
+        if not cleaned:
+            return None
+        try:
+            return float(cleaned)
+        except ValueError:
+            return None
+    return None
+
+
 def _score_range(value, ranges: list[tuple]) -> int:
     """Score a value based on ranges. ranges = [(threshold, score), ...] sorted desc."""
-    if value is None:
-        return 5  # neutral if unknown
+    numeric = _num(value)
+    if numeric is None:
+        return 5  # neutral if unknown or non-numeric
     for threshold, score in ranges:
-        if value >= threshold:
+        if numeric >= threshold:
             return score
     return ranges[-1][1] if ranges else 5
 
@@ -36,14 +63,14 @@ def score_returns(metrics: dict) -> tuple[int, str]:
     strategy = summary.get("primary_strategy") or "unknown"
     tr = metrics.get("target_returns", {}) or {}
 
-    irr = summary.get("target_irr")
-    em = summary.get("target_equity_multiple")
-    coc = summary.get("cash_on_cash")
-    gross_irr = _safe_get(metrics, "target_returns", "gross_irr")
-    net_irr = _safe_get(metrics, "target_returns", "net_irr")
+    irr = _num(summary.get("target_irr"))
+    em = _num(summary.get("target_equity_multiple"))
+    coc = _num(summary.get("cash_on_cash"))
+    gross_irr = _num(_safe_get(metrics, "target_returns", "gross_irr"))
+    net_irr = _num(_safe_get(metrics, "target_returns", "net_irr"))
     sale = tr.get("sale_scenario") if isinstance(tr.get("sale_scenario"), dict) else {}
-    sale_irr = sale.get("sale_irr")
-    sale_em = sale.get("sale_equity_multiple")
+    sale_irr = _num(sale.get("sale_irr"))
+    sale_em = _num(sale.get("sale_equity_multiple"))
 
     irr_score = _score_range(irr, [(20, 10), (18, 9), (16, 8), (15, 7), (13, 6), (12, 5), (10, 4), (8, 3)])
     em_score = _score_range(em, [(2.5, 10), (2.2, 9), (2.0, 8), (1.8, 7), (1.6, 6), (1.5, 5), (1.3, 4)])
@@ -98,10 +125,10 @@ def score_returns(metrics: dict) -> tuple[int, str]:
 
 def score_market(metrics: dict) -> tuple[int, str]:
     """Score market quality. Weight: 15%"""
-    rent_growth = _safe_get(metrics, "market_location", "market_rent_growth")
-    job_growth = _safe_get(metrics, "market_location", "market_job_growth")
-    vacancy = _safe_get(metrics, "market_location", "market_vacancy_rate")
-    walk = _safe_get(metrics, "market_location", "walk_score")
+    rent_growth = _num(_safe_get(metrics, "market_location", "market_rent_growth"))
+    job_growth = _num(_safe_get(metrics, "market_location", "market_job_growth"))
+    vacancy = _num(_safe_get(metrics, "market_location", "market_vacancy_rate"))
+    walk = _num(_safe_get(metrics, "market_location", "walk_score"))
 
     scores = []
     notes = []
@@ -135,12 +162,12 @@ def score_market(metrics: dict) -> tuple[int, str]:
 
 def score_structure(metrics: dict) -> tuple[int, str]:
     """Score deal structure (fees, waterfall, alignment). Weight: 15%"""
-    pref = _safe_get(metrics, "deal_structure", "preferred_return")
-    asset_mgmt = _safe_get(metrics, "deal_structure", "fees_asset_mgmt")
-    acq_fee = _safe_get(metrics, "deal_structure", "fees_acquisition")
-    gp_coinvest_pct = _safe_get(metrics, "deal_structure", "gp_equity_coinvest_pct")
+    pref = _num(_safe_get(metrics, "deal_structure", "preferred_return"))
+    asset_mgmt = _num(_safe_get(metrics, "deal_structure", "fees_asset_mgmt"))
+    acq_fee = _num(_safe_get(metrics, "deal_structure", "fees_acquisition"))
+    gp_coinvest_pct = _num(_safe_get(metrics, "deal_structure", "gp_equity_coinvest_pct"))
     gp_co = _safe_get(metrics, "deal_structure", "gp_coinvest")
-    total_fee_drag = _safe_get(metrics, "target_returns", "total_fee_drag")
+    total_fee_drag = _num(_safe_get(metrics, "target_returns", "total_fee_drag"))
 
     scores = []
     notes = []
@@ -183,8 +210,8 @@ def score_structure(metrics: dict) -> tuple[int, str]:
             gp_val = None
 
     gp_is_rollover = _safe_get(metrics, "deal_structure", "gp_coinvest_is_rollover")
-    gp_cash = _safe_get(metrics, "deal_structure", "gp_cash_at_risk")
-    total_equity = _safe_get(metrics, "deal_structure", "total_equity_required")
+    gp_cash = _num(_safe_get(metrics, "deal_structure", "gp_cash_at_risk"))
+    total_equity = _num(_safe_get(metrics, "deal_structure", "total_equity_required"))
 
     if gp_val is not None:
         if gp_is_rollover is True:
@@ -237,7 +264,7 @@ def score_structure(metrics: dict) -> tuple[int, str]:
 
 def score_risk(metrics: dict) -> tuple[int, str]:
     """Score risk factors. Weight: 15%"""
-    ltv = _safe_get(metrics, "deal_structure", "ltv")
+    ltv = _num(_safe_get(metrics, "deal_structure", "ltv"))
     entitlement = _safe_get(metrics, "project_details", "entitlement_status")
 
     # Also check AI-provided risk scores
@@ -288,11 +315,11 @@ def score_risk(metrics: dict) -> tuple[int, str]:
 
 def score_financials(metrics: dict) -> tuple[int, str]:
     """Score financial assumptions. Weight: 15%"""
-    entry_cap = _safe_get(metrics, "financial_projections", "entry_cap_rate")
-    exit_cap = _safe_get(metrics, "financial_projections", "exit_cap_rate")
-    occupancy = _safe_get(metrics, "financial_projections", "occupancy_assumption")
-    rent_growth = _safe_get(metrics, "financial_projections", "rent_growth_assumption")
-    expense_ratio = _safe_get(metrics, "financial_projections", "operating_expense_ratio")
+    entry_cap = _num(_safe_get(metrics, "financial_projections", "entry_cap_rate"))
+    exit_cap = _num(_safe_get(metrics, "financial_projections", "exit_cap_rate"))
+    occupancy = _num(_safe_get(metrics, "financial_projections", "occupancy_assumption"))
+    rent_growth = _num(_safe_get(metrics, "financial_projections", "rent_growth_assumption"))
+    expense_ratio = _num(_safe_get(metrics, "financial_projections", "operating_expense_ratio"))
 
     scores = []
     notes = []
@@ -360,10 +387,10 @@ def score_financials(metrics: dict) -> tuple[int, str]:
 
 def score_underwriting(metrics: dict) -> tuple[int, str]:
     """Score underwriting quality (Burke's metrics). Weight: 10%"""
-    beo = _safe_get(metrics, "underwriting_checks", "break_even_occupancy")
-    dscr = _safe_get(metrics, "underwriting_checks", "dscr")
-    yoc = _safe_get(metrics, "underwriting_checks", "yield_on_cost")
-    entry_cap = _safe_get(metrics, "financial_projections", "entry_cap_rate")
+    beo = _num(_safe_get(metrics, "underwriting_checks", "break_even_occupancy"))
+    dscr = _num(_safe_get(metrics, "underwriting_checks", "dscr"))
+    yoc = _num(_safe_get(metrics, "underwriting_checks", "yield_on_cost"))
+    entry_cap = _num(_safe_get(metrics, "financial_projections", "entry_cap_rate"))
 
     scores = []
     notes = []
@@ -421,7 +448,7 @@ def score_sponsor(metrics: dict) -> tuple[int, str]:
     """Score sponsor quality (Burke's sponsor evaluation). Weight: 10%"""
     full_cycle = _safe_get(metrics, "sponsor_evaluation", "sponsor_full_cycle_deals")
     alignment = _safe_get(metrics, "sponsor_evaluation", "alignment_score")
-    gp_coinvest = _safe_get(metrics, "deal_structure", "gp_equity_coinvest_pct")
+    gp_coinvest = _num(_safe_get(metrics, "deal_structure", "gp_equity_coinvest_pct"))
 
     scores = []
     notes = []

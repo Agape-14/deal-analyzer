@@ -549,9 +549,13 @@ def _post_process_metrics(metrics: dict):
 
     metrics["target_returns"] = tr
 
-    total_cost = ds.get("total_project_cost")
-    units = pd_.get("unit_count")
-    sqft = pd_.get("total_sqft")
+    # Coerce up front — Claude occasionally emits the headline numbers
+    # as strings ("120", "$50,000"). Bare arithmetic / `>` against
+    # those crashes the extract pipeline with
+    # "'>=' not supported between instances of 'str' and 'int'".
+    total_cost = _safe_num(ds.get("total_project_cost"))
+    units = _safe_num(pd_.get("unit_count"))
+    sqft = _safe_num(pd_.get("total_sqft"))
 
     # Calculate total project cost if missing but we have equity + debt
     if not total_cost or total_cost == 0:
@@ -598,12 +602,12 @@ def _post_process_metrics(metrics: dict):
             ds["ltv_at_stabilization"] = round(permanent_loan / total_cost * 100, 1)
 
     # Yield on cost = stabilized NOI / total project cost
-    noi = fp.get("stabilized_noi")
+    noi = _safe_num(fp.get("stabilized_noi"))
     if noi and total_cost and total_cost > 0 and not uc.get("yield_on_cost"):
         uc["yield_on_cost"] = round(noi / total_cost * 100, 2)
 
     # DSCR = NOI / annual debt service (use perm loan for stabilized DSCR)
-    interest_rate = ds.get("interest_rate")
+    interest_rate = _safe_num(ds.get("interest_rate"))
     dscr_debt = permanent_loan or debt  # Use perm loan for stabilized DSCR if available
     if noi and dscr_debt and interest_rate and not uc.get("dscr"):
         annual_debt_service = dscr_debt * (interest_rate / 100)  # Simplified interest-only
@@ -611,13 +615,13 @@ def _post_process_metrics(metrics: dict):
             uc["dscr"] = round(noi / annual_debt_service, 2)
 
     # Revenue per unit
-    avg_rent = fp.get("avg_rent_per_unit")
+    avg_rent = _safe_num(fp.get("avg_rent_per_unit"))
     if avg_rent and units and units > 0 and not uc.get("revenue_per_unit"):
         uc["revenue_per_unit"] = round(avg_rent * 12)
 
     # GP co-invest percentage calculation
     gp_coinvest_raw = ds.get("gp_coinvest")
-    total_equity = ds.get("total_equity_required")
+    total_equity = _safe_num(ds.get("total_equity_required"))
     if gp_coinvest_raw and total_equity and not ds.get("gp_equity_coinvest_pct"):
         try:
             gp_val = float(str(gp_coinvest_raw).replace("%", "").replace("$", "").replace(",", ""))
