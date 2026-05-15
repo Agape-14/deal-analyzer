@@ -4,7 +4,7 @@ Railway's private network resolves `<service>.railway.internal` to
 IPv6 addresses, but their healthcheck probe connects over IPv4 (from
 a sibling process on the same node). Binding uvicorn to `--host ::`
 relies on Linux's default `net.ipv6.bindv6only=0` to accept both
-families — but some container runtimes flip that to 1, leaving us
+families - but some container runtimes flip that to 1, leaving us
 with an IPv6-only listener that Railway's IPv4 healthcheck can't
 reach.
 
@@ -21,6 +21,8 @@ import socket
 
 import uvicorn
 
+from app.services.json_parser_guard import install_deal_verifier_json_guard
+
 
 def _make_dualstack_socket(port: int) -> socket.socket:
     sock = socket.socket(socket.AF_INET6, socket.SOCK_STREAM)
@@ -32,6 +34,8 @@ def _make_dualstack_socket(port: int) -> socket.socket:
 
 
 def main() -> None:
+    install_deal_verifier_json_guard()
+
     port = int(os.environ.get("PORT", "8000"))
     sock = _make_dualstack_socket(port)
 
@@ -39,7 +43,7 @@ def main() -> None:
         "app.main:app",
         fd=sock.fileno(),
         # host/port are informational when `fd` is given, but uvicorn
-        # uses them in its startup log — match reality so the log is
+        # uses them in its startup log - match reality so the log is
         # honest about what's listening.
         host="::",
         port=port,
