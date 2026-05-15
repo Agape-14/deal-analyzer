@@ -6,11 +6,20 @@ double-encoded as a string, or older failed runs leave metrics or individual
 metric sections stored in that shape. That is valid JSON, but it breaks
 review/merge code with errors like "'str' object has no attribute 'keys'".
 This guard normalizes those shapes before document review touches them.
+
+There is also a *value*-level contract: the extraction prompt asks Claude to
+emit numeric fields as numbers, but Claude routinely returns "12.5", "$50,000",
+or "5%" instead. Bare `>=` against those raised
+"'>=' not supported between instances of 'str' and 'int'" inside the scorer.
+Rather than ask every consumer (scorer, validator, smart_merge, math_checker,
+cashflow_projector) to defend itself, we coerce numeric-looking strings to
+floats once at the boundary so downstream code can trust the shape.
 """
 
 from __future__ import annotations
 
 import json
+import re
 from typing import Any, Callable
 
 METRIC_SECTIONS = {
@@ -89,6 +98,68 @@ def _is_meaningful(value: Any) -> bool:
     return True
 
 
+# Pattern for a string that is unambiguously a number with optional
+# currency / percent / thousands-separator dressing. Deliberately strict:
+# anything with letters or units (e.g. "5 acres", "1BR", "Class A",
+# "2026-05-15", "650-555-1212") is left alone. Years like "2026" are
+# coerced to 2026.0 — downstream code never compares them numerically.
+_NUMERIC_STRING_RE = re.compile(
+    r"""^\s*
+        -?               # optional sign
+        \s*\$?\s*        # optional dollar sign
+        \d{1,3}(?:,\d{3})*(?:\.\d+)?   # 1,234.56 form
+                       |
+        -?\s*\$?\s*\d+(?:\.\d+)?       # plain digits with optional decimal
+        \s*%?\s*$""",
+    re.VERBOSE,
+)
+
+
+def _coerce_numeric_string(value: str) -> Any:
+    """Return float when value is a number-shaped string, else value."""
+    stripped = value.strip()
+    if not stripped:
+        return value
+    if not _NUMERIC_STRING_RE.match(stripped):
+        return value
+    cleaned = stripped.replace(",", "").replace("$", "").replace("%", "").strip()
+    try:
+        return float(cleaned)
+    except ValueError:
+        return value
+
+
+# Keys whose values are deliberately string-shaped even when they look
+# like numbers (room descriptors, lot sizing prose, ratios written as
+# "2.0x", waterfall narratives). We do not currently have a field that
+# *requires* preserving a numeric string, so this list is empty — but
+# wiring exists if a future field needs it.
+_PRESERVE_STRING_KEYS: set[str] = set()
+
+
+def coerce_metric_values(value: Any, *, key: str | None = None) -> Any:
+    """Recursively coerce numeric-looking strings to floats in a metrics tree.
+
+    Inversion: instead of asking every downstream consumer to defend
+    against `'>=' not supported between str and int`, normalize once at
+    the boundary so no consumer can ever receive a stringy number for a
+    numeric field.
+    """
+    if isinstance(value, dict):
+        return {k: coerce_metric_values(v, key=k) for k, v in value.items()}
+    if isinstance(value, list):
+        return [coerce_metric_values(v) for v in value]
+    if isinstance(value, bool) or value is None:
+        return value
+    if isinstance(value, (int, float)):
+        return value
+    if isinstance(value, str):
+        if key in _PRESERVE_STRING_KEYS:
+            return value
+        return _coerce_numeric_string(value)
+    return value
+
+
 def normalize_metrics_tree(value: Any, *, context: str = "Stored deal metrics") -> dict:
     """Normalize top-level metrics and nested metric sections in place.
 
@@ -134,6 +205,20 @@ def normalize_metrics_tree(value: Any, *, context: str = "Stored deal metrics") 
         if key in metrics and not isinstance(metrics[key], list):
             shape_errors.append({"path": key, "type": type(metrics[key]).__name__})
             metrics[key] = []
+
+    # Value-level normalization: coerce numeric-looking strings to floats
+    # for every metric section. This is the boundary that lets every
+    # downstream consumer (scorer, validator, smart_merge, math_checker,
+    # cashflow_projector, post-processor) trust that a numeric field is
+    # actually a number — eliminating the entire class of
+    # "'>=' not supported between str and int" failures by construction.
+    # Meta sections (_provenance, _verification, _pipeline, etc.) are
+    # excluded so we don't accidentally rewrite stored numeric strings
+    # in audit / status payloads.
+    for section in METRIC_SECTIONS:
+        section_value = metrics.get(section)
+        if isinstance(section_value, dict):
+            metrics[section] = coerce_metric_values(section_value)
 
     if shape_errors:
         metrics["_shape_errors"] = shape_errors[-20:]
