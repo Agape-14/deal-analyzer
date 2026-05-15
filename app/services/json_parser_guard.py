@@ -34,7 +34,6 @@ DICT_META_KEYS = {
     "_pipeline",
     "_canonical_returns",
     "_data_quality",
-    "_shape_errors",
     "_review_resolutions",
 }
 
@@ -42,6 +41,10 @@ LIST_META_KEYS = {
     "validation_flags",
     "_extraction_history",
     "_field_history",
+    # Stored as a list (see normalize_metrics_tree) — keep it classified
+    # as a list-shaped meta key so it cannot leak into the dict-merge
+    # path of smart_merge.
+    "_shape_errors",
 }
 
 

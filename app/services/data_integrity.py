@@ -168,10 +168,17 @@ def smart_merge(
             # Not a metric section — copy verbatim
             merged[section] = new_section
             continue
+        # A previous save can leave the stored value for this key as a
+        # non-dict (a list — e.g. stray `_shape_errors` — or a JSON
+        # string the AI emitted instead of an object). Treat it as
+        # empty for the field-level merge rather than calling
+        # `.keys()` on it and crashing the whole document review.
+        if not isinstance(old_section, dict):
+            old_section = {}
 
         out: dict[str, Any] = {}
         # Merge field-by-field across union of keys
-        for key in set([*new_section.keys(), *(old_section or {}).keys()]):
+        for key in set([*new_section.keys(), *old_section.keys()]):
             path = f"{section}.{key}"
             old_v = (old_section or {}).get(key)
             new_v = new_section.get(key)

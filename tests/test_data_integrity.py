@@ -70,6 +70,24 @@ def test_smart_merge_creates_provenance_per_field():
     assert prov["extracted_at"]  # non-empty ISO timestamp
 
 
+def test_smart_merge_survives_non_dict_old_section():
+    # Older saves can leave a top-level key holding a list (e.g. stray
+    # `_shape_errors`) or a stray JSON string. smart_merge used to call
+    # `.keys()` on that value and crash document review with
+    # "'list'/'str' object has no attribute 'keys'". The defensive
+    # branch should treat the bad shape as empty and let the new
+    # extraction values land.
+    existing = {
+        "deal_structure": {"ltv": 65},
+        "_shape_errors": [{"path": "deal_structure", "type": "str"}],
+        "stray_string_key": "some text the AI mis-emitted",
+    }
+    incoming = {"deal_structure": {"ltv": 70}}
+    merged, changes = smart_merge(existing, incoming)
+    assert merged["deal_structure"]["ltv"] == 70
+    assert "deal_structure.ltv" in changes
+
+
 # -------------------- detect_conflicts -------------------- #
 
 
