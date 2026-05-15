@@ -1,6 +1,8 @@
 import asyncio
+import copy
 import json
 import logging
+import traceback
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select
@@ -23,7 +25,7 @@ from app.services.data_integrity import (
     staleness_flags,
     now_iso,
 )
-from app.services.deal_extractor import extract_metrics_from_docs
+from app.services.deal_extractor import _post_process_metrics, extract_metrics_from_docs
 from app.services.deal_scorer import score_deal
 from app.services.deal_validator import validate_deal_metrics
 from app.services.deal_verifier import apply_corrections, verify_deal_metrics
@@ -144,6 +146,199 @@ async def deal_quality(deal_id: int, db: AsyncSession = Depends(get_db)):
         "stale_flags": staleness_flags(metrics, deal.documents or []),
         "pipeline": metrics.get("_pipeline"),
     }
+
+
+# Fields the downstream pipeline (scorer, validator, post-processor,
+# math_checker) compares numerically. If any of these is stored as a
+# non-numeric type, the pipeline crashes with "'>=' not supported
+# between instances of 'str' and 'int'" or similar. Listing them
+# explicitly here lets the diagnose endpoint flag the exact offender
+# instead of asking the operator to read tracebacks.
+_NUMERIC_FIELDS_BY_SECTION: dict[str, tuple[str, ...]] = {
+    "deal_structure": (
+        "ltv", "preferred_return", "fees_asset_mgmt", "fees_acquisition",
+        "fees_disposition", "fees_dev_fee", "fees_construction_mgmt",
+        "gp_equity_coinvest_pct", "total_project_cost", "total_equity_required",
+        "debt_amount", "construction_loan_amount", "permanent_loan_amount",
+        "hold_period_years", "interest_rate", "minimum_investment",
+        "gp_cash_at_risk",
+    ),
+    "target_returns": (
+        "target_irr", "net_irr", "gross_irr", "target_equity_multiple",
+        "net_equity_multiple", "gross_equity_multiple", "target_cash_on_cash",
+        "target_avg_annual_return", "projected_profit", "distribution_yield",
+        "total_fee_drag",
+    ),
+    "project_details": (
+        "unit_count", "total_sqft", "price_per_unit", "price_per_sqft",
+        "construction_duration_months", "renovation_timeline_months",
+        "current_occupancy", "current_avg_rent", "proforma_avg_rent",
+    ),
+    "financial_projections": (
+        "stabilized_noi", "entry_cap_rate", "exit_cap_rate",
+        "avg_rent_per_unit", "avg_rent_per_sqft", "rent_growth_assumption",
+        "occupancy_assumption", "operating_expense_ratio",
+        "construction_budget", "land_cost", "soft_costs", "hard_costs",
+    ),
+    "market_location": (
+        "market_population", "market_job_growth", "market_rent_growth",
+        "market_vacancy_rate", "walk_score",
+    ),
+    "underwriting_checks": (
+        "break_even_occupancy", "dscr", "yield_on_cost",
+        "expense_growth_assumption", "replacement_cost_per_unit",
+        "revenue_per_unit", "operating_expense_per_unit",
+        "management_fee_pct", "reserves_per_unit",
+    ),
+    "risk_assessment": (
+        "market_risk_score", "execution_risk_score", "financial_risk_score",
+        "entitlement_risk_score", "developer_risk_score", "overall_risk_score",
+    ),
+    "sponsor_evaluation": (
+        "sponsor_full_cycle_deals", "alignment_score",
+    ),
+}
+
+
+def _audit_metric_shapes(metrics: dict) -> list[dict]:
+    """Return one entry per field whose type does not match the numeric
+    contract the pipeline assumes. This is the diagnostic that tells you
+    *which* value is stringy without needing to reproduce the crash."""
+    issues: list[dict] = []
+    for section, fields in _NUMERIC_FIELDS_BY_SECTION.items():
+        block = metrics.get(section)
+        if not isinstance(block, dict):
+            if block not in (None, "", {}):
+                issues.append({
+                    "path": section,
+                    "expected": "dict",
+                    "actual_type": type(block).__name__,
+                    "value_preview": repr(block)[:120],
+                })
+            continue
+        for field in fields:
+            if field not in block:
+                continue
+            value = block[field]
+            if value is None or isinstance(value, bool):
+                continue
+            if isinstance(value, (int, float)):
+                continue
+            issues.append({
+                "path": f"{section}.{field}",
+                "expected": "number",
+                "actual_type": type(value).__name__,
+                "value_preview": repr(value)[:120],
+            })
+    return issues
+
+
+def _run_stage(name: str, fn) -> dict:
+    """Run a pipeline stage on a deep copy of metrics and capture the
+    outcome. Returns a structured record either way — the diagnose
+    endpoint never raises just because one stage fails."""
+    try:
+        fn()
+        return {"name": name, "ok": True}
+    except Exception as exc:  # noqa: BLE001
+        return {
+            "name": name,
+            "ok": False,
+            "error": f"{type(exc).__name__}: {exc}",
+            "trace_tail": traceback.format_exc().splitlines()[-12:],
+        }
+
+
+@router.get("/{deal_id}/diagnose")
+async def diagnose_deal(deal_id: int, db: AsyncSession = Depends(get_db)):
+    """In-process dry run of every pipeline stage against the stored
+    metrics. Pure read — never writes, never calls Claude. Returns:
+
+      - `pipeline`: the persisted `_pipeline` block (last known step/error)
+      - `shape_issues`: every numeric field stored as a non-number
+      - `stages`: per-stage `{ok, error, trace_tail}` records so you
+        can see exactly where the pipeline would crash if you hit
+        Review documents again — without rerunning extraction.
+
+    Use this any time the hero card says "Document review incomplete"
+    and you want the truth about why."""
+    result = await db.execute(
+        select(Deal).options(selectinload(Deal.documents)).where(Deal.id == deal_id)
+    )
+    deal = result.scalar_one_or_none()
+    if not deal:
+        raise HTTPException(status_code=404, detail="Deal not found")
+
+    raw_metrics = deal.metrics
+    report: dict = {
+        "deal_id": deal_id,
+        "project_name": deal.project_name,
+        "metrics_raw_type": type(raw_metrics).__name__,
+        "metrics_raw_preview": repr(raw_metrics)[:200] if not isinstance(raw_metrics, dict) else None,
+    }
+
+    # Stage 0: ensure metrics is a dict. If this fails, nothing else can run.
+    try:
+        metrics = _ensure_metrics_dict(raw_metrics, "Stored deal metrics")
+    except Exception as exc:  # noqa: BLE001
+        report["stages"] = [{
+            "name": "load_metrics",
+            "ok": False,
+            "error": f"{type(exc).__name__}: {exc}",
+            "trace_tail": traceback.format_exc().splitlines()[-12:],
+        }]
+        report["shape_issues"] = []
+        return report
+
+    report["pipeline"] = metrics.get("_pipeline")
+    report["top_level_keys"] = sorted(metrics.keys())
+    report["shape_issues"] = _audit_metric_shapes(metrics)
+
+    stages: list[dict] = [{"name": "load_metrics", "ok": True}]
+
+    stages.append(_run_stage(
+        "post_process_metrics",
+        lambda: _post_process_metrics(copy.deepcopy(metrics)),
+    ))
+    stages.append(_run_stage(
+        "annotate_canonical",
+        lambda: annotate_canonical_metrics(copy.deepcopy(metrics)),
+    ))
+    stages.append(_run_stage(
+        "validate_deal_metrics",
+        lambda: validate_deal_metrics(copy.deepcopy(metrics), deal.property_type),
+    ))
+    stages.append(_run_stage(
+        "staleness_flags",
+        lambda: staleness_flags(copy.deepcopy(metrics), deal.documents or []),
+    ))
+    stages.append(_run_stage(
+        "run_math_checks",
+        lambda: run_math_checks(copy.deepcopy(metrics)),
+    ))
+    stages.append(_run_stage(
+        "score_deal",
+        lambda: score_deal(copy.deepcopy(metrics), require_verified=False),
+    ))
+    stages.append(_run_stage(
+        "quality_summary",
+        lambda: quality_summary(copy.deepcopy(metrics)),
+    ))
+    stages.append(_run_stage(
+        "smart_merge_self",
+        lambda: smart_merge(copy.deepcopy(metrics), copy.deepcopy(metrics)),
+    ))
+
+    report["stages"] = stages
+    failed = [s for s in stages if not s.get("ok")]
+    report["summary"] = {
+        "stages_run": len(stages),
+        "stages_failed": len(failed),
+        "first_failure": failed[0]["name"] if failed else None,
+        "first_failure_error": failed[0].get("error") if failed else None,
+        "shape_issue_count": len(report["shape_issues"]),
+    }
+    return report
 
 
 @router.post("/{deal_id}/extract", dependencies=[Depends(limit("ai"))])
