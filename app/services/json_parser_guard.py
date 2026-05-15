@@ -257,3 +257,11 @@ def install_deal_verifier_json_guard() -> None:
 
         guarded_ensure_metrics_dict._metrics_tree_guard = True  # type: ignore[attr-defined]
         deal_pipeline._ensure_metrics_dict = guarded_ensure_metrics_dict
+
+    # deal_pipeline imports several functions directly. Rebind those route-level
+    # names so startup/import order cannot bypass the guard.
+    deal_pipeline.smart_merge = data_integrity.smart_merge
+    deal_pipeline.quality_summary = data_integrity.quality_summary
+    deal_pipeline.staleness_flags = data_integrity.staleness_flags
+    deal_pipeline.annotate_canonical_metrics = canonical_metrics.annotate_canonical_metrics
+    deal_pipeline.verify_deal_metrics = deal_verifier.verify_deal_metrics
