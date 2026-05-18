@@ -407,11 +407,12 @@ async function waitForQualityTimestamp(
   while (Date.now() - start < REVIEW_STEP_TIMEOUTS[kind]) {
     await sleep(POLL_INTERVAL);
     const res = await api.get<QualityResponse>(`/api/deals/${dealId}/quality`);
-    if (res.pipeline) onStatus?.(res.pipeline);
-    if (normalizedPipelineStatus(res.pipeline ?? null) === "failed") {
-      throw new Error(res.pipeline.error || res.pipeline.message || `${kind === "extract" ? "Document reading" : "Source verification"} failed.`);
+    const polledStatus = res.pipeline ?? null;
+    if (polledStatus) onStatus?.(polledStatus);
+    if (normalizedPipelineStatus(polledStatus) === "failed") {
+      throw new Error(polledStatus?.error || polledStatus?.message || `${kind === "extract" ? "Document reading" : "Source verification"} failed.`);
     }
-    const completedAt = documentReviewStepComplete(res.pipeline, kind);
+    const completedAt = documentReviewStepComplete(polledStatus, kind);
     if (completedAt) return completedAt;
     const next = qualityTimestamp(res.summary, kind);
     if (next && next !== previous) return next;
