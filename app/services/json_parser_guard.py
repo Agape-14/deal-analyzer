@@ -11,6 +11,7 @@ This guard normalizes those shapes before document review touches them.
 from __future__ import annotations
 
 import json
+import re
 from typing import Any, Callable
 
 METRIC_SECTIONS = {
@@ -42,6 +43,131 @@ LIST_META_KEYS = {
     "validation_flags",
     "_extraction_history",
     "_field_history",
+}
+
+NUMERIC_FIELDS_BY_SECTION = {
+    "deal_structure": {
+        "minimum_investment",
+        "total_equity_required",
+        "total_project_cost",
+        "construction_loan_amount",
+        "permanent_loan_amount",
+        "debt_amount",
+        "ltv",
+        "interest_rate",
+        "hold_period_years",
+        "preferred_return",
+        "fees_dev_fee",
+        "fees_asset_mgmt",
+        "fees_acquisition",
+        "fees_disposition",
+        "fees_construction_mgmt",
+        "gp_equity_coinvest_pct",
+        "gp_cash_at_risk",
+    },
+    "target_returns": {
+        "target_irr",
+        "target_equity_multiple",
+        "target_cash_on_cash",
+        "target_avg_annual_return",
+        "projected_profit",
+        "gross_irr",
+        "net_irr",
+        "gross_equity_multiple",
+        "net_equity_multiple",
+        "distribution_yield",
+        "total_fee_drag",
+    },
+    "project_details": {
+        "unit_count",
+        "total_sqft",
+        "price_per_unit",
+        "price_per_sqft",
+        "construction_duration_months",
+        "renovation_timeline_months",
+        "current_occupancy",
+        "current_avg_rent",
+        "proforma_avg_rent",
+    },
+    "construction_costs": {
+        "total_project_cost",
+        "total_project_cost_per_unit",
+        "hard_costs_total",
+        "hard_costs_per_unit",
+        "hard_costs_per_sqft",
+        "land_cost_total",
+        "land_cost_per_unit",
+        "soft_costs_total",
+        "soft_costs_per_unit",
+        "site_work_total",
+        "contingency_total",
+        "contingency_pct",
+        "financing_costs_total",
+        "developer_fee_total",
+        "reserves_total",
+    },
+    "financial_projections": {
+        "stabilized_noi",
+        "entry_cap_rate",
+        "exit_cap_rate",
+        "avg_rent_per_unit",
+        "avg_rent_per_sqft",
+        "rent_growth_assumption",
+        "occupancy_assumption",
+        "operating_expense_ratio",
+        "construction_budget",
+        "land_cost",
+        "soft_costs",
+        "hard_costs",
+        "contingency",
+    },
+    "market_location": {
+        "market_population",
+        "market_job_growth",
+        "market_rent_growth",
+        "market_vacancy_rate",
+        "walk_score",
+    },
+    "risk_assessment": {
+        "market_risk_score",
+        "execution_risk_score",
+        "financial_risk_score",
+        "entitlement_risk_score",
+        "developer_risk_score",
+        "overall_risk_score",
+    },
+    "underwriting_checks": {
+        "break_even_occupancy",
+        "dscr",
+        "yield_on_cost",
+        "expense_growth_assumption",
+        "replacement_cost_per_unit",
+        "revenue_per_unit",
+        "operating_expense_per_unit",
+        "management_fee_pct",
+        "reserves_per_unit",
+    },
+    "sponsor_evaluation": {
+        "sponsor_full_cycle_deals",
+        "alignment_score",
+    },
+}
+
+NESTED_NUMERIC_FIELDS = {
+    ("target_returns", "hold_scenario"): {
+        "cash_on_cash_return",
+        "priority_return",
+        "annual_cash_flow_per_share",
+        "distribution_yield",
+    },
+    ("target_returns", "sale_scenario"): {
+        "assumed_sale_year",
+        "assumed_hold_years",
+        "sale_irr",
+        "sale_equity_multiple",
+        "projected_profit_on_sale",
+        "exit_cap_rate",
+    },
 }
 
 
@@ -84,6 +210,88 @@ def _is_meaningful(value: Any) -> bool:
     if isinstance(value, (dict, list)) and not value:
         return False
     return True
+
+
+def _preview(value: Any) -> str:
+    text = str(value)
+    return text[:120] + ("..." if len(text) > 120 else "")
+
+
+def _coerce_number(value: Any) -> float | None:
+    if value is None or isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        return float(value)
+    if not isinstance(value, str):
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return None
+
+    text = value.strip()
+    if not text:
+        return None
+    lowered = text.lower()
+    if lowered in {"na", "n/a", "none", "null", "unknown", "not stated", "not provided", "-"}:
+        return None
+
+    negative = lowered.startswith("(") and lowered.endswith(")")
+    cleaned = lowered.strip("()")
+    cleaned = cleaned.replace("$", "").replace("%", "").replace(",", "").replace("x", "").strip()
+    suffix_matches = re.findall(r"(-?\d+(?:\.\d+)?)\s*([kmb])\b", cleaned)
+    if len(suffix_matches) == 1:
+        number = float(suffix_matches[0][0])
+        suffix = suffix_matches[0][1]
+        multiplier = {"k": 1_000.0, "m": 1_000_000.0, "b": 1_000_000_000.0}[suffix]
+        return -number * multiplier if negative else number * multiplier
+    if len(suffix_matches) > 1:
+        return None
+
+    matches = re.findall(r"-?\d+(?:\.\d+)?", cleaned)
+    if len(matches) != 1:
+        return None
+    try:
+        number = float(matches[0])
+        return -number if negative else number
+    except ValueError:
+        return None
+
+
+def _coerce_numeric_value(container: dict, key: str, path: str, shape_errors: list[dict]) -> None:
+    if key not in container:
+        return
+    value = container.get(key)
+    number = _coerce_number(value)
+    if number is not None:
+        container[key] = int(number) if number.is_integer() else number
+        return
+    if _is_meaningful(value):
+        shape_errors.append({
+            "path": path,
+            "type": type(value).__name__,
+            "expected": "number",
+            "value": _preview(value),
+        })
+        container[key] = None
+
+
+def _coerce_numeric_fields(metrics: dict, shape_errors: list[dict]) -> None:
+    for section, keys in NUMERIC_FIELDS_BY_SECTION.items():
+        values = metrics.get(section)
+        if not isinstance(values, dict):
+            continue
+        for key in keys:
+            _coerce_numeric_value(values, key, f"{section}.{key}", shape_errors)
+
+    for (section, nested_key), keys in NESTED_NUMERIC_FIELDS.items():
+        parent = metrics.get(section)
+        if not isinstance(parent, dict):
+            continue
+        nested = parent.get(nested_key)
+        if not isinstance(nested, dict):
+            continue
+        for key in keys:
+            _coerce_numeric_value(nested, key, f"{section}.{nested_key}.{key}", shape_errors)
 
 
 def normalize_metrics_tree(value: Any, *, context: str = "Stored deal metrics") -> dict:
@@ -132,6 +340,8 @@ def normalize_metrics_tree(value: Any, *, context: str = "Stored deal metrics") 
             shape_errors.append({"path": key, "type": type(metrics[key]).__name__})
             metrics[key] = []
 
+    _coerce_numeric_fields(metrics, shape_errors)
+
     if shape_errors:
         metrics["_shape_errors"] = shape_errors[-20:]
     return metrics
@@ -172,7 +382,7 @@ def _restore_passthrough(merged: dict, existing_passthrough: dict, incoming_pass
 
 def install_deal_verifier_json_guard() -> None:
     """Patch review-time parsing and metric-shape normalization at startup."""
-    from app.services import canonical_metrics, data_integrity, deal_extractor, deal_verifier
+    from app.services import canonical_metrics, data_integrity, deal_extractor, deal_scorer, deal_validator, deal_verifier, math_checker
 
     current_parse: Callable[[str], Any] = deal_verifier._parse_json_defensively
     if not getattr(current_parse, "_json_object_guard", False):
@@ -235,6 +445,30 @@ def install_deal_verifier_json_guard() -> None:
         guarded_annotate._metrics_tree_guard = True  # type: ignore[attr-defined]
         canonical_metrics.annotate_canonical_metrics = guarded_annotate
 
+    current_validate = deal_validator.validate_deal_metrics
+    if not getattr(current_validate, "_metrics_tree_guard", False):
+        def guarded_validate_deal_metrics(metrics, *args, **kwargs):
+            return current_validate(normalize_metrics_tree(metrics, context="Validation metrics"), *args, **kwargs)
+
+        guarded_validate_deal_metrics._metrics_tree_guard = True  # type: ignore[attr-defined]
+        deal_validator.validate_deal_metrics = guarded_validate_deal_metrics
+
+    current_math = math_checker.run_math_checks
+    if not getattr(current_math, "_metrics_tree_guard", False):
+        def guarded_run_math_checks(metrics, *args, **kwargs):
+            return current_math(normalize_metrics_tree(metrics, context="Math check metrics"), *args, **kwargs)
+
+        guarded_run_math_checks._metrics_tree_guard = True  # type: ignore[attr-defined]
+        math_checker.run_math_checks = guarded_run_math_checks
+
+    current_score = deal_scorer.score_deal
+    if not getattr(current_score, "_metrics_tree_guard", False):
+        def guarded_score_deal(metrics, *args, **kwargs):
+            return current_score(normalize_metrics_tree(metrics, context="Scoring metrics"), *args, **kwargs)
+
+        guarded_score_deal._metrics_tree_guard = True  # type: ignore[attr-defined]
+        deal_scorer.score_deal = guarded_score_deal
+
     current_verify = deal_verifier.verify_deal_metrics
     if not getattr(current_verify, "_metrics_object_guard", False):
         async def guarded_verify_deal_metrics(deal, db) -> dict:
@@ -257,6 +491,10 @@ def install_deal_verifier_json_guard() -> None:
 
         guarded_ensure_metrics_dict._metrics_tree_guard = True  # type: ignore[attr-defined]
         deal_pipeline._ensure_metrics_dict = guarded_ensure_metrics_dict
+
+    deal_pipeline.score_deal = deal_scorer.score_deal
+    deal_pipeline.validate_deal_metrics = deal_validator.validate_deal_metrics
+    deal_pipeline.run_math_checks = math_checker.run_math_checks
 
     # deal_pipeline imports several functions directly. Rebind those route-level
     # names so startup/import order cannot bypass the guard.
