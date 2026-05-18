@@ -164,11 +164,11 @@ async def extract_deal_metrics(deal_id: int, db: AsyncSession = Depends(get_db))
 
     deal.metrics = _set_pipeline_status(
         deal.metrics,
-        _pipeline_status("running", "extract", "Extraction started. Reading all uploaded documents."),
+        _pipeline_status("running", "extract", "Document review started. Reading all uploaded documents."),
     )
     await db.commit()
     asyncio.ensure_future(_run_extract_background(deal_id))
-    return {"message": "Extraction started", "status": "started", "deal_id": deal_id}
+    return {"message": "Document review started", "status": "started", "deal_id": deal_id}
 
 
 async def _run_extract_background(deal_id: int):
@@ -254,7 +254,7 @@ async def _run_extract_background(deal_id: int):
             merged["_pipeline"] = _pipeline_status(
                 "extract_complete",
                 "extract",
-                "Extraction complete. Values are ready for source verification.",
+                "Documents read. Source verification still needs to finish before the score can be trusted.",
                 started_at=existing_metrics.get("_pipeline", {}).get("started_at")
                 if isinstance(existing_metrics.get("_pipeline"), dict)
                 else None,
@@ -291,7 +291,7 @@ async def _run_extract_background(deal_id: int):
             await db.commit()
         except Exception as e:
             log.exception("extract pipeline failed for deal %s", deal_id)
-            await _persist_pipeline_failure(db, deal_id, "extract", "Extraction failed.", e)
+            await _persist_pipeline_failure(db, deal_id, "extract", "Document reading failed.", e)
 
 
 @router.post("/{deal_id}/verify", dependencies=[Depends(limit("ai"))])
@@ -307,11 +307,11 @@ async def verify_deal_endpoint(deal_id: int, auto_correct: bool = True, db: Asyn
 
     deal.metrics = _set_pipeline_status(
         deal.metrics,
-        _pipeline_status("running", "verify", "Verification started. Checking extracted values against source documents."),
+        _pipeline_status("running", "verify", "Source verification started. Checking extracted values against source documents."),
     )
     await db.commit()
     asyncio.ensure_future(_run_verify_background(deal_id, auto_correct))
-    return {"message": "Verification started", "status": "started", "deal_id": deal_id}
+    return {"message": "Source verification started", "status": "started", "deal_id": deal_id}
 
 
 async def _run_verify_background(deal_id: int, auto_correct: bool):
@@ -344,7 +344,7 @@ async def _run_verify_background(deal_id: int, auto_correct: bool):
             metrics["_pipeline"] = _pipeline_status(
                 "verify_complete",
                 "verify",
-                "Verification complete. Values are ready to be scored.",
+                "Sources checked. Values are ready for scoring.",
                 started_at=(deal.metrics or {}).get("_pipeline", {}).get("started_at")
                 if isinstance((deal.metrics or {}).get("_pipeline"), dict)
                 else None,
@@ -362,7 +362,7 @@ async def _run_verify_background(deal_id: int, auto_correct: bool):
             await db.commit()
         except Exception as e:
             log.exception("verify pipeline failed for deal %s", deal_id)
-            await _persist_pipeline_failure(db, deal_id, "verify", "Verification failed.", e)
+            await _persist_pipeline_failure(db, deal_id, "verify", "Source verification failed.", e)
 
 
 @router.post("/{deal_id}/score", dependencies=[Depends(limit("write"))])
@@ -376,7 +376,7 @@ async def score_deal_endpoint(deal_id: int, db: AsyncSession = Depends(get_db)):
 
     deal.metrics = _set_pipeline_status(
         deal.metrics,
-        _pipeline_status("running", "score", "Scoring started. Recalculating validation, math checks, and score."),
+        _pipeline_status("running", "score", "Updating score. Rechecking validation, math checks, and score."),
     )
     await db.commit()
     try:
@@ -384,13 +384,13 @@ async def score_deal_endpoint(deal_id: int, db: AsyncSession = Depends(get_db)):
         metrics = annotate_canonical_metrics(metrics)
         scores = score_deal(metrics)
     except Exception as e:
-        await _persist_pipeline_failure(db, deal_id, "score", "Scoring failed.", e)
+        await _persist_pipeline_failure(db, deal_id, "score", "Score update failed.", e)
         raise HTTPException(status_code=503, detail=_pipeline_error_message(e))
 
     deal.scores = scores
     deal.metrics = _set_pipeline_status(
         metrics,
-        _pipeline_status("complete", "score", "Document review complete. Extraction, verification, math checks, and scoring finished."),
+        _pipeline_status("complete", "score", "Document review complete. Values were extracted, source-checked, math-checked, and scored."),
     )
     await db.commit()
     return {"message": "Deal scored", "scores": scores}
