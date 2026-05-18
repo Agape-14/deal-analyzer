@@ -81,9 +81,9 @@ export function DealHero({ deal }: { deal: DealDetail }) {
 
     try {
       await api.post(`/api/deals/${deal.id}/extract`);
-      setPipelineStatus({ status: "running", step: "extract", message: "Extraction started. Reading all uploaded documents." });
-      toast.success("Extraction started", {
-        description: "Reading all uploaded documents again.",
+      setPipelineStatus({ status: "running", step: "extract", message: "Document review started. Reading all uploaded documents." });
+      toast.success("Document review started", {
+        description: "Reading PDFs, Excel files, and saved document text.",
         duration: 5000,
       });
 
@@ -92,8 +92,8 @@ export function DealHero({ deal }: { deal: DealDetail }) {
 
       setCurrentPipelineStep("verify");
       await api.post(`/api/deals/${deal.id}/verify`);
-      setPipelineStatus({ status: "running", step: "verify", message: "Verification started. Checking source documents." });
-      toast.success("Verification started", {
+      setPipelineStatus({ status: "running", step: "verify", message: "Source verification started. Checking extracted values against source documents." });
+      toast.success("Source verification started", {
         description: "Checking extracted values against source documents.",
         duration: 5000,
       });
@@ -102,11 +102,11 @@ export function DealHero({ deal }: { deal: DealDetail }) {
       if (!mountedRef.current) return;
 
       setCurrentPipelineStep("score");
-      setPipelineStatus({ status: "running", step: "score", message: "Scoring started. Recalculating validation, math checks, and score." });
+      setPipelineStatus({ status: "running", step: "score", message: "Updating score. Rechecking validation, math checks, and score." });
       await api.post(`/api/deals/${deal.id}/score`);
-      setPipelineStatus({ status: "complete", step: "score", message: "Document review complete. Extraction, verification, math checks, and scoring finished." });
+      setPipelineStatus({ status: "complete", step: "score", message: "Document review complete. Values were extracted, source-checked, math-checked, and scored." });
       toast.success("Document review complete", {
-        description: "Documents were re-read, verified, math-checked, and scored.",
+        description: "Values were extracted, source-checked, math-checked, and scored.",
       });
       router.refresh();
     } catch (e) {
@@ -130,7 +130,7 @@ export function DealHero({ deal }: { deal: DealDetail }) {
     try {
       await api.post(`/api/deals/${deal.id}/score`);
       toast.success("Score recalculated", {
-        description: "This used the metrics already extracted into the database.",
+        description: "This only uses values already saved from the last document review.",
       });
       router.refresh();
     } catch (e) {
@@ -222,7 +222,7 @@ export function DealHero({ deal }: { deal: DealDetail }) {
             </div>
             <PipelineNotice status={pipelineStatus} running={pipelineRunning} />
             <p className="max-w-sm text-center lg:text-right text-[11px] leading-relaxed text-muted-foreground">
-              Review documents again reads all uploaded documents again. Recalculate score only uses already-extracted metrics.
+              Review documents again re-reads every uploaded file and rechecks sources. Recalculate score only uses values already saved from the last document review.
             </p>
           </div>
         </div>
@@ -243,11 +243,14 @@ function Metric({ label, value }: { label: string; value: string }) {
 function PipelineNotice({ status, running }: { status: PipelineStatus | null; running: boolean }) {
   if (!status?.status || status.status === "idle") return null;
 
-  const failed = status.status === "failed";
-  const complete = status.status === "complete";
+  const statusName = normalizedPipelineStatus(status);
+  const failed = statusName === "failed";
+  const complete = statusName === "complete";
+  const active = running || statusName === "running";
+  const intermediate = ["extract_complete", "verify_complete"].includes(statusName);
   const category = pipelineFailureCategory(status);
   const copy = pipelineNoticeCopy(status, category);
-  const Icon = failed ? AlertCircle : complete ? CheckCircle2 : Loader2;
+  const Icon = failed ? AlertCircle : complete ? CheckCircle2 : active ? Loader2 : AlertCircle;
 
   return (
     <div
@@ -258,11 +261,13 @@ function PipelineNotice({ status, running }: { status: PipelineStatus | null; ru
           ? "border-destructive/45 bg-destructive/10 text-destructive shadow-destructive/10"
           : complete
             ? "border-success/35 bg-success/10 text-success"
-            : "border-primary/35 bg-primary/10 text-primary",
+            : intermediate
+              ? "border-warning/40 bg-warning/10 text-warning"
+              : "border-primary/35 bg-primary/10 text-primary",
       )}
     >
       <div className="flex items-start gap-3">
-        <Icon className={cn("mt-0.5 h-4 w-4 shrink-0", running && !failed && !complete && "animate-spin")} />
+        <Icon className={cn("mt-0.5 h-4 w-4 shrink-0", active && !failed && !complete && "animate-spin")} />
         <div className="min-w-0">
           <div className="font-semibold">{copy.title}</div>
           <div className="mt-1 text-current/85">{copy.message}</div>
@@ -284,16 +289,39 @@ function PipelineNotice({ status, running }: { status: PipelineStatus | null; ru
 }
 
 function pipelineNoticeCopy(status: PipelineStatus, category: string) {
-  if (status.status === "complete") {
+  const statusName = normalizedPipelineStatus(status);
+  if (statusName === "complete") {
     return {
       title: "Document review complete",
-      message: status.message || "Extraction, verification, math checks, and scoring finished.",
+      message: status.message || "Values were extracted, source-checked, math-checked, and scored.",
       nextStep: "Review any remaining Needs attention items.",
     };
   }
-  if (status.status !== "failed") {
+  if (statusName === "extract_complete") {
     return {
-      title: "Reviewing documents",
+      title: "Documents read - source check still needed",
+      message: status.message || "Uploaded files were read, but source verification has not finished yet.",
+      nextStep: "If this message does not change, click Review documents again to finish source verification and scoring.",
+    };
+  }
+  if (statusName === "verify_complete") {
+    return {
+      title: "Sources checked - score update still needed",
+      message: status.message || "Extracted values were checked against source documents and are ready to score.",
+      nextStep: "Click Recalculate score, or click Review documents again to re-read everything from scratch.",
+    };
+  }
+  if (statusName !== "failed") {
+    const step = String(status.step ?? "").toLowerCase();
+    return {
+      title:
+        step === "extract"
+          ? "Reading documents"
+          : step === "verify"
+            ? "Checking sources"
+            : step === "score"
+              ? "Updating score"
+              : "Reviewing documents",
       message: status.message || "The deal is being re-read, verified, and scored.",
       nextStep: "Wait for this message to change before relying on the score.",
     };
@@ -326,6 +354,10 @@ function pipelineNoticeCopy(status: PipelineStatus, category: string) {
   };
 }
 
+function normalizedPipelineStatus(status: PipelineStatus | null): string {
+  return String(status?.status ?? "").toLowerCase();
+}
+
 function pipelineFailureCategory(status: PipelineStatus): string {
   const explicit = String(status.error_kind || "").toLowerCase();
   if (explicit) return explicit;
@@ -352,12 +384,12 @@ async function waitForQualityTimestamp(
     const res = await api.get<QualityResponse>(`/api/deals/${dealId}/quality`);
     if (res.pipeline) onStatus?.(res.pipeline);
     if (res.pipeline?.status === "failed") {
-      throw new Error(res.pipeline.error || res.pipeline.message || `${kind === "extract" ? "Extraction" : "Verification"} failed.`);
+      throw new Error(res.pipeline.error || res.pipeline.message || `${kind === "extract" ? "Document reading" : "Source verification"} failed.`);
     }
     const next = qualityTimestamp(res.summary, kind);
     if (next && next !== previous) return next;
   }
-  throw new Error(`${kind === "extract" ? "Extraction" : "Verification"} did not finish before the timeout. The document review status will stay visible here; check notifications or review documents again after any API limits clear.`);
+  throw new Error(`${kind === "extract" ? "Document reading" : "Source verification"} did not finish before the timeout. The document review status will stay visible here; check notifications or review documents again after any API limits clear.`);
 }
 
 function qualityTimestamp(quality: DealDetail["quality"] | DealQualitySummary | DataQualityGate | undefined, kind: "extract" | "verify"): string | null {
@@ -373,13 +405,13 @@ function qualityTimestamp(quality: DealDetail["quality"] | DealQualitySummary | 
 function pipelineStepLabel(step: PipelineStep): string {
   switch (step) {
     case "extract":
-      return "Extracting docs...";
+      return "Reading documents...";
     case "verify":
-      return "Verifying sources...";
+      return "Checking sources...";
     case "score":
-      return "Scoring...";
+      return "Updating score...";
     default:
-      return "Running...";
+      return "Working...";
   }
 }
 
