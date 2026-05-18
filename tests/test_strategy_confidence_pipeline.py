@@ -46,7 +46,7 @@ def test_pipeline_rate_limit_errors_are_user_readable():
     message = _pipeline_error_message(Exception("Anthropic API error 429: rate limit exceeded"))
 
     assert "rate limit" in message.lower()
-    assert "re-run the pipeline" in message.lower()
+    assert "review documents again" in message.lower()
 
 
 def test_json_safe_removes_non_finite_numbers_from_metrics():
