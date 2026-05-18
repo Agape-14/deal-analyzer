@@ -14,7 +14,10 @@ import { cn, fmtMoney, fmtMultiple, fmtPct } from "@/lib/utils";
 import type { CanonicalReturnSummary, DataQualityGate, DealDetail, DealQualitySummary, FieldProvenance } from "@/lib/types";
 
 const POLL_INTERVAL = 5_000;
-const POLL_TIMEOUT = 8 * 60_000;
+const REVIEW_STEP_TIMEOUTS: Record<"extract" | "verify", number> = {
+  extract: 20 * 60_000,
+  verify: 12 * 60_000,
+};
 
 const STATUS_STYLES: Record<string, string> = {
   reviewing: "bg-muted/60 text-muted-foreground",
@@ -114,7 +117,13 @@ export function DealHero({ deal }: { deal: DealDetail }) {
       setPipelineStatus((current) => {
         if (current?.status === "failed") return current;
         const failedStep = pipelineStepRef.current === "idle" ? "extract" : pipelineStepRef.current;
-        return { status: "failed", step: failedStep, message: "Document review incomplete.", error: detail };
+        return {
+          status: "failed",
+          step: failedStep,
+          message: "Document review incomplete.",
+          error: detail,
+          error_kind: isReviewTimeout(detail) ? "timeout" : null,
+        };
       });
       toast.error("Document review incomplete", { description: detail });
     } finally {
@@ -244,11 +253,12 @@ function PipelineNotice({ status, running }: { status: PipelineStatus | null; ru
   if (!status?.status || status.status === "idle") return null;
 
   const statusName = normalizedPipelineStatus(status);
-  const failed = statusName === "failed";
+  const category = pipelineFailureCategory(status);
+  const timedOut = category === "timeout";
+  const failed = statusName === "failed" && !timedOut;
   const complete = statusName === "complete";
   const active = running || statusName === "running";
   const intermediate = ["extract_complete", "verify_complete"].includes(statusName);
-  const category = pipelineFailureCategory(status);
   const copy = pipelineNoticeCopy(status, category);
   const Icon = failed ? AlertCircle : complete ? CheckCircle2 : active ? Loader2 : AlertCircle;
 
@@ -263,7 +273,9 @@ function PipelineNotice({ status, running }: { status: PipelineStatus | null; ru
             ? "border-success/35 bg-success/10 text-success"
             : intermediate
               ? "border-warning/40 bg-warning/10 text-warning"
-              : "border-primary/35 bg-primary/10 text-primary",
+              : timedOut
+                ? "border-warning/40 bg-warning/10 text-warning"
+                : "border-primary/35 bg-primary/10 text-primary",
       )}
     >
       <div className="flex items-start gap-3">
@@ -271,7 +283,7 @@ function PipelineNotice({ status, running }: { status: PipelineStatus | null; ru
         <div className="min-w-0">
           <div className="font-semibold">{copy.title}</div>
           <div className="mt-1 text-current/85">{copy.message}</div>
-          {failed && (
+          {(failed || timedOut) && (
             <div className="mt-2 rounded-lg bg-card/70 px-3 py-2 text-[11px] text-foreground ring-1 ring-border/70">
               <div className="font-medium">What this means</div>
               <div className="mt-0.5 text-muted-foreground">
@@ -347,6 +359,13 @@ function pipelineNoticeCopy(status: PipelineStatus, category: string) {
       nextStep: "Wait a few minutes, then click Review documents again.",
     };
   }
+  if (category === "timeout") {
+    return {
+      title: "Document review is taking longer than expected",
+      message: status.error || "The review may still be running in the background.",
+      nextStep: "Refresh this page in a few minutes. If it has not advanced, click Review documents again.",
+    };
+  }
   return {
     title: "Document review incomplete",
     message: status.error || status.message || "Document review did not finish.",
@@ -358,10 +377,16 @@ function normalizedPipelineStatus(status: PipelineStatus | null): string {
   return String(status?.status ?? "").toLowerCase();
 }
 
+function isReviewTimeout(message: string | null | undefined): boolean {
+  const text = String(message ?? "").toLowerCase();
+  return text.includes("timeout") || text.includes("timed out") || text.includes("taking longer") || text.includes("did not finish");
+}
+
 function pipelineFailureCategory(status: PipelineStatus): string {
   const explicit = String(status.error_kind || "").toLowerCase();
   if (explicit) return explicit;
   const text = `${status.error || ""} ${status.message || ""}`.toLowerCase();
+  if (isReviewTimeout(text)) return "timeout";
   if (["credit", "credits", "quota", "balance", "billing", "payment", "insufficient_quota", "insufficient quota"].some((token) => text.includes(token))) {
     return "ai_quota";
   }
@@ -379,17 +404,29 @@ async function waitForQualityTimestamp(
   onStatus?: (status: PipelineStatus | null) => void,
 ): Promise<string> {
   const start = Date.now();
-  while (Date.now() - start < POLL_TIMEOUT) {
+  while (Date.now() - start < REVIEW_STEP_TIMEOUTS[kind]) {
     await sleep(POLL_INTERVAL);
     const res = await api.get<QualityResponse>(`/api/deals/${dealId}/quality`);
     if (res.pipeline) onStatus?.(res.pipeline);
-    if (res.pipeline?.status === "failed") {
+    if (normalizedPipelineStatus(res.pipeline ?? null) === "failed") {
       throw new Error(res.pipeline.error || res.pipeline.message || `${kind === "extract" ? "Document reading" : "Source verification"} failed.`);
     }
+    const completedAt = documentReviewStepComplete(res.pipeline, kind);
+    if (completedAt) return completedAt;
     const next = qualityTimestamp(res.summary, kind);
     if (next && next !== previous) return next;
   }
-  throw new Error(`${kind === "extract" ? "Document reading" : "Source verification"} did not finish before the timeout. The document review status will stay visible here; check notifications or review documents again after any API limits clear.`);
+  throw new Error(`${kind === "extract" ? "Document reading" : "Source verification"} is taking longer than expected. The document review may still be running in the background. Refresh this page in a few minutes, or click Review documents again if it has not advanced.`);
+}
+
+function documentReviewStepComplete(status: PipelineStatus | null | undefined, kind: "extract" | "verify"): string | null {
+  const statusName = normalizedPipelineStatus(status ?? null);
+  const completed =
+    kind === "extract"
+      ? ["extract_complete", "verify_complete", "complete"].includes(statusName)
+      : ["verify_complete", "complete"].includes(statusName);
+  if (!completed) return null;
+  return status?.updated_at ?? status?.started_at ?? new Date().toISOString();
 }
 
 function qualityTimestamp(quality: DealDetail["quality"] | DealQualitySummary | DataQualityGate | undefined, kind: "extract" | "verify"): string | null {
