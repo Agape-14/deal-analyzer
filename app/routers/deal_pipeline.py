@@ -53,6 +53,8 @@ def _pipeline_status(
     started_at: str | None = None,
     error: str | None = None,
     error_kind: str | None = None,
+    progress_pct: int | None = None,
+    estimated_total_seconds: int | None = None,
 ) -> dict:
     now = now_iso()
     return {
@@ -63,7 +65,51 @@ def _pipeline_status(
         "updated_at": now,
         "error": error,
         "error_kind": error_kind,
+        "progress_pct": _pipeline_progress(status, step, progress_pct),
+        "estimated_total_seconds": estimated_total_seconds,
     }
+
+
+def _pipeline_progress(status: str, step: str, explicit: int | None = None) -> int:
+    if explicit is not None:
+        return max(0, min(100, int(explicit)))
+    status_name = str(status or "").lower()
+    step_name = str(step or "").lower()
+    if status_name == "complete":
+        return 100
+    if status_name == "extract_complete":
+        return 45
+    if status_name == "verify_complete":
+        return 82
+    if status_name == "failed":
+        return 0
+    if step_name == "extract":
+        return 12
+    if step_name == "verify":
+        return 55
+    if step_name == "score":
+        return 92
+    return 5
+
+
+def _estimate_review_seconds(deal: Deal) -> int:
+    """Return a conservative ETA for reading, verifying, and scoring docs.
+
+    AI provider queueing and rate limits can dominate runtime, so this is only a
+    planning estimate for the UI. It scales mainly by document type/count.
+    """
+    docs = list(deal.documents or [])
+    if not docs:
+        return 60
+    pdf_count = len(_pdf_docs(deal))
+    sheet_count = sum(
+        1
+        for doc in docs
+        if str(doc.file_path or doc.filename or "").lower().endswith((".xlsx", ".xls", ".csv"))
+    )
+    text_only_count = max(0, len(docs) - pdf_count - sheet_count)
+    seconds = 90 + (pdf_count * 120) + (sheet_count * 45) + (text_only_count * 25)
+    return max(120, min(45 * 60, seconds))
 
 
 def _ensure_metrics_dict(value, context: str) -> dict:
@@ -104,6 +150,10 @@ def _set_pipeline_status(metrics: dict | None, status: dict) -> dict:
     existing = next_metrics.get("_pipeline") if isinstance(next_metrics.get("_pipeline"), dict) else {}
     if existing and not status.get("started_at"):
         status["started_at"] = existing.get("started_at")
+    if existing and status.get("estimated_total_seconds") is None:
+        status["estimated_total_seconds"] = existing.get("estimated_total_seconds")
+    if existing and status.get("status") == "failed" and status.get("progress_pct") == 0:
+        status["progress_pct"] = existing.get("progress_pct")
     next_metrics["_pipeline"] = status
     return next_metrics
 
@@ -176,7 +226,13 @@ async def extract_deal_metrics(deal_id: int, db: AsyncSession = Depends(get_db))
 
     deal.metrics = _set_pipeline_status(
         deal.metrics,
-        _pipeline_status("running", "extract", "Document review started. Reading all uploaded documents."),
+        _pipeline_status(
+            "running",
+            "extract",
+            "Document review started. Reading all uploaded documents.",
+            progress_pct=10,
+            estimated_total_seconds=_estimate_review_seconds(deal),
+        ),
     )
     await db.commit()
     asyncio.ensure_future(_run_extract_background(deal_id))
@@ -201,7 +257,13 @@ async def review_deal_documents(deal_id: int, db: AsyncSession = Depends(get_db)
 
     deal.metrics = _set_pipeline_status(
         deal.metrics,
-        _pipeline_status("running", "extract", "Document review started. Reading all uploaded documents."),
+        _pipeline_status(
+            "running",
+            "extract",
+            "Document review started. Reading all uploaded documents.",
+            progress_pct=10,
+            estimated_total_seconds=_estimate_review_seconds(deal),
+        ),
     )
     await db.commit()
     asyncio.ensure_future(_run_document_review_background(deal_id))
@@ -220,12 +282,39 @@ async def _run_document_review_background(deal_id: int):
     if str(status.get("status") or "").lower() != "extract_complete":
         return
 
+    await _mark_pipeline_running(
+        deal_id,
+        "verify",
+        "Documents read. Checking extracted values against source documents.",
+        progress_pct=55,
+    )
     await _run_verify_background(deal_id, True)
     status = await _pipeline_for_deal(deal_id)
     if str(status.get("status") or "").lower() != "verify_complete":
         return
 
     await _run_score_background(deal_id)
+
+
+async def _mark_pipeline_running(deal_id: int, step: str, message: str, *, progress_pct: int) -> None:
+    async with async_session() as db:
+        result = await db.execute(select(Deal).where(Deal.id == deal_id))
+        deal = result.scalar_one_or_none()
+        if not deal:
+            return
+        existing_metrics = _ensure_metrics_dict(deal.metrics, "Stored deal metrics")
+        started_at = existing_metrics.get("_pipeline", {}).get("started_at") if isinstance(existing_metrics.get("_pipeline"), dict) else None
+        deal.metrics = _set_pipeline_status(
+            existing_metrics,
+            _pipeline_status(
+                "running",
+                step,
+                message,
+                started_at=started_at,
+                progress_pct=progress_pct,
+            ),
+        )
+        await db.commit()
 
 
 async def _pipeline_for_deal(deal_id: int) -> dict:
@@ -326,6 +415,7 @@ async def _run_extract_background(deal_id: int):
                 started_at=existing_metrics.get("_pipeline", {}).get("started_at")
                 if isinstance(existing_metrics.get("_pipeline"), dict)
                 else None,
+                progress_pct=45,
             )
 
             deal.metrics = merged
@@ -416,6 +506,7 @@ async def _run_verify_background(deal_id: int, auto_correct: bool):
                 started_at=(deal.metrics or {}).get("_pipeline", {}).get("started_at")
                 if isinstance((deal.metrics or {}).get("_pipeline"), dict)
                 else None,
+                progress_pct=82,
             )
             deal.metrics = metrics
             deal.scores = score_deal(metrics, math_checks=math_results)
@@ -471,9 +562,17 @@ async def _run_score_background(deal_id: int):
         if not deal or not deal.metrics:
             return
 
+        existing_metrics = _ensure_metrics_dict(deal.metrics, "Stored deal metrics")
+        started_at = existing_metrics.get("_pipeline", {}).get("started_at") if isinstance(existing_metrics.get("_pipeline"), dict) else None
         deal.metrics = _set_pipeline_status(
-            deal.metrics,
-            _pipeline_status("running", "score", "Updating score. Rechecking validation, math checks, and score."),
+            existing_metrics,
+            _pipeline_status(
+                "running",
+                "score",
+                "Updating score. Rechecking validation, math checks, and score.",
+                started_at=started_at,
+                progress_pct=92,
+            ),
         )
         await db.commit()
         try:
@@ -489,7 +588,13 @@ async def _run_score_background(deal_id: int):
         deal.scores = scores
         deal.metrics = _set_pipeline_status(
             metrics,
-            _pipeline_status("complete", "score", "Document review complete. Values were extracted, source-checked, math-checked, and scored."),
+            _pipeline_status(
+                "complete",
+                "score",
+                "Document review complete. Values were extracted, source-checked, math-checked, and scored.",
+                started_at=started_at,
+                progress_pct=100,
+            ),
         )
         await notif_svc.emit(
             db,
