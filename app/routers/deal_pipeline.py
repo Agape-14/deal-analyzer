@@ -183,6 +183,62 @@ async def extract_deal_metrics(deal_id: int, db: AsyncSession = Depends(get_db))
     return {"message": "Document review started", "status": "started", "deal_id": deal_id}
 
 
+@router.post("/{deal_id}/review", dependencies=[Depends(limit("ai"))])
+async def review_deal_documents(deal_id: int, db: AsyncSession = Depends(get_db)):
+    result = await db.execute(
+        select(Deal).options(selectinload(Deal.documents)).where(Deal.id == deal_id)
+    )
+    deal = result.scalar_one_or_none()
+    if not deal:
+        raise HTTPException(status_code=404, detail="Deal not found")
+    if not deal.documents:
+        raise HTTPException(status_code=400, detail="No documents uploaded yet")
+
+    usable_docs = [d for d in deal.documents if (d.extracted_text or "")]
+    usable_pdfs = _pdf_docs(deal)
+    if not usable_docs and not usable_pdfs:
+        raise HTTPException(status_code=400, detail="No extracted text or PDF files available")
+
+    deal.metrics = _set_pipeline_status(
+        deal.metrics,
+        _pipeline_status("running", "extract", "Document review started. Reading all uploaded documents."),
+    )
+    await db.commit()
+    asyncio.ensure_future(_run_document_review_background(deal_id))
+    return {"message": "Document review started", "status": "started", "deal_id": deal_id}
+
+
+async def _run_document_review_background(deal_id: int):
+    """Run the full document review as one backend-owned job.
+
+    The browser should not be responsible for sequencing extraction,
+    verification, and scoring. If it disconnects or times out, the backend
+    keeps the review moving and persists the real status for the UI to poll.
+    """
+    await _run_extract_background(deal_id)
+    status = await _pipeline_for_deal(deal_id)
+    if str(status.get("status") or "").lower() != "extract_complete":
+        return
+
+    await _run_verify_background(deal_id, True)
+    status = await _pipeline_for_deal(deal_id)
+    if str(status.get("status") or "").lower() != "verify_complete":
+        return
+
+    await _run_score_background(deal_id)
+
+
+async def _pipeline_for_deal(deal_id: int) -> dict:
+    async with async_session() as db:
+        result = await db.execute(select(Deal).where(Deal.id == deal_id))
+        deal = result.scalar_one_or_none()
+        if not deal:
+            return {}
+        metrics = _ensure_metrics_dict(deal.metrics, "Stored deal metrics")
+        pipeline = metrics.get("_pipeline")
+        return pipeline if isinstance(pipeline, dict) else {}
+
+
 async def _run_extract_background(deal_id: int):
     async with async_session() as db:
         try:
@@ -406,6 +462,44 @@ async def score_deal_endpoint(deal_id: int, db: AsyncSession = Depends(get_db)):
     )
     await db.commit()
     return {"message": "Deal scored", "scores": scores}
+
+
+async def _run_score_background(deal_id: int):
+    async with async_session() as db:
+        result = await db.execute(select(Deal).where(Deal.id == deal_id))
+        deal = result.scalar_one_or_none()
+        if not deal or not deal.metrics:
+            return
+
+        deal.metrics = _set_pipeline_status(
+            deal.metrics,
+            _pipeline_status("running", "score", "Updating score. Rechecking validation, math checks, and score."),
+        )
+        await db.commit()
+        try:
+            metrics = _ensure_metrics_dict(deal.metrics, "Stored deal metrics")
+            metrics = annotate_canonical_metrics(metrics)
+            math_checks = metrics.get("_math_checks", {})
+            results = math_checks.get("results") if isinstance(math_checks, dict) else None
+            scores = score_deal(metrics, math_checks=results if isinstance(results, list) else None)
+        except Exception as e:
+            await _persist_pipeline_failure(db, deal_id, "score", "Score update failed.", e)
+            return
+
+        deal.scores = scores
+        deal.metrics = _set_pipeline_status(
+            metrics,
+            _pipeline_status("complete", "score", "Document review complete. Values were extracted, source-checked, math-checked, and scored."),
+        )
+        await notif_svc.emit(
+            db,
+            kind="success",
+            title=f"Document review complete - {deal.project_name}",
+            body="Values were extracted, source-checked, math-checked, and scored.",
+            href=f"/deals/{deal.id}?tab=overview",
+            payload={"deal_id": deal.id},
+        )
+        await db.commit()
 
 
 async def _persist_pipeline_failure(db: AsyncSession, deal_id: int, step: str, message: str, error: Exception) -> None:
