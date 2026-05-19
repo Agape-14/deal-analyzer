@@ -11,13 +11,10 @@ import { ScoreQualityBadge } from "@/components/deal-detail/score-quality-badge"
 import { FadeIn } from "@/components/motion";
 import { api } from "@/lib/api";
 import { cn, fmtMoney, fmtMultiple, fmtPct } from "@/lib/utils";
-import type { CanonicalReturnSummary, DataQualityGate, DealDetail, DealQualitySummary, FieldProvenance } from "@/lib/types";
+import type { CanonicalReturnSummary, DealDetail, DealQualitySummary, FieldProvenance } from "@/lib/types";
 
 const POLL_INTERVAL = 5_000;
-const REVIEW_STEP_TIMEOUTS: Record<"extract" | "verify", number> = {
-  extract: 20 * 60_000,
-  verify: 12 * 60_000,
-};
+const DOCUMENT_REVIEW_TIMEOUT = 45 * 60_000;
 
 const STATUS_STYLES: Record<string, string> = {
   reviewing: "bg-muted/60 text-muted-foreground",
@@ -79,34 +76,21 @@ export function DealHero({ deal }: { deal: DealDetail }) {
   async function runPipeline() {
     setPipelineRunning(true);
     setCurrentPipelineStep("extract");
-    const beforeExtract = qualityTimestamp(deal.quality, "extract");
-    const beforeVerify = qualityTimestamp(deal.quality, "verify") ?? deal.scores?.data_quality?.verified_at ?? null;
 
     try {
-      await api.post(`/api/deals/${deal.id}/extract`);
+      await api.post(`/api/deals/${deal.id}/review`);
       setPipelineStatus({ status: "running", step: "extract", message: "Document review started. Reading all uploaded documents." });
       toast.success("Document review started", {
-        description: "Reading PDFs, Excel files, and saved document text.",
+        description: "Reading documents, checking sources, and updating the score.",
         duration: 5000,
       });
 
-      await waitForQualityTimestamp(deal.id, "extract", beforeExtract, setPipelineStatus);
-      if (!mountedRef.current) return;
-
-      setCurrentPipelineStep("verify");
-      await api.post(`/api/deals/${deal.id}/verify`);
-      setPipelineStatus({ status: "running", step: "verify", message: "Source verification started. Checking extracted values against source documents." });
-      toast.success("Source verification started", {
-        description: "Checking extracted values against source documents.",
-        duration: 5000,
+      await waitForDocumentReview(deal.id, (status) => {
+        setPipelineStatus(status);
+        setCurrentPipelineStep(pipelineStepFromStatus(status));
       });
-
-      await waitForQualityTimestamp(deal.id, "verify", beforeVerify, setPipelineStatus);
       if (!mountedRef.current) return;
 
-      setCurrentPipelineStep("score");
-      setPipelineStatus({ status: "running", step: "score", message: "Updating score. Rechecking validation, math checks, and score." });
-      await api.post(`/api/deals/${deal.id}/score`);
       setPipelineStatus({ status: "complete", step: "score", message: "Document review complete. Values were extracted, source-checked, math-checked, and scored." });
       toast.success("Document review complete", {
         description: "Values were extracted, source-checked, math-checked, and scored.",
@@ -114,18 +98,23 @@ export function DealHero({ deal }: { deal: DealDetail }) {
       router.refresh();
     } catch (e) {
       const detail = (e as { detail?: string; message?: string })?.detail ?? (e as Error)?.message;
+      const timeout = isReviewTimeout(detail);
       setPipelineStatus((current) => {
         if (current?.status === "failed") return current;
         const failedStep = pipelineStepRef.current === "idle" ? "extract" : pipelineStepRef.current;
         return {
-          status: "failed",
+          status: timeout ? "running" : "failed",
           step: failedStep,
-          message: "Document review incomplete.",
+          message: timeout ? "Document review is still running." : "Document review incomplete.",
           error: detail,
-          error_kind: isReviewTimeout(detail) ? "timeout" : null,
+          error_kind: timeout ? "timeout" : null,
         };
       });
-      toast.error("Document review incomplete", { description: detail });
+      if (timeout) {
+        toast.warning("Document review is still running", { description: detail });
+      } else {
+        toast.error("Document review incomplete", { description: detail });
+      }
     } finally {
       if (mountedRef.current) {
         setPipelineRunning(false);
@@ -291,7 +280,11 @@ function PipelineNotice({ status, running }: { status: PipelineStatus | null; ru
               </div>
               <div className="mt-2 font-medium">Next step</div>
               <div className="mt-0.5 text-muted-foreground">{copy.nextStep}</div>
-              {status.step && <div className="mt-2 text-muted-foreground">Stopped during: {status.step}</div>}
+              {status.step && (
+                <div className="mt-2 text-muted-foreground">
+                  {timedOut ? "Last known step" : "Stopped during"}: {status.step}
+                </div>
+              )}
             </div>
           )}
         </div>
@@ -362,7 +355,7 @@ function pipelineNoticeCopy(status: PipelineStatus, category: string) {
   if (category === "timeout") {
     return {
       title: "Document review is taking longer than expected",
-      message: status.error || "The review may still be running in the background.",
+      message: status.error || status.message || "The review may still be running in the background.",
       nextStep: "Refresh this page in a few minutes. If it has not advanced, click Review documents again.",
     };
   }
@@ -397,47 +390,23 @@ function pipelineFailureCategory(status: PipelineStatus): string {
   return "unknown";
 }
 
-async function waitForQualityTimestamp(
+async function waitForDocumentReview(
   dealId: number,
-  kind: "extract" | "verify",
-  previous: string | null,
   onStatus?: (status: PipelineStatus | null) => void,
-): Promise<string> {
+): Promise<PipelineStatus> {
   const start = Date.now();
-  while (Date.now() - start < REVIEW_STEP_TIMEOUTS[kind]) {
+  while (Date.now() - start < DOCUMENT_REVIEW_TIMEOUT) {
     await sleep(POLL_INTERVAL);
     const res = await api.get<QualityResponse>(`/api/deals/${dealId}/quality`);
     const polledStatus = res.pipeline ?? null;
     if (polledStatus) onStatus?.(polledStatus);
-    if (normalizedPipelineStatus(polledStatus) === "failed") {
-      throw new Error(polledStatus?.error || polledStatus?.message || `${kind === "extract" ? "Document reading" : "Source verification"} failed.`);
+    const statusName = normalizedPipelineStatus(polledStatus);
+    if (statusName === "failed") {
+      throw new Error(polledStatus?.error || polledStatus?.message || "Document review failed.");
     }
-    const completedAt = documentReviewStepComplete(polledStatus, kind);
-    if (completedAt) return completedAt;
-    const next = qualityTimestamp(res.summary, kind);
-    if (next && next !== previous) return next;
+    if (statusName === "complete") return polledStatus ?? { status: "complete", step: "score" };
   }
-  throw new Error(`${kind === "extract" ? "Document reading" : "Source verification"} is taking longer than expected. The document review may still be running in the background. Refresh this page in a few minutes, or click Review documents again if it has not advanced.`);
-}
-
-function documentReviewStepComplete(status: PipelineStatus | null | undefined, kind: "extract" | "verify"): string | null {
-  const statusName = normalizedPipelineStatus(status ?? null);
-  const completed =
-    kind === "extract"
-      ? ["extract_complete", "verify_complete", "complete"].includes(statusName)
-      : ["verify_complete", "complete"].includes(statusName);
-  if (!completed) return null;
-  return status?.updated_at ?? status?.started_at ?? new Date().toISOString();
-}
-
-function qualityTimestamp(quality: DealDetail["quality"] | DealQualitySummary | DataQualityGate | undefined, kind: "extract" | "verify"): string | null {
-  if (!quality) return null;
-  if (kind === "extract" && "last_extracted_at" in quality) return quality.last_extracted_at ?? null;
-  if (kind === "verify") {
-    if ("last_verified_at" in quality) return quality.last_verified_at ?? null;
-    if ("verified_at" in quality) return quality.verified_at ?? null;
-  }
-  return null;
+  throw new Error("Document review is taking longer than expected. It may still be running in the background. Refresh this page in a few minutes before relying on the score.");
 }
 
 function pipelineStepLabel(step: PipelineStep): string {
@@ -451,6 +420,15 @@ function pipelineStepLabel(step: PipelineStep): string {
     default:
       return "Working...";
   }
+}
+
+function pipelineStepFromStatus(status: PipelineStatus | null): PipelineStep {
+  const step = String(status?.step ?? "").toLowerCase();
+  if (step === "extract" || step === "verify" || step === "score") return step;
+  const statusName = normalizedPipelineStatus(status);
+  if (statusName === "extract_complete") return "verify";
+  if (statusName === "verify_complete") return "score";
+  return "extract";
 }
 
 function sleep(ms: number): Promise<void> {
