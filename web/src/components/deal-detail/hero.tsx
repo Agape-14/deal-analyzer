@@ -34,6 +34,8 @@ type PipelineStatus = {
   error_kind?: string | null;
   started_at?: string | null;
   updated_at?: string | null;
+  progress_pct?: number | null;
+  estimated_total_seconds?: number | null;
 };
 type QualityResponse = { summary?: DealQualitySummary; stale_flags?: unknown[]; pipeline?: PipelineStatus | null };
 
@@ -250,6 +252,8 @@ function PipelineNotice({ status, running }: { status: PipelineStatus | null; ru
   const intermediate = ["extract_complete", "verify_complete"].includes(statusName);
   const copy = pipelineNoticeCopy(status, category);
   const Icon = failed ? AlertCircle : complete ? CheckCircle2 : active ? Loader2 : AlertCircle;
+  const progress = pipelineProgress(status);
+  const eta = reviewEta(status);
 
   return (
     <div
@@ -271,6 +275,21 @@ function PipelineNotice({ status, running }: { status: PipelineStatus | null; ru
         <Icon className={cn("mt-0.5 h-4 w-4 shrink-0", active && !failed && !complete && "animate-spin")} />
         <div className="min-w-0">
           <div className="font-semibold">{copy.title}</div>
+          <div className="mt-2">
+            <div className="mb-1 flex items-center justify-between gap-3 text-[10px] font-medium uppercase tracking-[0.1em] text-current/75">
+              <span>{progress}% complete</span>
+              {eta && <span className="normal-case tracking-normal">{eta}</span>}
+            </div>
+            <div className="h-2 overflow-hidden rounded-full bg-current/15">
+              <div
+                className={cn(
+                  "h-full rounded-full transition-all duration-700",
+                  failed ? "bg-destructive" : complete ? "bg-success" : timedOut || intermediate ? "bg-warning" : "bg-primary",
+                )}
+                style={{ width: `${progress}%` }}
+              />
+            </div>
+          </div>
           <div className="mt-1 text-current/85">{copy.message}</div>
           {(failed || timedOut) && (
             <div className="mt-2 rounded-lg bg-card/70 px-3 py-2 text-[11px] text-foreground ring-1 ring-border/70">
@@ -368,6 +387,38 @@ function pipelineNoticeCopy(status: PipelineStatus, category: string) {
 
 function normalizedPipelineStatus(status: PipelineStatus | null): string {
   return String(status?.status ?? "").toLowerCase();
+}
+
+function pipelineProgress(status: PipelineStatus | null): number {
+  const explicit = Number(status?.progress_pct);
+  if (Number.isFinite(explicit)) return Math.max(0, Math.min(100, Math.round(explicit)));
+  const statusName = normalizedPipelineStatus(status);
+  const step = String(status?.step ?? "").toLowerCase();
+  if (statusName === "complete") return 100;
+  if (statusName === "extract_complete") return 45;
+  if (statusName === "verify_complete") return 82;
+  if (statusName === "failed") return 0;
+  if (step === "extract") return 12;
+  if (step === "verify") return 55;
+  if (step === "score") return 92;
+  return 5;
+}
+
+function reviewEta(status: PipelineStatus | null): string | null {
+  const statusName = normalizedPipelineStatus(status);
+  if (statusName === "complete") return "Done";
+  if (statusName === "failed") return null;
+  if (pipelineFailureCategory(status ?? {}) === "timeout") return "Still running";
+
+  const total = Number(status?.estimated_total_seconds);
+  const startedAt = status?.started_at ? new Date(status.started_at).getTime() : NaN;
+  if (!Number.isFinite(total) || !Number.isFinite(startedAt)) return "Estimating";
+
+  const elapsed = Math.max(0, (Date.now() - startedAt) / 1000);
+  const remaining = Math.max(0, total - elapsed);
+  if (remaining <= 20) return "Almost done";
+  if (remaining < 75) return "About 1 min left";
+  return `About ${Math.ceil(remaining / 60)} min left`;
 }
 
 function isReviewTimeout(message: string | null | undefined): boolean {
