@@ -1,6 +1,7 @@
 import asyncio
 import json
 import logging
+import os
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select
@@ -31,6 +32,17 @@ from app.services.math_checker import run_math_checks
 
 router = APIRouter()
 log = logging.getLogger("kenyon.deal_pipeline")
+
+
+def _deep_conflict_scan_enabled() -> bool:
+    """Opt-in expensive per-document AI extraction used only for diagnostics.
+
+    The normal document review already runs one combined extraction across the
+    full package, then a verification pass against source docs. Running a full
+    AI extraction for each document before the combined extraction made two-doc
+    deals perform three large Opus calls before verification even started.
+    """
+    return os.getenv("DEAL_REVIEW_DEEP_CONFLICT_SCAN", "").strip().lower() in {"1", "true", "yes"}
 
 
 def _pipeline_status(
@@ -185,7 +197,7 @@ async def _run_extract_background(deal_id: int):
             usable_docs = [d for d in deal.documents if (d.extracted_text or "")]
             usable_pdfs = _pdf_docs(deal)
             per_doc_results: list[tuple[int, str, dict]] = []
-            if len(deal.documents) > 1:
+            if len(deal.documents) > 1 and _deep_conflict_scan_enabled():
                 for doc in deal.documents:
                     text = doc.extracted_text or ""
                     path = doc.file_path if doc in usable_pdfs else None
