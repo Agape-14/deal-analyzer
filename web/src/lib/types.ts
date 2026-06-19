@@ -13,6 +13,7 @@ export interface DealSummary {
   overall_score: number | null;
   target_irr: number | null;
   target_equity_multiple: number | null;
+  target_cash_on_cash?: number | null;
   minimum_investment: number | null;
   notes: string;
   created_at: string;
@@ -225,6 +226,8 @@ export interface PipelineStatus {
   started_at?: string | null;
   updated_at?: string | null;
   finished_at?: string | null;
+  progress_pct?: number | null;
+  estimated_total_seconds?: number | null;
 }
 
 export interface PipelineRun {
