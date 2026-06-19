@@ -10,6 +10,7 @@ import { ReviewQueue } from "@/components/deal-detail/review-queue";
 import { PipelineTimeline } from "@/components/deal-detail/pipeline-timeline";
 import { SourceCitations } from "@/components/deal-detail/source-citations";
 import { UploadCompleteness } from "@/components/deal-detail/upload-completeness";
+import { getHeadlineReturnMetrics } from "@/lib/return-metrics";
 import type { DataQualityGate, DealDetail, FieldProvenance } from "@/lib/types";
 import { fmtMoney, fmtMultiple, fmtPct } from "@/lib/utils";
 
@@ -34,21 +35,7 @@ export function OverviewTab({ deal }: { deal: DealDetail }) {
   const se = (deal.metrics?.sponsor_evaluation ?? {}) as Record<string, unknown>;
 
   const provenance = (deal.metrics?._provenance ?? {}) as ProvenanceMap;
-  const canonical = deal.metrics?._canonical_returns;
-  const primaryStrategy = String(canonical?.primary_strategy ?? "").toLowerCase();
-  const isHoldStrategy = primaryStrategy === "hold" || primaryStrategy === "hold_with_sale_option";
-  const headlineIrr =
-    asNum(canonical?.target_irr) ??
-    (isHoldStrategy ? null : pickTrustedNumber(tr, provenance, ["target_returns.target_irr", "target_returns.net_irr"]));
-  const headlineCashOnCash =
-    asNum(canonical?.cash_on_cash) ??
-    pickTrustedNumber(tr, provenance, [
-      "target_returns.target_cash_on_cash",
-      "target_returns.distribution_yield",
-      "target_returns.hold_scenario.cash_on_cash_return",
-      "target_returns.hold_scenario.distribution_yield",
-    ]);
-  const headlineMultiple = pickTrustedNumber(tr, provenance, ["target_returns.target_equity_multiple", "target_returns.net_equity_multiple"]);
+  const { headlineIrr, headlineCashOnCash, headlineMultiple } = getHeadlineReturnMetrics(deal);
   const quality = deal.quality && deal.scores?.data_quality
     ? { ...deal.quality, data_quality: deal.scores.data_quality }
     : deal.quality ?? deal.scores?.data_quality;
@@ -316,7 +303,7 @@ function readinessCopy(gate?: DataQualityGate) {
       label: "Document review incomplete",
       headline: "The score may be based on partial document reading.",
       detail: "Review documents again after API limits clear, then confirm any remaining items in the review queue.",
-      action: "Run Review documents again before relying on the score.",
+      action: "Click Review documents again before relying on the score.",
       trust: confidence === null ? "Incomplete" : `${confidence}% confidence`,
       className: "bg-warning/15 text-warning ring-warning/30",
     };
@@ -380,24 +367,6 @@ function Stat({ label, value, sub, small }: { label: string; value: string; sub?
       </div>
     </div>
   );
-}
-
-function pickTrustedNumber(block: Record<string, unknown>, provenance: ProvenanceMap, paths: string[]): number | null {
-  const candidates = paths
-    .map((path) => ({ path, value: asNum(block[path.split(".").at(-1) ?? path]), provenance: provenance[path] }))
-    .filter((candidate) => candidate.value !== null);
-
-  if (candidates.length === 0) return null;
-  const clean = candidates.filter((candidate) => !isBadSource(candidate.provenance));
-  const reviewed = clean.find((candidate) => candidate.provenance?.locked || ["manual", "confirmed", "calculated"].includes(String(candidate.provenance?.status ?? "")));
-  return (reviewed ?? clean[0] ?? candidates[0]).value;
-}
-
-function isBadSource(provenance?: FieldProvenance): boolean {
-  if (!provenance) return false;
-  const status = String(provenance.status ?? "").toLowerCase();
-  const conflictCount = Array.isArray(provenance.conflict) ? provenance.conflict.length : 0;
-  return conflictCount > 1 || ["wrong", "missing", "unverifiable", "stale"].includes(status);
 }
 
 function asNum(v: unknown): number | null {
