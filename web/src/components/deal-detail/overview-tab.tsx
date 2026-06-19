@@ -27,7 +27,6 @@ const HERO_KEYS = [
 type ProvenanceMap = Record<string, FieldProvenance>;
 
 export function OverviewTab({ deal }: { deal: DealDetail }) {
-  const tr = (deal.metrics?.target_returns ?? {}) as Record<string, unknown>;
   const ds = (deal.metrics?.deal_structure ?? {}) as Record<string, unknown>;
   const fp = (deal.metrics?.financial_projections ?? {}) as Record<string, unknown>;
   const pd = (deal.metrics?.project_details ?? {}) as Record<string, unknown>;
@@ -55,7 +54,6 @@ export function OverviewTab({ deal }: { deal: DealDetail }) {
 
       <div className="grid grid-cols-1 lg:grid-cols-[1.2fr_1fr] gap-6 items-stretch">
         <SnapshotCard
-          tr={tr}
           ds={ds}
           fp={fp}
           pd={pd}
@@ -192,7 +190,6 @@ function ExecutiveReview({
 }
 
 function SnapshotCard({
-  tr,
   ds,
   fp,
   pd,
@@ -203,7 +200,6 @@ function SnapshotCard({
   headlineCashOnCash,
   headlineMultiple,
 }: {
-  tr: Record<string, unknown>;
   ds: Record<string, unknown>;
   fp: Record<string, unknown>;
   pd: Record<string, unknown>;
@@ -215,47 +211,84 @@ function SnapshotCard({
   headlineMultiple: number | null;
 }) {
   return (
-    <Card elevated className="p-6 flex flex-col">
-      <h3 className="text-base font-semibold tracking-tight mb-1">Deal snapshot</h3>
-      <p className="mb-5 text-sm text-muted-foreground">The main numbers used for quick underwriting. Open technical details for every extracted field.</p>
+    <Card elevated className="overflow-hidden p-0">
+      <div className="border-b border-border/80 bg-muted/35 px-6 py-5">
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+          <div>
+            <div className="text-[10px] font-bold uppercase tracking-[0.16em] text-primary">Underwriting Snapshot</div>
+            <h3 className="mt-1 text-xl font-bold text-foreground">Deal snapshot</h3>
+            <p className="mt-1 max-w-2xl text-sm leading-relaxed text-muted-foreground">
+              The high-signal assumptions used for quick underwriting, grouped like an investment committee summary.
+            </p>
+          </div>
+          <div className="w-fit rounded-full border border-border/80 bg-background px-3 py-1 text-xs font-semibold text-muted-foreground">
+            Quick read
+          </div>
+        </div>
+      </div>
 
-      <SnapshotSection>
-        <Stat label="Target IRR" value={fmtPct(headlineIrr, 1)} />
-        <Stat label="Equity Multiple" value={fmtMultiple(headlineMultiple)} />
-        <Stat label="Cash-on-Cash" value={fmtPct(headlineCashOnCash, 1)} />
-        <Stat label="Hold Period" value={fmtYears(asNum(ds.hold_period_years))} />
-        <Stat label="Pref Return" value={fmtPct(asNum(ds.preferred_return), 1)} />
-        <Stat label="LTV" value={fmtPct(asNum(ds.ltv), 0)} />
-        <Stat label="Project Cost" value={fmtMoney(asNum(ds.total_project_cost))} />
-        <Stat label="Equity Required" value={fmtMoney(asNum(ds.total_equity_required))} />
-      </SnapshotSection>
+      <div className="space-y-5 p-6">
+        <SnapshotGroup title="Return Profile" description="Headline return targets and sponsor economics." tone="primary">
+          <Stat label="Target IRR" value={fmtPct(headlineIrr, 1)} emphasis />
+          <Stat label="Equity Multiple" value={fmtMultiple(headlineMultiple)} emphasis />
+          <Stat label="Cash-on-Cash" value={fmtPct(headlineCashOnCash, 1)} emphasis />
+          <Stat label="Hold Period" value={fmtYears(asNum(ds.hold_period_years))} />
+          <Stat label="Pref Return" value={fmtPct(asNum(ds.preferred_return), 1)} />
+          <Stat label="LTV" value={fmtPct(asNum(ds.ltv), 0)} />
+          <Stat label="Project Cost" value={fmtMoney(asNum(ds.total_project_cost))} />
+          <Stat label="Equity Required" value={fmtMoney(asNum(ds.total_equity_required))} />
+        </SnapshotGroup>
 
-      <SnapshotSection className="mt-3">
-        <Stat label="Units" value={fmtInt(asNum(pd.unit_count))} />
-        <Stat label="Cost / Unit" value={fmtMoney(asNum(cc.total_project_cost_per_unit ?? pd.price_per_unit))} />
-        <Stat label="Hard Cost / Unit" value={fmtMoney(asNum(cc.hard_costs_per_unit))} />
-        <Stat label="Land Cost / Unit" value={fmtMoney(asNum(cc.land_cost_per_unit))} />
-        <Stat label="Avg Rent" value={fmtMoney(asNum(fp.avg_rent_per_unit))} sub="/mo" />
-        <Stat label="Occupancy" value={fmtPct(asNum(fp.occupancy_assumption), 0)} />
-        <Stat label="DSCR" value={fmtX(asNum(uc.dscr))} />
-        <Stat label="Yield on Cost" value={fmtPct(asNum(uc.yield_on_cost), 1)} />
-      </SnapshotSection>
+        <SnapshotGroup title="Property Metrics" description="Scale, rent, occupancy, and cost-per-unit checks." tone="success">
+          <Stat label="Units" value={fmtInt(asNum(pd.unit_count))} />
+          <Stat label="Cost / Unit" value={fmtMoney(asNum(cc.total_project_cost_per_unit ?? pd.price_per_unit))} />
+          <Stat label="Hard Cost / Unit" value={fmtMoney(asNum(cc.hard_costs_per_unit))} />
+          <Stat label="Land Cost / Unit" value={fmtMoney(asNum(cc.land_cost_per_unit))} />
+          <Stat label="Avg Rent" value={fmtMoney(asNum(fp.avg_rent_per_unit))} sub="/mo" />
+          <Stat label="Occupancy" value={fmtPct(asNum(fp.occupancy_assumption), 0)} />
+          <Stat label="DSCR" value={fmtX(asNum(uc.dscr))} />
+          <Stat label="Yield on Cost" value={fmtPct(asNum(uc.yield_on_cost), 1)} />
+        </SnapshotGroup>
 
-      <SnapshotSection className="mt-3">
-        <Stat label="GP Co-Invest" value={fmtPct(asNum(ds.gp_equity_coinvest_pct), 0)} />
-        <Stat label="GP Cash at Risk" value={fmtMoney(asNum(ds.gp_cash_at_risk))} />
-        <Stat label="Interest Rate" value={fmtPct(asNum(ds.interest_rate), 1)} />
-        <Stat label="Sponsor" value={strVal(se.sponsor_name)} small />
-      </SnapshotSection>
+        <SnapshotGroup title="Sponsor and Debt" description="Alignment and financing assumptions to confirm before relying on the score." tone="warning">
+          <Stat label="GP Co-Invest" value={fmtPct(asNum(ds.gp_equity_coinvest_pct), 0)} />
+          <Stat label="GP Cash at Risk" value={fmtMoney(asNum(ds.gp_cash_at_risk))} />
+          <Stat label="Interest Rate" value={fmtPct(asNum(ds.interest_rate), 1)} />
+          <Stat label="Sponsor" value={strVal(se.sponsor_name)} small />
+        </SnapshotGroup>
+      </div>
     </Card>
   );
 }
 
-function SnapshotSection({ children, className = "" }: { children: ReactNode; className?: string }) {
+function SnapshotGroup({
+  title,
+  description,
+  tone,
+  children,
+}: {
+  title: string;
+  description: string;
+  tone: "primary" | "success" | "warning";
+  children: ReactNode;
+}) {
+  const toneClass = tone === "success" ? "bg-success" : tone === "warning" ? "bg-warning" : "bg-primary";
+
   return (
-    <div className={`grid grid-cols-2 gap-2 md:grid-cols-4 ${className}`}>
-      {children}
-    </div>
+    <section>
+      <div className="mb-2.5 flex flex-wrap items-end justify-between gap-2">
+        <div>
+          <div className="flex items-center gap-2">
+            <span className={`h-2.5 w-2.5 rounded-full ${toneClass}`} />
+            <h4 className="text-xs font-extrabold uppercase tracking-[0.14em] text-foreground">{title}</h4>
+          </div>
+          <p className="mt-1 text-xs leading-relaxed text-muted-foreground">{description}</p>
+        </div>
+      </div>
+      <div className="grid grid-cols-2 gap-2 md:grid-cols-4">
+        {children}
+      </div>
+    </section>
   );
 }
 
@@ -363,11 +396,30 @@ function hasConfidenceExplanations(value: unknown): value is DataQualityGate {
   return Boolean(value && typeof value === "object" && "confidence_explanations" in value);
 }
 
-function Stat({ label, value, sub, small }: { label: string; value: string; sub?: string; small?: boolean }) {
+function Stat({
+  label,
+  value,
+  sub,
+  small,
+  emphasis,
+}: {
+  label: string;
+  value: string;
+  sub?: string;
+  small?: boolean;
+  emphasis?: boolean;
+}) {
+  const tileClass = emphasis
+    ? "border-primary/30 bg-primary/5 shadow-sm"
+    : "border-border/80 bg-card shadow-sm";
+
   return (
-    <div className="min-w-0 rounded-lg border border-border/80 bg-background/80 px-3.5 py-3">
-      <div className="text-[11px] font-bold uppercase tracking-[0.11em] text-foreground/70">{label}</div>
-      <div className={`mt-1.5 font-bold tabular-nums text-foreground ${small ? "text-sm truncate" : "text-xl"}`}>
+    <div className={`min-w-0 rounded-lg border px-4 py-3.5 transition-colors hover:bg-muted/25 ${tileClass}`}>
+      <div className="text-[11px] font-extrabold uppercase tracking-[0.1em] text-foreground/65">{label}</div>
+      <div
+        data-figure
+        className={`mt-1.5 font-extrabold tabular-nums leading-none ${emphasis ? "text-primary" : "text-foreground"} ${small ? "truncate text-sm leading-tight" : "text-[1.35rem]"}`}
+      >
         {value}{sub && <span className="text-xs text-muted-foreground font-normal">{sub}</span>}
       </div>
     </div>
