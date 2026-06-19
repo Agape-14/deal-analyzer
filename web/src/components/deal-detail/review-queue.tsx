@@ -2,18 +2,18 @@
 
 import * as React from "react";
 import { useRouter } from "next/navigation";
-import { AlertTriangle, Calculator, CheckCircle2, ExternalLink, FileText, Loader2, Search, ShieldAlert } from "lucide-react";
+import { AlertTriangle, Calculator, CheckCircle2, ExternalLink, FileText, Loader2, Search } from "lucide-react";
 import { toast } from "sonner";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
+import { ReviewQueueEmptyState, ReviewQueueHeader, ReviewQueueSteps } from "@/components/deal-detail/review-queue-shell";
 import { api } from "@/lib/api";
 import { cn, fmtMoney, fmtMultiple, fmtPct } from "@/lib/utils";
 import type { DealDetail, FieldProvenance, ValidationFlag } from "@/lib/types";
 
 type ReviewArea = "Returns" | "Capital Stack" | "Debt" | "Construction" | "Sponsor" | "Market" | "Math" | "Source";
 type Severity = "red" | "yellow";
-type Metrics = NonNullable<DealDetail["metrics"]> & Record<string, unknown>;
-type MathCheck = { check?: string; difference?: string; formula?: string };
+type Metrics = NonNullable<DealDetail["metrics"]>;
 
 type ReviewInput = {
   path: string;
@@ -37,6 +37,8 @@ type ReviewItem = {
   actionHref?: string;
   confirmLabel?: string;
 };
+
+type MathCheck = { check?: string; difference?: string; formula?: string };
 
 const REVIEW_LIMIT = 3;
 
@@ -99,13 +101,9 @@ const FALLBACK_INPUTS: Partial<Record<ReviewArea, Array<{ path: string; label: s
     { path: "financial_projections.stabilized_noi", label: "Stabilized NOI" },
   ],
   Construction: [
-    { path: "construction_costs.hard_costs", label: "Hard costs" },
     { path: "construction_costs.hard_costs_total", label: "Hard costs total" },
-    { path: "construction_costs.soft_costs", label: "Soft costs" },
     { path: "construction_costs.soft_costs_total", label: "Soft costs total" },
-    { path: "construction_costs.land_cost", label: "Land" },
     { path: "construction_costs.land_cost_total", label: "Land total" },
-    { path: "construction_costs.contingency", label: "Contingency" },
     { path: "construction_costs.contingency_total", label: "Contingency total" },
     { path: "deal_structure.total_project_cost", label: "Total cost" },
   ],
@@ -158,7 +156,17 @@ const MATH_INPUTS: Array<{ test: (name: string) => boolean; area: ReviewArea; pr
     test: (name) => name.includes("hard") && name.includes("soft") && name.includes("land"),
     area: "Construction",
     primaryPath: "deal_structure.total_project_cost",
-    inputs: FALLBACK_INPUTS.Construction ?? [],
+    inputs: [
+      { path: "construction_costs.hard_costs", label: "Hard costs" },
+      { path: "construction_costs.hard_costs_total", label: "Hard costs total" },
+      { path: "construction_costs.soft_costs", label: "Soft costs" },
+      { path: "construction_costs.soft_costs_total", label: "Soft costs total" },
+      { path: "construction_costs.land_cost", label: "Land" },
+      { path: "construction_costs.land_cost_total", label: "Land total" },
+      { path: "construction_costs.contingency", label: "Contingency" },
+      { path: "construction_costs.contingency_total", label: "Contingency total" },
+      { path: "deal_structure.total_project_cost", label: "Total cost" },
+    ],
   },
   {
     test: (name) => name.includes("irr"),
@@ -180,49 +188,13 @@ export function ReviewQueue({ deal }: { deal: DealDetail }) {
   const groups = groupItems(hidden);
 
   if (items.length === 0) {
-    return (
-      <Card elevated className="p-6">
-        <div className="flex items-center gap-3">
-          <div className="grid h-10 w-10 place-items-center rounded-lg bg-success/15 text-success ring-1 ring-success/30">
-            <CheckCircle2 className="h-5 w-5" />
-          </div>
-          <div>
-            <div className="text-[10px] uppercase tracking-[0.14em] text-muted-foreground">Deal Readiness</div>
-            <h3 className="text-base font-semibold tracking-tight">Ready to score</h3>
-            <p className="mt-0.5 text-xs text-muted-foreground">Every open review item has been corrected or confirmed.</p>
-          </div>
-        </div>
-      </Card>
-    );
+    return <ReviewQueueEmptyState />;
   }
 
   return (
     <Card elevated className="p-6">
-      <div className="flex flex-wrap items-start justify-between gap-4">
-        <div className="flex items-center gap-3">
-          <div className="grid h-10 w-10 place-items-center rounded-lg bg-destructive/15 text-destructive ring-1 ring-destructive/30">
-            <ShieldAlert className="h-5 w-5" />
-          </div>
-          <div>
-            <div className="text-[10px] uppercase tracking-[0.14em] text-muted-foreground">Deal Readiness</div>
-            <h3 className="text-base font-semibold tracking-tight">Needs review</h3>
-            <p className="mt-0.5 text-xs text-muted-foreground">
-              {visible.length} priority item{visible.length === 1 ? "" : "s"} shown. Review the source, fix the inputs, or confirm the item to clear it.
-            </p>
-          </div>
-        </div>
-        {hidden.length > 0 ? (
-          <a href="#technical-details" className="text-xs text-muted-foreground transition-colors hover:text-foreground">
-            {hidden.length} more grouped below
-          </a>
-        ) : null}
-      </div>
-
-      <div className="mt-5 grid gap-2 sm:grid-cols-3">
-        <ActionHint label="1. Inspect" detail="Open the cited evidence for the row." />
-        <ActionHint label="2. Correct" detail="Edit any value that is wrong." />
-        <ActionHint label="3. Clear" detail="Confirm when the item is acceptable." />
-      </div>
+      <ReviewQueueHeader visibleCount={visible.length} hiddenCount={hidden.length} />
+      <ReviewQueueSteps />
 
       <div className="mt-5 space-y-3">
         {visible.map((item, index) => (
@@ -244,15 +216,6 @@ export function ReviewQueue({ deal }: { deal: DealDetail }) {
         </div>
       ) : null}
     </Card>
-  );
-}
-
-function ActionHint({ label, detail }: { label: string; detail: string }) {
-  return (
-    <div className="rounded-lg border border-border/70 bg-muted/20 px-3 py-2">
-      <div className="text-xs font-semibold tracking-tight text-foreground">{label}</div>
-      <div className="mt-0.5 text-[11px] leading-relaxed text-muted-foreground">{detail}</div>
-    </div>
   );
 }
 
@@ -438,7 +401,7 @@ function ReviewInputEditor({ dealId, item, onDone }: { dealId: number; item: Rev
       .filter((edit) => edit.value !== null);
 
     if (edits.length === 0) {
-      toast.error("Nothing to save", { description: "Enter a value or use Confirm to approve the row as-is." });
+      toast.error("Nothing to save", { description: "Enter or confirm at least one value." });
       return;
     }
 
@@ -467,7 +430,7 @@ function ReviewInputEditor({ dealId, item, onDone }: { dealId: number; item: Rev
       <div className="mb-2 flex items-center justify-between gap-3">
         <div>
           <div className="text-xs font-semibold tracking-tight text-foreground">Review and correct inputs</div>
-          <p className="mt-0.5 text-[11px] text-muted-foreground">Edit wrong values here, or leave them unchanged and confirm the row above.</p>
+          <p className="mt-0.5 text-[11px] text-muted-foreground">Edit wrong values here, or leave them unchanged and save to approve and clear this row.</p>
         </div>
         <Button size="sm" onClick={saveAll} disabled={busy}>
           {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <CheckCircle2 className="h-3.5 w-3.5" />}
@@ -562,32 +525,32 @@ function flagItems(flags: ValidationFlag[], metrics: Metrics, provenance: Record
 }
 
 function sourceItems(metrics: Metrics, provenance: Record<string, FieldProvenance>): ReviewItem[] {
-  return REVIEW_FIELDS.flatMap((field) => {
+  const out: ReviewItem[] = [];
+  for (const field of REVIEW_FIELDS) {
     const prov = provenance[field.path];
     const value = getPath(metrics, field.path);
-    if (!prov || prov.locked) return [];
+    if (!prov || prov.locked) continue;
     const status = String(prov.status ?? "").toLowerCase();
     const confidence = typeof prov.confidence === "number" ? prov.confidence : null;
     const conflictCount = Array.isArray(prov.conflict) ? prov.conflict.length : 0;
     const needsReview = conflictCount > 1 || ["wrong", "missing", "unverifiable", "stale"].includes(status) || (confidence !== null && confidence < 85);
-    if (!needsReview) return [];
-    return [
-      {
-        key: `source:${field.path}`,
-        priority: conflictCount > 1 || status === "wrong" ? 75 : confidence !== null ? 40 - confidence / 10 : 35,
-        kind: "source" as const,
-        area: areaForPath(field.path),
-        severity: conflictCount > 1 || status === "wrong" || status === "missing" ? "red" as const : "yellow" as const,
-        title: `${field.label} needs review`,
-        detail: sourceDetail(prov),
-        path: field.path,
-        value,
-        source: sourceLabel(prov),
-        inputs: [{ path: field.path, label: field.label, value, provenance: prov }],
-        actionHref: sourceHref(field.path),
-      },
-    ];
-  });
+    if (!needsReview) continue;
+    out.push({
+      key: `source:${field.path}`,
+      priority: conflictCount > 1 || status === "wrong" ? 75 : confidence !== null ? 40 - confidence / 10 : 35,
+      kind: "source",
+      area: areaForPath(field.path),
+      severity: conflictCount > 1 || status === "wrong" || status === "missing" ? "red" : "yellow",
+      title: `${field.label} needs review`,
+      detail: sourceDetail(prov),
+      path: field.path,
+      value,
+      source: sourceLabel(prov),
+      inputs: [{ path: field.path, label: field.label, value, provenance: prov }],
+      actionHref: sourceHref(field.path),
+    });
+  }
+  return out;
 }
 
 function reviewInputsForMessage(message: string, primaryPath: string | undefined, metrics: Metrics, provenance: Record<string, FieldProvenance>): ReviewInput[] | undefined {
@@ -603,7 +566,8 @@ function reviewInputsForMessage(message: string, primaryPath: string | undefined
 function fallbackInputs(area: ReviewArea, metrics: Metrics, provenance: Record<string, FieldProvenance>): ReviewInput[] | undefined {
   const definitions = FALLBACK_INPUTS[area];
   if (!definitions?.length) return undefined;
-  return definitions.map((input) => ({ ...input, value: getPath(metrics, input.path), provenance: provenance[input.path] }));
+  const inputs = definitions.map((input) => ({ ...input, value: getPath(metrics, input.path), provenance: provenance[input.path] }));
+  return inputs.length > 0 ? inputs : undefined;
 }
 
 function mathCheckPassesNow(check: MathCheck, metrics: Metrics): boolean {
@@ -733,7 +697,12 @@ function sourceLocation(provenance: FieldProvenance): string {
 }
 
 function sourceSnippet(provenance: FieldProvenance): string {
-  const raw = provenance.correction_source || provenance.correction_note || provenance.verification_source || provenance.verification_note || "";
+  const raw =
+    provenance.correction_source ||
+    provenance.correction_note ||
+    provenance.verification_source ||
+    provenance.verification_note ||
+    "";
   return String(raw).replace(/\s+/g, " ").trim();
 }
 
