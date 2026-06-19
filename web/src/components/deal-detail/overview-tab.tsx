@@ -1,5 +1,6 @@
 "use client";
 
+import type { ReactNode } from "react";
 import { Card } from "@/components/ui/card";
 import { ScoreBreakdown } from "@/components/deal-detail/score-breakdown";
 import { ValidationFlagsPanel } from "@/components/deal-detail/validation-flags";
@@ -218,7 +219,7 @@ function SnapshotCard({
       <h3 className="text-base font-semibold tracking-tight mb-1">Deal snapshot</h3>
       <p className="mb-5 text-sm text-muted-foreground">The main numbers used for quick underwriting. Open technical details for every extracted field.</p>
 
-      <div className="grid grid-cols-2 gap-x-6 gap-y-4 md:grid-cols-4">
+      <SnapshotSection>
         <Stat label="Target IRR" value={fmtPct(headlineIrr, 1)} />
         <Stat label="Equity Multiple" value={fmtMultiple(headlineMultiple)} />
         <Stat label="Cash-on-Cash" value={fmtPct(headlineCashOnCash, 1)} />
@@ -227,11 +228,9 @@ function SnapshotCard({
         <Stat label="LTV" value={fmtPct(asNum(ds.ltv), 0)} />
         <Stat label="Project Cost" value={fmtMoney(asNum(ds.total_project_cost))} />
         <Stat label="Equity Required" value={fmtMoney(asNum(ds.total_equity_required))} />
-      </div>
+      </SnapshotSection>
 
-      <div className="border-t border-border/60 my-4" />
-
-      <div className="grid grid-cols-2 gap-x-6 gap-y-4 md:grid-cols-4">
+      <SnapshotSection className="mt-3">
         <Stat label="Units" value={fmtInt(asNum(pd.unit_count))} />
         <Stat label="Cost / Unit" value={fmtMoney(asNum(cc.total_project_cost_per_unit ?? pd.price_per_unit))} />
         <Stat label="Hard Cost / Unit" value={fmtMoney(asNum(cc.hard_costs_per_unit))} />
@@ -240,17 +239,23 @@ function SnapshotCard({
         <Stat label="Occupancy" value={fmtPct(asNum(fp.occupancy_assumption), 0)} />
         <Stat label="DSCR" value={fmtX(asNum(uc.dscr))} />
         <Stat label="Yield on Cost" value={fmtPct(asNum(uc.yield_on_cost), 1)} />
-      </div>
+      </SnapshotSection>
 
-      <div className="border-t border-border/60 my-4" />
-
-      <div className="grid grid-cols-2 gap-x-6 gap-y-4 md:grid-cols-4">
+      <SnapshotSection className="mt-3">
         <Stat label="GP Co-Invest" value={fmtPct(asNum(ds.gp_equity_coinvest_pct), 0)} />
         <Stat label="GP Cash at Risk" value={fmtMoney(asNum(ds.gp_cash_at_risk))} />
         <Stat label="Interest Rate" value={fmtPct(asNum(ds.interest_rate), 1)} />
         <Stat label="Sponsor" value={strVal(se.sponsor_name)} small />
-      </div>
+      </SnapshotSection>
     </Card>
+  );
+}
+
+function SnapshotSection({ children, className = "" }: { children: ReactNode; className?: string }) {
+  return (
+    <div className={`grid grid-cols-2 gap-2 md:grid-cols-4 ${className}`}>
+      {children}
+    </div>
   );
 }
 
@@ -360,9 +365,9 @@ function hasConfidenceExplanations(value: unknown): value is DataQualityGate {
 
 function Stat({ label, value, sub, small }: { label: string; value: string; sub?: string; small?: boolean }) {
   return (
-    <div>
-      <div className="text-[10px] uppercase tracking-[0.12em] text-muted-foreground">{label}</div>
-      <div className={`font-semibold tabular-nums mt-1 ${small ? "text-sm truncate" : "text-lg"}`}>
+    <div className="min-w-0 rounded-lg border border-border/80 bg-background/80 px-3.5 py-3">
+      <div className="text-[11px] font-bold uppercase tracking-[0.11em] text-foreground/70">{label}</div>
+      <div className={`mt-1.5 font-bold tabular-nums text-foreground ${small ? "text-sm truncate" : "text-xl"}`}>
         {value}{sub && <span className="text-xs text-muted-foreground font-normal">{sub}</span>}
       </div>
     </div>
