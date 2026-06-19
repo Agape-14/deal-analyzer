@@ -91,9 +91,10 @@ class CompareRequest(BaseModel):
 
 
 def _deal_to_dict(deal: Deal, developer_name: str = None) -> dict:
-    metrics = deal.metrics or {}
+    metrics = dict(deal.metrics or {})
     scores = deal.scores or {}
     return_summary = canonical_return_summary(metrics)
+    metrics["_canonical_returns"] = return_summary
     deal_structure = metrics.get("deal_structure", {}) or {}
 
     return {
@@ -111,6 +112,7 @@ def _deal_to_dict(deal: Deal, developer_name: str = None) -> dict:
         "overall_score": scores.get("overall", None),
         "target_irr": return_summary.get("target_irr"),
         "target_equity_multiple": return_summary.get("target_equity_multiple"),
+        "target_cash_on_cash": return_summary.get("cash_on_cash"),
         "minimum_investment": deal_structure.get("minimum_investment"),
         "notes": deal.notes,
         "lat": deal.lat,
