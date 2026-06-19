@@ -5,8 +5,9 @@ import { motion } from "framer-motion";
 import { ArrowUpRight, MapPin } from "lucide-react";
 import { Card } from "@/components/ui/card";
 import { ScoreQualityBadge } from "@/components/deal-detail/score-quality-badge";
+import { getHeadlineReturnMetrics } from "@/lib/return-metrics";
 import { cn, fmtMultiple, fmtMoney, fmtPct } from "@/lib/utils";
-import type { DataQualityGate, DealQualitySummary, DealSummary, FieldProvenance } from "@/lib/types";
+import type { DataQualityGate, DealQualitySummary, DealSummary } from "@/lib/types";
 
 const STATUS_STYLES: Record<string, string> = {
   reviewing: "bg-muted/60 text-muted-foreground",
@@ -14,13 +15,6 @@ const STATUS_STYLES: Record<string, string> = {
   passed: "bg-destructive/15 text-destructive ring-1 ring-destructive/30",
   committed: "bg-success/15 text-success ring-1 ring-success/30",
   closed: "bg-chart-3/15 text-[hsl(var(--chart-3))] ring-1 ring-[hsl(var(--chart-3))/.3]",
-};
-
-type SummaryWithMetrics = DealSummary & {
-  metrics?: {
-    target_returns?: Record<string, unknown>;
-    _provenance?: Record<string, FieldProvenance>;
-  };
 };
 
 function ScoreRing({ value }: { value: number | null }) {
@@ -75,8 +69,7 @@ export function DealCard({ deal }: { deal: DealSummary }) {
   const locationBits = [deal.city, deal.state].filter(Boolean).join(", ") || deal.location || "";
   const qualityGate = getQualityGate(deal.quality) || deal.scores?.data_quality;
   const visibleScore = deal.overall_score ?? deal.scores?.provisional_overall ?? null;
-  const targetIrr = pickReturnMetric(deal, ["target_returns.target_irr", "target_returns.net_irr"]) ?? deal.target_irr;
-  const targetMultiple = pickReturnMetric(deal, ["target_returns.target_equity_multiple", "target_returns.net_equity_multiple"]) ?? deal.target_equity_multiple;
+  const { headlineMultiple, primaryReturnLabel, primaryReturnValue } = getHeadlineReturnMetrics(deal);
 
   return (
     <Link href={`/deals/${deal.id}`} className="block h-full outline-none group">
@@ -92,7 +85,7 @@ export function DealCard({ deal }: { deal: DealSummary }) {
               <span className="truncate">{locationBits || "-"}</span>
               {deal.developer_name && (
                 <>
-                  <span className="shrink-0 opacity-40">·</span>
+                  <span className="shrink-0 opacity-40">-</span>
                   <span className="truncate">{deal.developer_name}</span>
                 </>
               )}
@@ -102,8 +95,8 @@ export function DealCard({ deal }: { deal: DealSummary }) {
         </div>
 
         <div className="mt-5 grid grid-cols-3 gap-3">
-          <Stat label="Target IRR" value={fmtPct(targetIrr)} />
-          <Stat label="Multiple" value={fmtMultiple(targetMultiple)} />
+          <Stat label={primaryReturnLabel} value={fmtPct(primaryReturnValue)} />
+          <Stat label="Multiple" value={fmtMultiple(headlineMultiple)} />
           <Stat label="Min Invest" value={fmtMoney(deal.minimum_investment)} />
         </div>
 
@@ -130,34 +123,6 @@ function getQualityGate(quality: DealQualitySummary | DataQualityGate | undefine
   if (!quality) return undefined;
   if ("stage" in quality) return quality;
   return quality.data_quality;
-}
-
-function pickReturnMetric(deal: DealSummary, paths: string[]): number | null {
-  const extended = deal as SummaryWithMetrics;
-  const metrics = extended.metrics;
-  const returns = metrics?.target_returns ?? {};
-  const provenance = metrics?._provenance ?? {};
-  const candidates = paths
-    .map((path) => ({ path, value: asNum(returns[path.split(".").at(-1) ?? path]), provenance: provenance[path] }))
-    .filter((candidate) => candidate.value !== null);
-
-  if (candidates.length === 0) return null;
-  const clean = candidates.filter((candidate) => !isBadSource(candidate.provenance));
-  const reviewed = clean.find((candidate) => candidate.provenance?.locked || ["manual", "confirmed", "calculated"].includes(String(candidate.provenance?.status ?? "")));
-  return (reviewed ?? clean[0] ?? candidates[0]).value;
-}
-
-function isBadSource(provenance?: FieldProvenance): boolean {
-  if (!provenance) return false;
-  const status = String(provenance.status ?? "").toLowerCase();
-  const conflictCount = Array.isArray(provenance.conflict) ? provenance.conflict.length : 0;
-  return conflictCount > 1 || ["wrong", "missing", "unverifiable", "stale"].includes(status);
-}
-
-function asNum(value: unknown): number | null {
-  if (typeof value === "number" && !Number.isNaN(value)) return value;
-  if (typeof value === "string" && value.trim() !== "" && !Number.isNaN(Number(value))) return Number(value);
-  return null;
 }
 
 function Stat({ label, value }: { label: string; value: string }) {
