@@ -166,6 +166,53 @@ def _summary_from_picks(strategy: str, target_irr, target_equity_multiple, cash_
     }
 
 
+def _to_number(value: Any) -> Optional[float]:
+    if isinstance(value, (int, float)):
+        return float(value)
+    if isinstance(value, str):
+        text = value.strip().replace("%", "").replace(",", "")
+        if not text:
+            return None
+        try:
+            return float(text)
+        except ValueError:
+            return None
+    return None
+
+
+def _same_number(a: Any, b: Any, tolerance: float = 0.05) -> bool:
+    left = _to_number(a)
+    right = _to_number(b)
+    return left is not None and right is not None and abs(left - right) <= tolerance
+
+
+def _hold_target_irr(metrics: Dict[str, Any] | None) -> Dict[str, Any] | None:
+    """Pick a real hold/net IRR without borrowing a hypothetical sale IRR."""
+    metrics = metrics or {}
+    tr = metrics.get("target_returns") or {}
+    sale = tr.get("sale_scenario") if isinstance(tr.get("sale_scenario"), dict) else {}
+    sale_irr = sale.get("sale_irr")
+
+    picked = pick_metric_detail(
+        metrics,
+        (
+            "target_returns.net_irr",
+            "target_returns.hold_scenario.net_irr",
+            "target_returns.hold_scenario.target_irr",
+            "target_returns.target_irr",
+        ),
+    )
+    if not picked:
+        return None
+
+    if picked.get("path") == "target_returns.target_irr" and sale_irr is not None and _same_number(
+        picked.get("value"),
+        sale_irr,
+    ):
+        return None
+    return picked
+
+
 def canonical_return_summary(metrics: Dict[str, Any] | None) -> Dict[str, Any]:
     """Return headline return metrics using one consistent strategy-aware rule."""
     strategy = primary_strategy(metrics)
@@ -173,17 +220,7 @@ def canonical_return_summary(metrics: Dict[str, Any] | None) -> Dict[str, Any]:
     if strategy in {"hold", "hold_with_sale_option"}:
         return _summary_from_picks(
             strategy,
-            pick_metric_detail(
-                metrics,
-                (
-                    "target_returns.hold_scenario.cash_on_cash_return",
-                    "target_returns.target_cash_on_cash",
-                    "target_returns.hold_scenario.distribution_yield",
-                    "target_returns.distribution_yield",
-                    "target_returns.hold_scenario.priority_return",
-                    "deal_structure.preferred_return",
-                ),
-            ),
+            _hold_target_irr(metrics),
             pick_metric_detail(
                 metrics,
                 (
