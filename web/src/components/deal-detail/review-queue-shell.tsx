@@ -19,6 +19,7 @@ export function ReviewQueueEmptyState() {
 }
 
 export function ReviewQueueHeader({ visibleCount, hiddenCount }: { visibleCount: number; hiddenCount: number }) {
+  const total = visibleCount + hiddenCount;
   return (
     <div className="flex flex-wrap items-start justify-between gap-4">
       <div className="flex items-center gap-3">
@@ -27,9 +28,11 @@ export function ReviewQueueHeader({ visibleCount, hiddenCount }: { visibleCount:
         </div>
         <div>
           <div className="text-[10px] uppercase tracking-[0.14em] text-muted-foreground">Deal Readiness</div>
-          <h3 className="text-base font-semibold tracking-tight">Needs review</h3>
+          <h3 className="text-base font-semibold tracking-tight">
+            {total} item{total === 1 ? "" : "s"} need review
+          </h3>
           <p className="mt-0.5 text-xs text-muted-foreground">
-            {visibleCount} priority item{visibleCount === 1 ? "" : "s"} shown. Review the source, fix the inputs, or confirm the item to clear it.
+            Work these like a checklist: inspect the source, correct any bad value, then confirm to clear the item.
           </p>
         </div>
       </div>
@@ -45,9 +48,9 @@ export function ReviewQueueHeader({ visibleCount, hiddenCount }: { visibleCount:
 export function ReviewQueueSteps() {
   return (
     <div className="mt-5 grid gap-2 sm:grid-cols-3">
-      <ActionHint label="1. Inspect" detail="Open the cited evidence for the row." />
-      <ActionHint label="2. Correct" detail="Edit any value that is wrong." />
-      <ActionHint label="3. Clear" detail="Confirm when the item is acceptable." />
+      <ActionHint label="1. Inspect" detail="Open the exact source evidence." />
+      <ActionHint label="2. Correct" detail="Edit only values that are wrong." />
+      <ActionHint label="3. Confirm" detail="Clear the row when it is acceptable." />
     </div>
   );
 }
