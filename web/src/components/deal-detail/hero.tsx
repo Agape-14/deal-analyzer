@@ -55,14 +55,21 @@ export function DealHero({ deal }: { deal: DealDetail }) {
   const tr = (metrics.target_returns ?? {}) as Record<string, unknown>;
   const provenance = (metrics._provenance ?? {}) as ProvenanceMap;
   const canonical = (metrics as { _canonical_returns?: CanonicalReturnSummary })._canonical_returns;
+  const primaryStrategy = String(canonical?.primary_strategy ?? "").toLowerCase();
+  const isHoldStrategy = primaryStrategy === "hold" || primaryStrategy === "hold_with_sale_option";
   const headlineIrr =
     asNum(canonical?.target_irr) ??
-    pickTrustedNumber(tr, provenance, ["target_returns.target_irr", "target_returns.net_irr"]) ??
+    (isHoldStrategy ? null : pickTrustedNumber(tr, provenance, ["target_returns.target_irr", "target_returns.net_irr"])) ??
     deal.target_irr;
+  const headlineCashOnCash =
+    asNum(canonical?.cash_on_cash) ??
+    pickTrustedNumber(tr, provenance, ["target_returns.target_cash_on_cash", "target_returns.distribution_yield"]);
   const headlineMultiple =
     asNum(canonical?.target_equity_multiple) ??
     pickTrustedNumber(tr, provenance, ["target_returns.target_equity_multiple", "target_returns.net_equity_multiple"]) ??
     deal.target_equity_multiple;
+  const primaryReturnLabel = headlineIrr !== null ? "Target IRR" : "Cash-on-Cash";
+  const primaryReturnValue = headlineIrr !== null ? headlineIrr : headlineCashOnCash;
 
   const setCurrentPipelineStep = React.useCallback((step: PipelineStep) => {
     pipelineStepRef.current = step;
@@ -189,14 +196,14 @@ export function DealHero({ deal }: { deal: DealDetail }) {
             </div>
 
             <div className="mt-6 grid grid-cols-2 sm:grid-cols-4 gap-6">
-              <Metric label="Target IRR" value={fmtPct(headlineIrr)} />
+              <Metric label={primaryReturnLabel} value={fmtPct(primaryReturnValue)} />
               <Metric label="Equity Multiple" value={fmtMultiple(headlineMultiple)} />
               <Metric label="Min Investment" value={fmtMoney(deal.minimum_investment)} />
               <Metric label="Documents" value={String(deal.documents?.length ?? 0)} />
             </div>
           </div>
 
-          <div className="flex flex-col items-center lg:items-end gap-4">
+          <div className="flex flex-col items-center lg:items-end gap-3">
             <div className="sm:hidden">
               <BigScoreRing value={visibleScore} size={96} />
             </div>
@@ -221,9 +228,6 @@ export function DealHero({ deal }: { deal: DealDetail }) {
               </Button>
             </div>
             <PipelineNotice status={pipelineStatus} running={pipelineRunning} />
-            <p className="max-w-sm text-center lg:text-right text-[11px] leading-relaxed text-muted-foreground">
-              Review documents again re-reads every uploaded file and rechecks sources. Recalculate score only uses values already saved from the last document review.
-            </p>
           </div>
         </div>
       </div>
@@ -254,6 +258,47 @@ function PipelineNotice({ status, running }: { status: PipelineStatus | null; ru
   const Icon = failed ? AlertCircle : complete ? CheckCircle2 : active ? Loader2 : AlertCircle;
   const progress = pipelineProgress(status);
   const eta = reviewEta(status);
+  const compact = complete || (!failed && !timedOut);
+
+  if (compact) {
+    return (
+      <div
+        role="status"
+        className={cn(
+          "w-full max-w-sm rounded-lg border px-3 py-2 text-xs shadow-sm",
+          complete
+            ? "border-success/35 bg-success/10 text-success"
+            : intermediate
+              ? "border-warning/40 bg-warning/10 text-warning"
+              : "border-primary/35 bg-primary/10 text-primary",
+        )}
+      >
+        <div className="flex items-center gap-2">
+          <Icon className={cn("h-4 w-4 shrink-0", active && !complete && "animate-spin")} />
+          <div className="min-w-0 flex-1">
+            <div className="flex items-center justify-between gap-3">
+              <span className="truncate font-semibold">{copy.title}</span>
+              {eta && <span className="shrink-0 text-[11px] text-current/75">{eta}</span>}
+            </div>
+            <div className="mt-1 flex items-center gap-2">
+              <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-current/15">
+                <div
+                  className={cn(
+                    "h-full rounded-full transition-all duration-700",
+                    complete ? "bg-success" : intermediate ? "bg-warning" : "bg-primary",
+                  )}
+                  style={{ width: `${progress}%` }}
+                />
+              </div>
+              <span className="shrink-0 text-[10px] font-medium uppercase tracking-[0.08em] text-current/75">
+                {progress}%
+              </span>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div
