@@ -34,7 +34,20 @@ export function OverviewTab({ deal }: { deal: DealDetail }) {
   const se = (deal.metrics?.sponsor_evaluation ?? {}) as Record<string, unknown>;
 
   const provenance = (deal.metrics?._provenance ?? {}) as ProvenanceMap;
-  const headlineIrr = pickTrustedNumber(tr, provenance, ["target_returns.target_irr", "target_returns.net_irr"]);
+  const canonical = deal.metrics?._canonical_returns;
+  const primaryStrategy = String(canonical?.primary_strategy ?? "").toLowerCase();
+  const isHoldStrategy = primaryStrategy === "hold" || primaryStrategy === "hold_with_sale_option";
+  const headlineIrr =
+    asNum(canonical?.target_irr) ??
+    (isHoldStrategy ? null : pickTrustedNumber(tr, provenance, ["target_returns.target_irr", "target_returns.net_irr"]));
+  const headlineCashOnCash =
+    asNum(canonical?.cash_on_cash) ??
+    pickTrustedNumber(tr, provenance, [
+      "target_returns.target_cash_on_cash",
+      "target_returns.distribution_yield",
+      "target_returns.hold_scenario.cash_on_cash_return",
+      "target_returns.hold_scenario.distribution_yield",
+    ]);
   const headlineMultiple = pickTrustedNumber(tr, provenance, ["target_returns.target_equity_multiple", "target_returns.net_equity_multiple"]);
   const quality = deal.quality && deal.scores?.data_quality
     ? { ...deal.quality, data_quality: deal.scores.data_quality }
@@ -47,6 +60,7 @@ export function OverviewTab({ deal }: { deal: DealDetail }) {
         deal={deal}
         gate={gate}
         headlineIrr={headlineIrr}
+        headlineCashOnCash={headlineCashOnCash}
         headlineMultiple={headlineMultiple}
       />
       <ReviewQueue deal={deal} />
@@ -61,6 +75,7 @@ export function OverviewTab({ deal }: { deal: DealDetail }) {
           uc={uc}
           se={se}
           headlineIrr={headlineIrr}
+          headlineCashOnCash={headlineCashOnCash}
           headlineMultiple={headlineMultiple}
         />
         <ScoreBreakdown scores={deal.scores ?? {}} />
@@ -126,11 +141,13 @@ function ExecutiveReview({
   deal,
   gate,
   headlineIrr,
+  headlineCashOnCash,
   headlineMultiple,
 }: {
   deal: DealDetail;
   gate?: DataQualityGate;
   headlineIrr: number | null;
+  headlineCashOnCash: number | null;
   headlineMultiple: number | null;
 }) {
   const metrics = deal.metrics ?? {};
@@ -143,6 +160,8 @@ function ExecutiveReview({
   const docs = deal.documents ?? [];
   const readableDocs = docs.filter((doc) => doc.has_text).length;
   const nextAction = gate?.next_actions?.[0] ?? readiness.action;
+  const primaryReturnLabel = headlineIrr !== null ? "Target IRR" : "Cash-on-Cash";
+  const primaryReturnValue = headlineIrr !== null ? headlineIrr : headlineCashOnCash;
 
   return (
     <div className="grid gap-4 xl:grid-cols-[1.25fr_0.75fr]">
@@ -172,7 +191,7 @@ function ExecutiveReview({
       <Card elevated className="p-6">
         <h3 className="text-base font-semibold tracking-tight">Key assumptions</h3>
         <div className="mt-4 grid grid-cols-2 gap-4">
-          <Stat label="Target IRR" value={fmtPct(headlineIrr, 1)} />
+          <Stat label={primaryReturnLabel} value={fmtPct(primaryReturnValue, 1)} />
           <Stat label="Multiple" value={fmtMultiple(headlineMultiple)} />
           <Stat label="Min Investment" value={fmtMoney(deal.minimum_investment)} />
           <Stat label="Project Cost" value={fmtMoney(asNum(ds.total_project_cost))} />
@@ -193,6 +212,7 @@ function SnapshotCard({
   uc,
   se,
   headlineIrr,
+  headlineCashOnCash,
   headlineMultiple,
 }: {
   tr: Record<string, unknown>;
@@ -203,6 +223,7 @@ function SnapshotCard({
   uc: Record<string, unknown>;
   se: Record<string, unknown>;
   headlineIrr: number | null;
+  headlineCashOnCash: number | null;
   headlineMultiple: number | null;
 }) {
   return (
@@ -213,7 +234,7 @@ function SnapshotCard({
       <div className="grid grid-cols-2 gap-x-6 gap-y-4 md:grid-cols-4">
         <Stat label="Target IRR" value={fmtPct(headlineIrr, 1)} />
         <Stat label="Equity Multiple" value={fmtMultiple(headlineMultiple)} />
-        <Stat label="Cash-on-Cash" value={fmtPct(asNum(tr.target_cash_on_cash), 1)} />
+        <Stat label="Cash-on-Cash" value={fmtPct(headlineCashOnCash, 1)} />
         <Stat label="Hold Period" value={fmtYears(asNum(ds.hold_period_years))} />
         <Stat label="Pref Return" value={fmtPct(asNum(ds.preferred_return), 1)} />
         <Stat label="LTV" value={fmtPct(asNum(ds.ltv), 0)} />
