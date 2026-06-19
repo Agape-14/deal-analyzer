@@ -10,8 +10,9 @@ import { BigScoreRing } from "@/components/deal-detail/score-ring";
 import { ScoreQualityBadge } from "@/components/deal-detail/score-quality-badge";
 import { FadeIn } from "@/components/motion";
 import { api } from "@/lib/api";
+import { getHeadlineReturnMetrics } from "@/lib/return-metrics";
 import { cn, fmtMoney, fmtMultiple, fmtPct } from "@/lib/utils";
-import type { CanonicalReturnSummary, DealDetail, DealQualitySummary, FieldProvenance } from "@/lib/types";
+import type { DealDetail, DealQualitySummary } from "@/lib/types";
 
 const POLL_INTERVAL = 5_000;
 const DOCUMENT_REVIEW_TIMEOUT = 45 * 60_000;
@@ -24,7 +25,6 @@ const STATUS_STYLES: Record<string, string> = {
   closed: "bg-chart-3/15 text-[hsl(var(--chart-3))] ring-1 ring-[hsl(var(--chart-3))/.3]",
 };
 
-type ProvenanceMap = Record<string, FieldProvenance | undefined>;
 type PipelineStep = "idle" | "extract" | "verify" | "score";
 type PipelineStatus = {
   status?: string;
@@ -52,24 +52,7 @@ export function DealHero({ deal }: { deal: DealDetail }) {
   const mountedRef = React.useRef(true);
   const locationBits = [deal.city, deal.state].filter(Boolean).join(", ") || deal.location;
   const visibleScore = deal.overall_score ?? deal.scores?.provisional_overall ?? null;
-  const tr = (metrics.target_returns ?? {}) as Record<string, unknown>;
-  const provenance = (metrics._provenance ?? {}) as ProvenanceMap;
-  const canonical = (metrics as { _canonical_returns?: CanonicalReturnSummary })._canonical_returns;
-  const primaryStrategy = String(canonical?.primary_strategy ?? "").toLowerCase();
-  const isHoldStrategy = primaryStrategy === "hold" || primaryStrategy === "hold_with_sale_option";
-  const headlineIrr =
-    asNum(canonical?.target_irr) ??
-    (isHoldStrategy ? null : pickTrustedNumber(tr, provenance, ["target_returns.target_irr", "target_returns.net_irr"])) ??
-    deal.target_irr;
-  const headlineCashOnCash =
-    asNum(canonical?.cash_on_cash) ??
-    pickTrustedNumber(tr, provenance, ["target_returns.target_cash_on_cash", "target_returns.distribution_yield"]);
-  const headlineMultiple =
-    asNum(canonical?.target_equity_multiple) ??
-    pickTrustedNumber(tr, provenance, ["target_returns.target_equity_multiple", "target_returns.net_equity_multiple"]) ??
-    deal.target_equity_multiple;
-  const primaryReturnLabel = headlineIrr !== null ? "Target IRR" : "Cash-on-Cash";
-  const primaryReturnValue = headlineIrr !== null ? headlineIrr : headlineCashOnCash;
+  const { headlineMultiple, primaryReturnLabel, primaryReturnValue } = getHeadlineReturnMetrics(deal);
 
   const setCurrentPipelineStep = React.useCallback((step: PipelineStep) => {
     pipelineStepRef.current = step;
@@ -529,29 +512,4 @@ function pipelineStepFromStatus(status: PipelineStatus | null): PipelineStep {
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-function pickTrustedNumber(block: Record<string, unknown>, provenance: ProvenanceMap, paths: string[]): number | null {
-  const candidates = paths
-    .map((path) => ({ path, value: asNum(block[path.split(".").at(-1) ?? path]), provenance: provenance[path] }))
-    .filter((candidate) => candidate.value !== null);
-
-  if (candidates.length === 0) return null;
-
-  const clean = candidates.filter((candidate) => !isBadSource(candidate.provenance));
-  const reviewed = clean.find((candidate) => candidate.provenance?.locked || ["manual", "confirmed", "calculated"].includes(String(candidate.provenance?.status ?? "")));
-  return (reviewed ?? clean[0] ?? candidates[0]).value;
-}
-
-function isBadSource(provenance?: FieldProvenance): boolean {
-  if (!provenance) return false;
-  const status = String(provenance.status ?? "").toLowerCase();
-  const conflictCount = Array.isArray(provenance.conflict) ? provenance.conflict.length : 0;
-  return conflictCount > 1 || ["wrong", "missing", "unverifiable", "stale"].includes(status);
-}
-
-function asNum(v: unknown): number | null {
-  if (typeof v === "number" && !Number.isNaN(v)) return v;
-  if (typeof v === "string" && v.trim() !== "" && !Number.isNaN(Number(v))) return Number(v);
-  return null;
 }
