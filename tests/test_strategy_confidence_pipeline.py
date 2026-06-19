@@ -51,6 +51,22 @@ def test_pipeline_rate_limit_errors_are_user_readable():
     assert "review documents again" in message.lower()
 
 
+def test_document_review_provider_failures_are_actionable():
+    cases = [
+        ("credit balance exhausted", "quota or credit balance", "add api credits"),
+        ("too many requests 429", "rate limit", "limit window"),
+        ("anthropic overloaded 529", "temporarily unavailable", "wait a few minutes"),
+    ]
+
+    for raw_error, expected_reason, expected_action in cases:
+        message = _pipeline_error_message(Exception(raw_error)).lower()
+
+        assert "document review incomplete" in message
+        assert "not fully re-read" in message
+        assert expected_reason in message
+        assert expected_action in message
+
+
 def test_json_safe_removes_non_finite_numbers_from_metrics():
     clean = _json_safe({"good": 1.2, "bad": math.nan, "nested": [math.inf]})
 
