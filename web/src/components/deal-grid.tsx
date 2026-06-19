@@ -26,7 +26,7 @@ type SortKey = "score" | "irr" | "multiple" | "recent" | "name";
 
 const SORTS: Array<{ key: SortKey; label: string; icon: React.ComponentType<{ className?: string }> }> = [
   { key: "score", label: "Score", icon: Sparkles },
-  { key: "irr", label: "Target IRR", icon: TrendingUp },
+  { key: "irr", label: "Return", icon: TrendingUp },
   { key: "multiple", label: "Multiple", icon: ArrowDownUp },
   { key: "recent", label: "Most recent", icon: Clock },
   { key: "name", label: "Name (A-Z)", icon: CircleDot },
@@ -66,7 +66,7 @@ export function DealGrid({ deals }: { deals: DealSummary[] }) {
         case "score":
           return (b.overall_score ?? -1) - (a.overall_score ?? -1);
         case "irr":
-          return (b.target_irr ?? -1) - (a.target_irr ?? -1);
+          return ((b.target_irr ?? b.target_cash_on_cash) ?? -1) - ((a.target_irr ?? a.target_cash_on_cash) ?? -1);
         case "multiple":
           return (b.target_equity_multiple ?? -1) - (a.target_equity_multiple ?? -1);
         case "recent":
@@ -250,7 +250,7 @@ function FocusPanel({
               </div>
             </div>
             <div className="mt-4 grid grid-cols-3 gap-3">
-              <MiniMetric label="IRR" value={fmtPct(deal.target_irr)} />
+              <MiniMetric label="Return" value={fmtPct(deal.target_irr ?? deal.target_cash_on_cash)} />
               <MiniMetric label="Multiple" value={fmtMultiple(deal.target_equity_multiple)} />
               <MiniMetric label="Min" value={fmtMoney(deal.minimum_investment)} />
             </div>
@@ -314,7 +314,7 @@ function NextActionsPanel({
         {
           icon: Upload,
           label: "Add a deal",
-          detail: "Upload an offering memo to populate the pipeline.",
+          detail: "Upload an offering memo to populate the deal list.",
         },
       ];
 
