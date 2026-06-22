@@ -12,7 +12,7 @@ import { FadeIn } from "@/components/motion";
 import { api } from "@/lib/api";
 import { getHeadlineReturnMetrics } from "@/lib/return-metrics";
 import { cn, fmtMoney, fmtMultiple, fmtPct } from "@/lib/utils";
-import type { DealDetail, DealQualitySummary } from "@/lib/types";
+import type { DataQualityGate, DealDetail, DealQualitySummary } from "@/lib/types";
 
 const POLL_INTERVAL = 5_000;
 const DOCUMENT_REVIEW_TIMEOUT = 45 * 60_000;
@@ -53,6 +53,10 @@ export function DealHero({ deal }: { deal: DealDetail }) {
   const locationBits = [deal.city, deal.state].filter(Boolean).join(", ") || deal.location;
   const visibleScore = deal.overall_score ?? deal.scores?.provisional_overall ?? null;
   const { headlineMultiple, primaryReturnLabel, primaryReturnValue } = getHeadlineReturnMetrics(deal);
+  const gate = deal.scores?.data_quality;
+  const reviewSummary = dealReviewSummary(gate);
+  const docsRead = readableDocumentCount(deal);
+  const totalDocs = deal.documents?.length ?? 0;
 
   const setCurrentPipelineStep = React.useCallback((step: PipelineStep) => {
     pipelineStepRef.current = step;
@@ -134,11 +138,11 @@ export function DealHero({ deal }: { deal: DealDetail }) {
 
   return (
     <FadeIn>
-      <div className="relative">
-        <div className="mb-6">
+      <section className="relative overflow-hidden rounded-2xl border border-border/80 bg-card/90 shadow-[0_24px_80px_-60px_rgba(15,23,42,0.8)]">
+        <div className="px-5 pt-5 md:px-6 md:pt-6">
           <Link
             href="/"
-            className="inline-flex min-h-10 items-center gap-2 rounded-lg border border-border/70 bg-card/70 px-3.5 py-2 text-sm font-medium text-foreground shadow-sm transition-colors hover:border-primary/45 hover:bg-muted/70 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/50"
+            className="inline-flex min-h-10 items-center gap-2 rounded-lg border border-border/80 bg-background px-3.5 py-2 text-sm font-semibold text-foreground shadow-sm transition-colors hover:border-primary/45 hover:bg-muted/70 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/50"
             aria-label="Back to all deals"
           >
             <ArrowLeft className="h-4 w-4" />
@@ -146,7 +150,7 @@ export function DealHero({ deal }: { deal: DealDetail }) {
           </Link>
         </div>
 
-        <div className="flex flex-col lg:flex-row lg:items-start lg:justify-between gap-8">
+        <div className="grid gap-6 px-5 py-6 md:px-6 lg:grid-cols-[minmax(0,1fr)_340px] lg:items-start">
           <div className="min-w-0 flex-1">
             <div className="flex items-center gap-2 text-[11px] uppercase tracking-[0.14em] text-muted-foreground mb-2">
               <span>{deal.property_type || "Investment"}</span>
@@ -178,53 +182,99 @@ export function DealHero({ deal }: { deal: DealDetail }) {
               )}
             </div>
 
-            <div className="mt-6 grid grid-cols-2 sm:grid-cols-4 gap-6">
-              <Metric label={primaryReturnLabel} value={fmtPct(primaryReturnValue)} />
-              <Metric label="Equity Multiple" value={fmtMultiple(headlineMultiple)} />
-              <Metric label="Min Investment" value={fmtMoney(deal.minimum_investment)} />
-              <Metric label="Documents" value={String(deal.documents?.length ?? 0)} />
+            <div className="mt-7 overflow-hidden rounded-xl border border-border/80 bg-background/70">
+              <div className="grid grid-cols-2 divide-x divide-y divide-border/70 md:grid-cols-4 md:divide-y-0">
+                <Metric label={primaryReturnLabel} value={fmtPct(primaryReturnValue)} />
+                <Metric label="Equity Multiple" value={fmtMultiple(headlineMultiple)} />
+                <Metric label="Min Investment" value={fmtMoney(deal.minimum_investment)} />
+                <Metric label="Documents Read" value={`${docsRead}/${totalDocs || 0}`} />
+              </div>
             </div>
           </div>
 
-          <div className="flex flex-col items-center lg:items-end gap-3">
-            <div className="sm:hidden">
-              <BigScoreRing value={visibleScore} size={96} />
+          <aside className="rounded-xl border border-border/80 bg-background/80 p-4 shadow-sm">
+            <div className="flex items-start justify-between gap-4">
+              <div>
+                <div className="text-[10px] font-extrabold uppercase tracking-[0.14em] text-muted-foreground">Score status</div>
+                <div className="mt-2">
+                  <ScoreQualityBadge gate={gate} />
+                </div>
+                <p className="mt-3 text-xs leading-relaxed text-muted-foreground">{reviewSummary}</p>
+              </div>
+              <div className="shrink-0">
+                <BigScoreRing value={visibleScore} size={100} />
+              </div>
             </div>
-            <div className="hidden sm:block">
-              <BigScoreRing value={visibleScore} size={128} />
-            </div>
-            <ScoreQualityBadge gate={deal.scores?.data_quality} />
-            <div className="flex flex-wrap items-center justify-center lg:justify-end gap-2 max-w-sm">
-              <Button size="sm" onClick={runPipeline} disabled={pipelineRunning || scoring}>
+
+            <div className="mt-4 grid gap-2">
+              <Button size="sm" onClick={runPipeline} disabled={pipelineRunning || scoring} className="justify-center">
                 {pipelineRunning ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
                 {pipelineLabel}
               </Button>
-              <Button size="sm" variant="secondary" onClick={runScore} disabled={scoring || pipelineRunning}>
-                {scoring ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
-                {scoring ? "Calculating..." : "Recalculate score"}
-              </Button>
-              <Button size="sm" variant="outline" asChild>
-                <a href={`/api/reports/deal/${deal.id}/pdf`} target="_blank" rel="noreferrer">
-                  <FileDown className="h-4 w-4" />
-                  Export PDF
-                </a>
-              </Button>
+              <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-1 xl:grid-cols-2">
+                <Button size="sm" variant="secondary" onClick={runScore} disabled={scoring || pipelineRunning}>
+                  {scoring ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
+                  {scoring ? "Calculating..." : "Recalculate score"}
+                </Button>
+                <Button size="sm" variant="outline" asChild>
+                  <a href={`/api/reports/deal/${deal.id}/pdf`} target="_blank" rel="noreferrer">
+                    <FileDown className="h-4 w-4" />
+                    Export PDF
+                  </a>
+                </Button>
+              </div>
             </div>
             <PipelineNotice status={pipelineStatus} running={pipelineRunning} />
-          </div>
+            <p className="mt-3 text-[11px] leading-relaxed text-muted-foreground">
+              Review documents re-reads every uploaded file. Recalculate score only uses values already saved from the last document review.
+            </p>
+          </aside>
         </div>
-      </div>
+      </section>
     </FadeIn>
   );
 }
 
 function Metric({ label, value }: { label: string; value: string }) {
   return (
-    <div>
-      <div className="text-[10px] uppercase tracking-[0.12em] text-muted-foreground">{label}</div>
-      <div className="text-xl font-semibold tabular-nums tracking-tight mt-1.5">{value}</div>
+    <div className="min-w-0 px-4 py-3.5">
+      <div className="text-[10px] font-extrabold uppercase tracking-[0.12em] text-foreground/60">{label}</div>
+      <div data-figure className="mt-1.5 truncate text-xl font-extrabold tabular-nums tracking-tight text-foreground">{value}</div>
     </div>
   );
+}
+
+function dealReviewSummary(gate?: DataQualityGate): string {
+  if (!gate) return "Document review has not produced a confidence gate yet.";
+  const stage = String(gate.stage ?? "").toLowerCase();
+  const openItems = reviewItemCount(gate);
+  const confidence = typeof gate.confidence_score === "number" ? `${Math.round(gate.confidence_score)}% confidence` : "confidence pending";
+
+  if (stage === "verified" && openItems === 0) {
+    return `Documents reviewed and source-checked. Score is ready to use with ${confidence}.`;
+  }
+  if (stage.includes("incomplete")) {
+    return `Document review is incomplete. Do not rely on the score until review finishes successfully.`;
+  }
+  if (openItems > 0) {
+    return `Documents reviewed, but ${openItems} item${openItems === 1 ? "" : "s"} still need confirmation before the score is trusted.`;
+  }
+  return `Documents reviewed. Confirm the review queue before relying on the score.`;
+}
+
+function reviewItemCount(gate: DataQualityGate): number {
+  const critical = gate.critical_summary;
+  const criticalCount =
+    (critical?.missing ?? 0) +
+    (critical?.conflicted ?? 0) +
+    (critical?.bad ?? 0) +
+    (critical?.review_only ?? 0);
+  const mathFailures = gate.math_summary?.fail ?? gate.math_summary?.blocking?.length ?? 0;
+  return criticalCount + mathFailures;
+}
+
+function readableDocumentCount(deal: DealDetail): number {
+  return (deal.documents ?? []).filter((doc) => doc.has_text).length;
 }
 
 function PipelineNotice({ status, running }: { status: PipelineStatus | null; running: boolean }) {
