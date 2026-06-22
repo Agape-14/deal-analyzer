@@ -55,6 +55,9 @@ export function DealHero({ deal }: { deal: DealDetail }) {
   const { headlineMultiple, primaryReturnLabel, primaryReturnValue } = getHeadlineReturnMetrics(deal);
   const gate = deal.scores?.data_quality;
   const reviewSummary = dealReviewSummary(gate);
+  const viewerSummary = viewerScoreSummary(gate);
+  const reviewStatusName = normalizedPipelineStatus(pipelineStatus);
+  const openAnalystTools = pipelineRunning || reviewStatusName === "failed" || reviewStatusName === "running";
   const docsRead = readableDocumentCount(deal);
   const totalDocs = deal.documents?.length ?? 0;
 
@@ -195,11 +198,11 @@ export function DealHero({ deal }: { deal: DealDetail }) {
           <aside className="rounded-xl border border-border/80 bg-background/80 p-4 shadow-sm">
             <div className="flex items-start justify-between gap-4">
               <div>
-                <div className="text-[10px] font-extrabold uppercase tracking-[0.14em] text-muted-foreground">Score status</div>
+                <div className="text-[10px] font-extrabold uppercase tracking-[0.14em] text-muted-foreground">Investment summary</div>
                 <div className="mt-2">
-                  <ScoreQualityBadge gate={gate} />
+                  <ViewerTrustBadge gate={gate} />
                 </div>
-                <p className="mt-3 text-xs leading-relaxed text-muted-foreground">{reviewSummary}</p>
+                <p className="mt-3 text-xs leading-relaxed text-muted-foreground">{viewerSummary}</p>
               </div>
               <div className="shrink-0">
                 <BigScoreRing value={visibleScore} size={100} />
@@ -207,27 +210,44 @@ export function DealHero({ deal }: { deal: DealDetail }) {
             </div>
 
             <div className="mt-4 grid gap-2">
-              <Button size="sm" onClick={runPipeline} disabled={pipelineRunning || scoring} className="justify-center">
-                {pipelineRunning ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
-                {pipelineLabel}
+              <Button size="sm" variant="outline" asChild className="justify-center">
+                <a href={`/api/reports/deal/${deal.id}/pdf`} target="_blank" rel="noreferrer">
+                  <FileDown className="h-4 w-4" />
+                  Export PDF
+                </a>
               </Button>
-              <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-1 xl:grid-cols-2">
-                <Button size="sm" variant="secondary" onClick={runScore} disabled={scoring || pipelineRunning}>
-                  {scoring ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
-                  {scoring ? "Calculating..." : "Recalculate score"}
-                </Button>
-                <Button size="sm" variant="outline" asChild>
-                  <a href={`/api/reports/deal/${deal.id}/pdf`} target="_blank" rel="noreferrer">
-                    <FileDown className="h-4 w-4" />
-                    Export PDF
-                  </a>
-                </Button>
-              </div>
+              <details
+                id="analyst-tools"
+                open={openAnalystTools}
+                className="group rounded-lg border border-border/80 bg-muted/25"
+              >
+                <summary className="flex cursor-pointer list-none items-center justify-between gap-3 px-3 py-2 text-xs font-semibold text-muted-foreground marker:hidden hover:text-foreground">
+                  <span>Analyst tools</span>
+                  <span className="text-[11px] font-medium group-open:hidden">Show</span>
+                  <span className="hidden text-[11px] font-medium group-open:inline">Hide</span>
+                </summary>
+                <div className="space-y-3 border-t border-border/70 p-3">
+                  <div>
+                    <ScoreQualityBadge gate={gate} />
+                    <p className="mt-2 text-xs leading-relaxed text-muted-foreground">{reviewSummary}</p>
+                  </div>
+                  <div className="grid gap-2">
+                    <Button size="sm" onClick={runPipeline} disabled={pipelineRunning || scoring} className="justify-center">
+                      {pipelineRunning ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
+                      {pipelineLabel}
+                    </Button>
+                    <Button size="sm" variant="secondary" onClick={runScore} disabled={scoring || pipelineRunning}>
+                      {scoring ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
+                      {scoring ? "Calculating..." : "Recalculate score"}
+                    </Button>
+                  </div>
+                  <PipelineNotice status={pipelineStatus} running={pipelineRunning} />
+                  <p className="text-[11px] leading-relaxed text-muted-foreground">
+                    Review documents re-reads every uploaded file. Recalculate score only uses values already saved from the last document review.
+                  </p>
+                </div>
+              </details>
             </div>
-            <PipelineNotice status={pipelineStatus} running={pipelineRunning} />
-            <p className="mt-3 text-[11px] leading-relaxed text-muted-foreground">
-              Review documents re-reads every uploaded file. Recalculate score only uses values already saved from the last document review.
-            </p>
           </aside>
         </div>
       </section>
@@ -275,6 +295,48 @@ function reviewItemCount(gate: DataQualityGate): number {
 
 function readableDocumentCount(deal: DealDetail): number {
   return (deal.documents ?? []).filter((doc) => doc.has_text).length;
+}
+
+function viewerScoreSummary(gate?: DataQualityGate): string {
+  if (!gate) return "Current underwriting summary. Analyst details are available if a source check is needed.";
+  const stage = String(gate.stage ?? "").toLowerCase();
+  const openItems = reviewItemCount(gate);
+
+  if (stage === "verified" && openItems === 0) {
+    return "Source-backed underwriting summary ready for comparison and export.";
+  }
+  if (stage.includes("incomplete")) {
+    return "Working summary shown while document review finishes. Analyst details are available below.";
+  }
+  if (openItems > 0) {
+    return "Current working summary. Internal review items are grouped under analyst tools.";
+  }
+  return "Current underwriting summary ready for review.";
+}
+
+function ViewerTrustBadge({ gate }: { gate?: DataQualityGate }) {
+  const stage = String(gate?.stage ?? "").toLowerCase();
+  const openItems = gate ? reviewItemCount(gate) : 0;
+  const verified = stage === "verified" && openItems === 0;
+  const incomplete = stage.includes("incomplete");
+  const label = verified ? "Ready for comparison" : incomplete ? "Review in progress" : "Working summary";
+  const Icon = verified ? CheckCircle2 : AlertCircle;
+
+  return (
+    <span
+      className={cn(
+        "inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-semibold ring-1",
+        verified
+          ? "bg-success/15 text-success ring-success/30"
+          : incomplete
+            ? "bg-warning/15 text-warning ring-warning/30"
+            : "bg-primary/10 text-primary ring-primary/25",
+      )}
+    >
+      <Icon className="h-3.5 w-3.5" />
+      {label}
+    </span>
+  );
 }
 
 function PipelineNotice({ status, running }: { status: PipelineStatus | null; running: boolean }) {
