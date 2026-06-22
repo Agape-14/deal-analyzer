@@ -2,7 +2,7 @@
 
 import * as React from "react";
 import { useRouter } from "next/navigation";
-import { AlertTriangle, Calculator, CheckCircle2, ExternalLink, FileText, Loader2, Search } from "lucide-react";
+import { AlertTriangle, Calculator, CheckCircle2, ExternalLink, FileText, Loader2, Search, X } from "lucide-react";
 import { toast } from "sonner";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -105,7 +105,7 @@ const FALLBACK_INPUTS: Partial<Record<ReviewArea, Array<{ path: string; label: s
     { path: "construction_costs.soft_costs_total", label: "Soft costs total" },
     { path: "construction_costs.land_cost_total", label: "Land total" },
     { path: "construction_costs.contingency_total", label: "Contingency total" },
-    { path: "deal_structure.total_project_cost", label: "Total cost" },
+    { path: "deal_structure.total_project_cost", label: "Total project cost" },
   ],
   Sponsor: [
     { path: "sponsor_evaluation.alignment_score", label: "Alignment score" },
@@ -237,6 +237,10 @@ function ReviewRow({ item, index, dealId }: { item: ReviewItem; index: number; d
             <span className="rounded-md bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground ring-1 ring-border/70">{item.area}</span>
           </div>
           <p className="mt-1 text-xs leading-relaxed text-muted-foreground">{item.detail}</p>
+          <div className="mt-2 rounded-md border border-border/70 bg-muted/20 px-2.5 py-2 text-[11px] leading-relaxed text-muted-foreground">
+            <span className="font-semibold text-foreground">Why this matters: </span>
+            {whyThisMatters(item)}
+          </div>
           {(item.value !== undefined || item.source) && (
             <div className="mt-2 flex flex-wrap gap-2 text-[11px] text-muted-foreground">
               {item.value !== undefined ? <span>Current: <span className="text-foreground">{formatReviewValue(item.value, item.path)}</span></span> : null}
@@ -254,7 +258,14 @@ function ReviewRow({ item, index, dealId }: { item: ReviewItem; index: number; d
           onSourceToggle={hasSource ? () => setSourceOpen((value) => !value) : undefined}
         />
       </div>
-      {sourceOpen && hasSource ? <SourceReviewPanel item={item} onEdit={hasInputs ? () => setEditing(true) : undefined} /> : null}
+      {sourceOpen && hasSource ? (
+        <SourceReviewPanel
+          item={item}
+          dealId={dealId}
+          onClose={() => setSourceOpen(false)}
+          onEdit={hasInputs ? () => setEditing(true) : undefined}
+        />
+      ) : null}
       {editing && hasInputs ? <ReviewInputEditor dealId={dealId} item={item} onDone={() => setEditing(false)} /> : null}
     </div>
   );
@@ -295,7 +306,7 @@ function ReviewActions({
     <div className="flex flex-wrap items-center gap-2 md:justify-end md:pt-8">
       {onEdit ? (
         <Button size="sm" variant={editing ? "secondary" : "outline"} onClick={onEdit} disabled={busy}>
-          {editing ? "Hide inputs" : "Review inputs"}
+          {editing ? "Hide values" : "Edit values"}
         </Button>
       ) : null}
       <Button size="sm" onClick={confirmReviewItem} disabled={busy}>
@@ -305,65 +316,103 @@ function ReviewActions({
       {onSourceToggle ? (
         <Button size="sm" variant={sourceOpen ? "secondary" : "outline"} onClick={onSourceToggle} disabled={busy}>
           <Search className="h-3.5 w-3.5" />
-          {sourceOpen ? "Hide source" : "Inspect source"}
+          {sourceOpen ? "Close source" : "Open source"}
         </Button>
       ) : null}
     </div>
   );
 }
 
-function SourceReviewPanel({ item, onEdit }: { item: ReviewItem; onEdit?: () => void }) {
+function SourceReviewPanel({ item, dealId, onClose, onEdit }: { item: ReviewItem; dealId: number; onClose: () => void; onEdit?: () => void }) {
+  const router = useRouter();
+  const [busy, setBusy] = React.useState(false);
   const firstSourceInput = item.inputs?.find((input) => input.provenance?.source_doc_name || input.provenance?.verification_note || input.provenance?.correction_note);
   const provenance = firstSourceInput?.provenance;
   const sourceName = item.source ?? sourceLabel(provenance) ?? "No source captured";
   const evidence = provenance ? sourceSnippet(provenance) : "";
   const location = provenance ? sourceLocation(provenance) : "";
 
+  async function confirmFromDrawer() {
+    setBusy(true);
+    try {
+      await api.post(`/api/deals/${dealId}/reviews/resolve`, { key: item.key, action: item.confirmLabel ?? "confirmed" });
+      toast.success("Review item cleared", { description: "This item was confirmed and removed from Needs review." });
+      onClose();
+      router.refresh();
+    } catch (e) {
+      toast.error("Could not confirm review item", { description: errorDetail(e) });
+    } finally {
+      setBusy(false);
+    }
+  }
+
   return (
-    <div className="mt-4 rounded-lg border border-primary/25 bg-primary/5 p-3">
-      <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
-        <div className="min-w-0">
-          <div className="flex items-center gap-2 text-xs font-semibold tracking-tight text-foreground">
-            <FileText className="h-3.5 w-3.5 text-primary" />
-            Source to review
-          </div>
-          <div className="mt-2 text-sm font-medium text-foreground">{sourceName}</div>
-          {location ? <div className="mt-0.5 text-xs text-muted-foreground">{location}</div> : null}
-          {item.value !== undefined ? (
-            <div className="mt-2 text-xs text-muted-foreground">
-              Current value: <span className="font-medium text-foreground">{formatReviewValue(item.value, item.path)}</span>
+    <div className="fixed inset-0 z-50">
+      <button className="absolute inset-0 bg-background/45 backdrop-blur-sm" onClick={onClose} aria-label="Close source review" />
+      <aside className="absolute right-0 top-0 flex h-full w-full max-w-xl flex-col border-l border-border bg-background shadow-2xl">
+        <div className="border-b border-border bg-card px-5 py-4">
+          <div className="flex items-start justify-between gap-3">
+            <div>
+              <div className="text-[10px] font-extrabold uppercase tracking-[0.14em] text-primary">Source Review</div>
+              <h3 className="mt-1 text-lg font-bold text-foreground">{item.title}</h3>
+              <p className="mt-1 text-xs leading-relaxed text-muted-foreground">Inspect the cited evidence, edit the value if needed, then confirm to clear this checklist item.</p>
             </div>
-          ) : null}
-        </div>
-        <div className="flex flex-wrap gap-2">
-          {onEdit ? (
-            <Button size="sm" variant="secondary" onClick={onEdit}>
-              Review inputs
+            <Button size="icon" variant="ghost" onClick={onClose} aria-label="Close source review">
+              <X className="h-4 w-4" />
             </Button>
-          ) : null}
-          {item.actionHref ? (
-            <Button size="sm" variant="outline" asChild>
-              <a href={item.actionHref}>
-                <ExternalLink className="h-3.5 w-3.5" />
-                Open citation
-              </a>
-            </Button>
-          ) : null}
+          </div>
         </div>
-      </div>
-      <div className="mt-3 rounded-md border border-border/70 bg-background/70 p-3 text-xs leading-relaxed text-muted-foreground">
-        {evidence ? (
-          <>
-            <span className="font-semibold text-foreground">Evidence: </span>
-            {evidence}
-          </>
-        ) : (
-          "Use the source link to inspect this item. If it is correct, confirm the row; if it is wrong, review and save the inputs."
-        )}
-      </div>
-      <div className="mt-2 text-[11px] leading-relaxed text-muted-foreground">
-        Confirming clears this row from Needs review. Editing inputs saves the corrected values everywhere else in the deal.
-      </div>
+
+        <div className="flex-1 space-y-4 overflow-y-auto p-5">
+          <div className="rounded-xl border border-border bg-card p-4">
+            <div className="flex items-center gap-2 text-xs font-semibold text-foreground">
+              <FileText className="h-3.5 w-3.5 text-primary" />
+              Cited source
+            </div>
+            <div className="mt-2 text-sm font-semibold text-foreground">{sourceName}</div>
+            {location ? <div className="mt-0.5 text-xs text-muted-foreground">{location}</div> : null}
+            {item.value !== undefined ? (
+              <div className="mt-3 rounded-lg border border-border/70 bg-muted/20 px-3 py-2 text-xs text-muted-foreground">
+                Current value: <span className="font-semibold text-foreground">{formatReviewValue(item.value, item.path)}</span>
+              </div>
+            ) : null}
+          </div>
+
+          <div className="rounded-xl border border-primary/25 bg-primary/5 p-4">
+            <div className="text-xs font-semibold text-foreground">Evidence to check</div>
+            <div className="mt-2 text-sm leading-relaxed text-foreground">
+              {evidence || "No exact excerpt was captured. Open the citation and use the source location above to inspect the document."}
+            </div>
+          </div>
+
+          <div className="rounded-xl border border-border bg-card p-4 text-xs leading-relaxed text-muted-foreground">
+            <span className="font-semibold text-foreground">Why this matters: </span>
+            {whyThisMatters(item)}
+          </div>
+        </div>
+
+        <div className="border-t border-border bg-card p-4">
+          <div className="grid gap-2 sm:grid-cols-3">
+            {onEdit ? (
+              <Button variant="secondary" onClick={onEdit}>
+                Edit values
+              </Button>
+            ) : null}
+            {item.actionHref ? (
+              <Button variant="outline" asChild>
+                <a href={item.actionHref}>
+                  <ExternalLink className="h-3.5 w-3.5" />
+                  Highlight citation
+                </a>
+              </Button>
+            ) : null}
+            <Button onClick={confirmFromDrawer} disabled={busy}>
+              {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <CheckCircle2 className="h-3.5 w-3.5" />}
+              Confirm
+            </Button>
+          </div>
+        </div>
+      </aside>
     </div>
   );
 }
@@ -372,7 +421,7 @@ function ReviewInputSummary({ inputs }: { inputs: ReviewInput[] }) {
   const visible = inputs.slice(0, 8);
   return (
     <div className="mt-3 rounded-lg border border-border/70 bg-muted/20 p-2.5">
-      <div className="mb-1.5 text-[10px] uppercase tracking-[0.14em] text-muted-foreground">Inputs this row depends on</div>
+      <div className="mb-1.5 text-[10px] uppercase tracking-[0.14em] text-muted-foreground">Values to check</div>
       <div className="flex flex-wrap gap-1.5">
         {visible.map((input) => (
           <span key={input.path} className="rounded-md border border-border bg-background px-2 py-1 text-[11px] text-muted-foreground">
@@ -429,12 +478,12 @@ function ReviewInputEditor({ dealId, item, onDone }: { dealId: number; item: Rev
     <div className="mt-4 rounded-lg border border-primary/25 bg-primary/5 p-3">
       <div className="mb-2 flex items-center justify-between gap-3">
         <div>
-          <div className="text-xs font-semibold tracking-tight text-foreground">Review and correct inputs</div>
-          <p className="mt-0.5 text-[11px] text-muted-foreground">Edit wrong values here, or leave them unchanged and save to approve and clear this row.</p>
+          <div className="text-xs font-semibold tracking-tight text-foreground">Edit or confirm values</div>
+          <p className="mt-0.5 text-[11px] text-muted-foreground">Update wrong values, or save unchanged values to approve and clear this item.</p>
         </div>
         <Button size="sm" onClick={saveAll} disabled={busy}>
           {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <CheckCircle2 className="h-3.5 w-3.5" />}
-          Save and clear row
+          Save and clear
         </Button>
       </div>
       <div className="grid gap-2 lg:grid-cols-2">
@@ -519,7 +568,7 @@ function flagItems(flags: ValidationFlag[], metrics: Metrics, provenance: Record
         source: path ? sourceLabel(provenance[path]) : undefined,
         inputs,
         actionHref: sourcePath ? sourceHref(sourcePath) : undefined,
-        confirmLabel: qualitative ? "Accept note" : "Confirm",
+        confirmLabel: qualitative ? "Confirm note" : "Confirm",
       };
     });
 }
@@ -675,12 +724,44 @@ function firstSourcedInputPath(inputs: ReviewInput[] | undefined, provenance: Re
 }
 
 function sourceDetail(provenance: FieldProvenance): string {
-  if (Array.isArray(provenance.conflict) && provenance.conflict.length > 1) return "Documents disagree. Confirm the right value or edit it.";
-  if (provenance.status === "wrong") return "Verification challenged this value. Confirm it or edit the field.";
-  if (provenance.status === "missing") return "This required field is missing from the extracted data.";
-  if (provenance.status === "unverifiable") return "The verifier could not tie this value back to a source document.";
-  if (typeof provenance.confidence === "number") return `Confidence is ${provenance.confidence}%, below the 85% review threshold.`;
+  if (Array.isArray(provenance.conflict) && provenance.conflict.length > 1) return "Documents disagree. Choose the correct value or confirm the current one.";
+  if (provenance.status === "wrong") return "This value was challenged during verification. Edit it or confirm it.";
+  if (provenance.status === "missing") return "This field was not found in the documents. Add it or confirm that it is not needed.";
+  if (provenance.status === "unverifiable") return "The app could not tie this value back to a source document. Open the source or confirm it manually.";
+  if (typeof provenance.confidence === "number") return `Only ${provenance.confidence}% confidence. Confirm it or update the value.`;
   return "This value needs human review before it can be trusted.";
+}
+
+function whyThisMatters(item: ReviewItem): string {
+  if (item.kind === "math") {
+    if (item.area === "Returns") return "Return assumptions drive the score, comparison views, and investment summary.";
+    if (item.area === "Debt") return "Debt assumptions affect leverage, DSCR, and whether the deal can support the capital stack.";
+    if (item.area === "Construction") return "Cost math changes total project cost, equity need, contingency, and per-unit economics.";
+    if (item.area === "Capital Stack") return "Capital stack math changes project cost, equity required, debt sizing, and investor exposure.";
+    return "A failed calculation can make the score and comparison unreliable.";
+  }
+  if (item.kind === "source") {
+    return "The score should only rely on values tied to a clear source or confirmed by the user.";
+  }
+
+  switch (item.area) {
+    case "Returns":
+      return "This affects headline return metrics and how the deal compares against alternatives.";
+    case "Capital Stack":
+      return "This changes project cost, equity need, leverage, and sponsor alignment.";
+    case "Debt":
+      return "This affects leverage, DSCR, interest burden, and downside risk.";
+    case "Construction":
+      return "This affects total project cost, contingency, and the capital required to execute.";
+    case "Sponsor":
+      return "This affects alignment, execution trust, and whether the sponsor economics are reliable.";
+    case "Market":
+      return "This affects rent growth, vacancy, and operating assumptions behind the score.";
+    case "Source":
+      return "This needs a reliable citation before the number should be trusted.";
+    default:
+      return "This item needs confirmation before the score should be trusted.";
+  }
 }
 
 function sourceLabel(provenance?: FieldProvenance): string | undefined {
