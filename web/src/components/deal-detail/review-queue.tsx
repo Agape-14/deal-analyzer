@@ -192,7 +192,7 @@ export function ReviewQueue({ deal }: { deal: DealDetail }) {
   }
 
   return (
-    <Card elevated className="p-6">
+    <Card className="border-border/80 bg-card p-5 shadow-sm md:p-6">
       <ReviewQueueHeader visibleCount={visible.length} hiddenCount={hidden.length} />
       <ReviewQueueSteps />
 
@@ -227,17 +227,17 @@ function ReviewRow({ item, index, dealId }: { item: ReviewItem; index: number; d
   const hasSource = Boolean(item.actionHref);
 
   return (
-    <div className="rounded-lg border border-border/70 bg-card/40 p-4">
-      <div className="grid gap-3 md:grid-cols-[auto_1fr_auto] md:items-start">
-        <div className={cn("flex h-8 w-8 items-center justify-center rounded-md text-xs font-semibold ring-1 md:mt-1", item.severity === "red" ? "bg-destructive/15 text-destructive ring-destructive/30" : "bg-warning/15 text-warning ring-warning/30")}>{index + 1}</div>
+    <div className="overflow-hidden rounded-xl border border-border/80 bg-background">
+      <div className="grid gap-4 p-4 md:grid-cols-[auto_1fr_auto] md:items-start">
+        <div className={cn("flex h-9 w-9 items-center justify-center rounded-lg text-xs font-extrabold ring-1 md:mt-0.5", item.severity === "red" ? "bg-destructive/15 text-destructive ring-destructive/30" : "bg-warning/15 text-warning ring-warning/30")}>{index + 1}</div>
         <div className="min-w-0">
           <div className="flex flex-wrap items-center gap-2">
             <Icon className={cn("h-4 w-4", item.severity === "red" ? "text-destructive" : "text-warning")} />
-            <div className="font-semibold tracking-tight">{item.title}</div>
-            <span className="rounded-md bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground ring-1 ring-border/70">{item.area}</span>
+            <div className="text-base font-extrabold text-foreground">{item.title}</div>
+            <span className="rounded-md bg-muted px-1.5 py-0.5 text-[10px] font-semibold uppercase text-muted-foreground ring-1 ring-border/70">{item.area}</span>
           </div>
           <p className="mt-1 text-xs leading-relaxed text-muted-foreground">{item.detail}</p>
-          <div className="mt-2 rounded-md border border-border/70 bg-muted/20 px-2.5 py-2 text-[11px] leading-relaxed text-muted-foreground">
+          <div className="mt-3 rounded-lg border border-border/70 bg-muted/20 px-3 py-2 text-[11px] leading-relaxed text-muted-foreground">
             <span className="font-semibold text-foreground">Why this matters: </span>
             {whyThisMatters(item)}
           </div>
@@ -303,7 +303,7 @@ function ReviewActions({
   }
 
   return (
-    <div className="flex flex-wrap items-center gap-2 md:justify-end md:pt-8">
+    <div className="flex flex-wrap items-center gap-2 md:min-w-[18rem] md:justify-end md:pt-7">
       {onEdit ? (
         <Button size="sm" variant={editing ? "secondary" : "outline"} onClick={onEdit} disabled={busy}>
           {editing ? "Hide values" : "Edit values"}
@@ -420,12 +420,12 @@ function SourceReviewPanel({ item, dealId, onClose, onEdit }: { item: ReviewItem
 function ReviewInputSummary({ inputs }: { inputs: ReviewInput[] }) {
   const visible = inputs.slice(0, 8);
   return (
-    <div className="mt-3 rounded-lg border border-border/70 bg-muted/20 p-2.5">
-      <div className="mb-1.5 text-[10px] uppercase tracking-[0.14em] text-muted-foreground">Values to check</div>
+    <div className="mt-3 rounded-lg border border-border/70 bg-muted/20 p-3">
+      <div className="mb-1.5 text-[10px] font-extrabold uppercase tracking-[0.14em] text-muted-foreground">Values to check</div>
       <div className="flex flex-wrap gap-1.5">
         {visible.map((input) => (
-          <span key={input.path} className="rounded-md border border-border bg-background px-2 py-1 text-[11px] text-muted-foreground">
-            {input.label}: <span className="font-medium text-foreground">{formatReviewValue(input.value, input.path)}</span>
+          <span key={input.path} className="rounded-md border border-border bg-background px-2 py-1 text-[11px] font-medium text-muted-foreground">
+            {input.label}: <span className="font-bold text-foreground">{formatReviewValue(input.value, input.path)}</span>
           </span>
         ))}
         {inputs.length > visible.length ? <span className="rounded-md border border-border bg-background px-2 py-1 text-[11px] text-muted-foreground">+{inputs.length - visible.length} more</span> : null}
@@ -475,10 +475,10 @@ function ReviewInputEditor({ dealId, item, onDone }: { dealId: number; item: Rev
   if (inputs.length === 0) return null;
 
   return (
-    <div className="mt-4 rounded-lg border border-primary/25 bg-primary/5 p-3">
+    <div className="border-t border-border/70 bg-primary/5 p-4">
       <div className="mb-2 flex items-center justify-between gap-3">
         <div>
-          <div className="text-xs font-semibold tracking-tight text-foreground">Edit or confirm values</div>
+          <div className="text-xs font-extrabold text-foreground">Edit or confirm values</div>
           <p className="mt-0.5 text-[11px] text-muted-foreground">Update wrong values, or save unchanged values to approve and clear this item.</p>
         </div>
         <Button size="sm" onClick={saveAll} disabled={busy}>
@@ -488,9 +488,9 @@ function ReviewInputEditor({ dealId, item, onDone }: { dealId: number; item: Rev
       </div>
       <div className="grid gap-2 lg:grid-cols-2">
         {inputs.map((input) => (
-          <div key={input.path} className="rounded-md border border-border/70 bg-background/70 p-2">
+          <div key={input.path} className="rounded-lg border border-border/70 bg-background/80 p-2.5">
             <div className="mb-1 flex items-center justify-between gap-2">
-              <div className="text-[11px] font-medium text-muted-foreground">{input.label}</div>
+              <div className="text-[11px] font-bold text-muted-foreground">{input.label}</div>
               <a href={sourceHref(input.path)} className="text-[11px] text-primary hover:underline">source</a>
             </div>
             <input
