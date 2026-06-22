@@ -139,54 +139,76 @@ function ExecutiveReview({
   const metrics = deal.metrics ?? {};
   const tr = (metrics.target_returns ?? {}) as Record<string, unknown>;
   const ds = (metrics.deal_structure ?? {}) as Record<string, unknown>;
-  const fp = (metrics.financial_projections ?? {}) as Record<string, unknown>;
   const canonical = metrics._canonical_returns;
   const readiness = readinessCopy(gate);
   const strategy = strategyText(canonical?.primary_strategy ?? tr.primary_strategy ?? ds.primary_strategy);
   const docs = deal.documents ?? [];
   const readableDocs = docs.filter((doc) => doc.has_text).length;
   const nextAction = gate?.next_actions?.[0] ?? readiness.action;
+  const score = deal.overall_score ?? deal.scores?.provisional_overall ?? null;
+  const biggestRisk = biggestRiskCopy(gate);
   const primaryReturnLabel = headlineIrr !== null ? "Target IRR" : "Cash-on-Cash";
   const primaryReturnValue = headlineIrr !== null ? headlineIrr : headlineCashOnCash;
 
   return (
-    <div className="grid gap-4 xl:grid-cols-[1.25fr_0.75fr]">
-      <Card elevated className="p-6">
-        <div className="flex flex-col gap-5 lg:flex-row lg:items-start lg:justify-between">
-          <div className="max-w-3xl">
+    <Card className="overflow-hidden border-border/80 bg-card p-0 shadow-sm">
+      <div className="border-b border-border/80 bg-muted/25 px-6 py-5">
+        <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+          <div>
             <div className="flex flex-wrap items-center gap-2">
-              <span className="text-[10px] uppercase tracking-[0.14em] text-muted-foreground">Executive review</span>
-              <span className={`rounded-full px-2.5 py-1 text-xs font-medium ring-1 ${readiness.className}`}>{readiness.label}</span>
+              <span className="text-[10px] font-extrabold uppercase tracking-[0.16em] text-primary">Executive Review</span>
+              <span className={`rounded-full px-2.5 py-1 text-xs font-semibold ring-1 ${readiness.className}`}>{readiness.label}</span>
             </div>
-            <h2 className="mt-3 text-xl font-semibold tracking-tight">{readiness.headline}</h2>
-            <p className="mt-2 text-sm leading-relaxed text-muted-foreground">{readiness.detail}</p>
+            <h2 className="mt-2 text-xl font-bold text-foreground">{readiness.headline}</h2>
+            <p className="mt-1 max-w-3xl text-sm leading-relaxed text-muted-foreground">{readiness.detail}</p>
           </div>
-          <div className="rounded-lg border border-border/80 bg-muted/25 px-4 py-3 text-sm lg:w-72">
-            <div className="text-[10px] uppercase tracking-[0.14em] text-muted-foreground">Next best action</div>
-            <div className="mt-1.5 font-medium leading-snug text-foreground">{nextAction}</div>
+          <div className="min-w-[9rem] rounded-lg border border-border/80 bg-background px-4 py-3 text-right">
+            <div className="text-[10px] font-extrabold uppercase tracking-[0.14em] text-foreground/60">Score</div>
+            <div data-figure className="mt-1 text-3xl font-extrabold leading-none text-foreground">{formatScore(score)}</div>
+            <div className="mt-1 text-xs font-medium text-muted-foreground">{readiness.trust}</div>
           </div>
         </div>
+      </div>
 
-        <div className="mt-5 grid gap-3 md:grid-cols-3">
-          <SummaryPoint label="Base strategy" value={strategy} detail="Use this lens unless the documents clearly say another scenario is preferred." />
-          <SummaryPoint label="Documents read" value={`${readableDocs}/${docs.length || 0}`} detail="Review documents again if a new upload is missing from this count." />
-          <SummaryPoint label="Score trust" value={readiness.trust} detail="The review queue below is the only place users need to clear open items." />
-        </div>
-      </Card>
+      <div className="grid gap-px bg-border/70 md:grid-cols-2 xl:grid-cols-6">
+        <ExecutiveMetric label="Base strategy" value={strategy} detail="Preferred plan unless the documents clearly say otherwise." />
+        <ExecutiveMetric label={primaryReturnLabel} value={fmtPct(primaryReturnValue, 1)} detail="Primary return shown in comparison views." />
+        <ExecutiveMetric label="Equity multiple" value={fmtMultiple(headlineMultiple)} detail="Headline multiple used for return scoring." />
+        <ExecutiveMetric label="Min investment" value={fmtMoney(deal.minimum_investment)} detail="Visible investor commitment for this deal." />
+        <ExecutiveMetric label="Biggest risk" value={biggestRisk.label} detail={biggestRisk.detail} />
+        <ExecutiveMetric label="Next action" value={nextAction} detail={`${readableDocs}/${docs.length || 0} uploaded documents have readable text.`} />
+      </div>
+    </Card>
+  );
+}
 
-      <Card elevated className="p-6">
-        <h3 className="text-base font-semibold tracking-tight">Key assumptions</h3>
-        <div className="mt-4 grid grid-cols-2 gap-4">
-          <Stat label={primaryReturnLabel} value={fmtPct(primaryReturnValue, 1)} />
-          <Stat label="Multiple" value={fmtMultiple(headlineMultiple)} />
-          <Stat label="Min Investment" value={fmtMoney(deal.minimum_investment)} />
-          <Stat label="Project Cost" value={fmtMoney(asNum(ds.total_project_cost))} />
-          <Stat label="Debt" value={fmtMoney(asNum(ds.debt_amount))} />
-          <Stat label="NOI" value={fmtMoney(asNum(fp.stabilized_noi))} />
-        </div>
-      </Card>
+function ExecutiveMetric({ label, value, detail }: { label: string; value: string; detail: string }) {
+  return (
+    <div className="min-w-0 bg-card px-4 py-3.5">
+      <div className="text-[10px] font-extrabold uppercase tracking-[0.12em] text-foreground/65">{label}</div>
+      <div data-figure className="mt-1.5 truncate text-base font-extrabold leading-tight text-foreground">{value}</div>
+      <div className="mt-1 line-clamp-2 text-[11px] leading-relaxed text-muted-foreground">{detail}</div>
     </div>
   );
+}
+
+function biggestRiskCopy(gate?: DataQualityGate): { label: string; detail: string } {
+  const explanations = gate?.confidence_explanations ?? [];
+  const risk = explanations.find((item) => item.severity !== "success") ?? explanations[0];
+  if (risk) {
+    return {
+      label: risk.label || "Review queue",
+      detail: risk.detail || risk.action || "Clear the open review items before relying on the score.",
+    };
+  }
+  const action = gate?.next_actions?.[0];
+  if (action) return { label: "Needs confirmation", detail: action };
+  if (gate?.stage === "verified") return { label: "No blocking risk", detail: "No open review items are blocking the current score." };
+  return { label: "Review queue", detail: "Clear open review items before relying on the score." };
+}
+
+function formatScore(value: number | null | undefined): string {
+  return typeof value === "number" && Number.isFinite(value) ? value.toFixed(1) : "-";
 }
 
 function SnapshotCard({
@@ -211,11 +233,11 @@ function SnapshotCard({
   headlineMultiple: number | null;
 }) {
   return (
-    <Card elevated className="overflow-hidden p-0">
-      <div className="border-b border-border/80 bg-muted/35 px-6 py-5">
+    <Card className="overflow-hidden border-border/80 bg-card p-0 shadow-sm">
+      <div className="border-b border-border/80 bg-muted/25 px-6 py-5">
         <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
           <div>
-            <div className="text-[10px] font-bold uppercase tracking-[0.16em] text-primary">Underwriting Snapshot</div>
+            <div className="text-[10px] font-extrabold uppercase tracking-[0.16em] text-primary">Underwriting Snapshot</div>
             <h3 className="mt-1 text-xl font-bold text-foreground">Deal snapshot</h3>
             <p className="mt-1 max-w-2xl text-sm leading-relaxed text-muted-foreground">
               The high-signal assumptions used for quick underwriting, grouped like an investment committee summary.
@@ -227,7 +249,7 @@ function SnapshotCard({
         </div>
       </div>
 
-      <div className="space-y-5 p-6">
+      <div className="space-y-4 p-5 md:p-6">
         <SnapshotGroup title="Return Profile" description="Headline return targets and sponsor economics." tone="primary">
           <Stat label="Target IRR" value={fmtPct(headlineIrr, 1)} emphasis />
           <Stat label="Equity Multiple" value={fmtMultiple(headlineMultiple)} emphasis />
@@ -275,30 +297,18 @@ function SnapshotGroup({
   const toneClass = tone === "success" ? "bg-success" : tone === "warning" ? "bg-warning" : "bg-primary";
 
   return (
-    <section>
-      <div className="mb-2.5 flex flex-wrap items-end justify-between gap-2">
-        <div>
-          <div className="flex items-center gap-2">
-            <span className={`h-2.5 w-2.5 rounded-full ${toneClass}`} />
-            <h4 className="text-xs font-extrabold uppercase tracking-[0.14em] text-foreground">{title}</h4>
-          </div>
-          <p className="mt-1 text-xs leading-relaxed text-muted-foreground">{description}</p>
+    <section className="overflow-hidden rounded-xl border border-border/80 bg-background">
+      <div className="border-b border-border/70 px-4 py-3">
+        <div className="flex items-center gap-2">
+          <span className={`h-2.5 w-2.5 rounded-full ${toneClass}`} />
+          <h4 className="text-xs font-extrabold uppercase tracking-[0.14em] text-foreground">{title}</h4>
         </div>
+        <p className="mt-1 text-xs leading-relaxed text-muted-foreground">{description}</p>
       </div>
-      <div className="grid grid-cols-2 gap-2 md:grid-cols-4">
+      <div className="grid grid-cols-2 divide-x divide-y divide-border/70 md:grid-cols-4">
         {children}
       </div>
     </section>
-  );
-}
-
-function SummaryPoint({ label, value, detail }: { label: string; value: string; detail: string }) {
-  return (
-    <div className="rounded-lg border border-border/70 bg-muted/20 px-3 py-3">
-      <div className="text-[10px] uppercase tracking-[0.14em] text-muted-foreground">{label}</div>
-      <div className="mt-1 text-sm font-semibold text-foreground">{value}</div>
-      <div className="mt-1 text-xs leading-relaxed text-muted-foreground">{detail}</div>
-    </div>
   );
 }
 
@@ -409,16 +419,14 @@ function Stat({
   small?: boolean;
   emphasis?: boolean;
 }) {
-  const tileClass = emphasis
-    ? "border-primary/30 bg-primary/5 shadow-sm"
-    : "border-border/80 bg-card shadow-sm";
+  const tileClass = emphasis ? "bg-primary/5" : "bg-card";
 
   return (
-    <div className={`min-w-0 rounded-lg border px-4 py-3.5 transition-colors hover:bg-muted/25 ${tileClass}`}>
-      <div className="text-[11px] font-extrabold uppercase tracking-[0.1em] text-foreground/65">{label}</div>
+    <div className={`min-w-0 px-4 py-3.5 ${tileClass}`}>
+      <div className="text-[11px] font-extrabold uppercase tracking-[0.1em] text-foreground/70">{label}</div>
       <div
         data-figure
-        className={`mt-1.5 font-extrabold tabular-nums leading-none ${emphasis ? "text-primary" : "text-foreground"} ${small ? "truncate text-sm leading-tight" : "text-[1.35rem]"}`}
+        className={`mt-1.5 font-extrabold tabular-nums leading-none ${emphasis ? "text-primary" : "text-foreground"} ${small ? "truncate text-sm leading-tight" : "text-[1.25rem]"}`}
       >
         {value}{sub && <span className="text-xs text-muted-foreground font-normal">{sub}</span>}
       </div>
