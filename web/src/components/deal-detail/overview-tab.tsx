@@ -50,7 +50,28 @@ export function OverviewTab({ deal }: { deal: DealDetail }) {
         headlineCashOnCash={headlineCashOnCash}
         headlineMultiple={headlineMultiple}
       />
-      <ReviewQueue deal={deal} />
+
+      <details id="analyst-review" className="group">
+        <summary className="cursor-pointer list-none rounded-xl border border-border/80 bg-card/80 p-4 text-sm font-semibold tracking-tight text-foreground shadow-sm marker:hidden">
+          <span className="flex flex-wrap items-center justify-between gap-3">
+            <span className="flex min-w-0 flex-col gap-1">
+              <span>Analyst review workspace</span>
+              <span className="text-xs font-normal leading-relaxed text-muted-foreground">
+                Hidden by default for viewer-friendly deal review. Open this when you need to confirm sources, correct inputs, or clear review items.
+              </span>
+            </span>
+            <span className="shrink-0 rounded-full border border-border/70 bg-background px-3 py-1 text-xs font-semibold text-muted-foreground group-open:hidden">
+              Open tools
+            </span>
+            <span className="hidden shrink-0 rounded-full border border-border/70 bg-background px-3 py-1 text-xs font-semibold text-muted-foreground group-open:inline">
+              Hide tools
+            </span>
+          </span>
+        </summary>
+        <div className="mt-4">
+          <ReviewQueue deal={deal} />
+        </div>
+      </details>
 
       <div className="grid grid-cols-1 lg:grid-cols-[1.2fr_1fr] gap-6 items-stretch">
         <SnapshotCard
