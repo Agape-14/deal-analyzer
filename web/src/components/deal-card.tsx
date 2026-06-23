@@ -5,6 +5,7 @@ import { motion } from "framer-motion";
 import { ArrowUpRight, MapPin } from "lucide-react";
 import { Card } from "@/components/ui/card";
 import { ScoreQualityBadge } from "@/components/deal-detail/score-quality-badge";
+import { useCurrentUser } from "@/lib/auth-client";
 import { getHeadlineReturnMetrics } from "@/lib/return-metrics";
 import { cn, fmtMultiple, fmtMoney, fmtPct } from "@/lib/utils";
 import type { DataQualityGate, DealQualitySummary, DealSummary } from "@/lib/types";
@@ -66,6 +67,7 @@ function ScoreRing({ value }: { value: number | null }) {
 }
 
 export function DealCard({ deal }: { deal: DealSummary }) {
+  const { isAnalyst } = useCurrentUser();
   const locationBits = [deal.city, deal.state].filter(Boolean).join(", ") || deal.location || "";
   const qualityGate = getQualityGate(deal.quality) || deal.scores?.data_quality;
   const visibleScore = deal.overall_score ?? deal.scores?.provisional_overall ?? null;
@@ -110,7 +112,7 @@ export function DealCard({ deal }: { deal: DealSummary }) {
             >
               {deal.status}
             </span>
-            <ScoreQualityBadge gate={qualityGate} size="sm" />
+            {isAnalyst && <ScoreQualityBadge gate={qualityGate} size="sm" />}
           </div>
           <ArrowUpRight className="h-4 w-4 shrink-0 text-muted-foreground transition-transform group-hover:-translate-y-0.5 group-hover:translate-x-0.5 group-hover:text-foreground" />
         </div>
