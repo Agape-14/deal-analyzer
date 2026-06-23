@@ -28,6 +28,14 @@ body.role-viewer div[class*="lg:grid-cols-[1fr_360px]"] > :last-child:not(:first
   display: none !important;
 }
 
+body.role-viewer div[class*="xl:grid-cols-6"] {
+  grid-template-columns: repeat(4, minmax(0, 1fr)) !important;
+}
+
+body.role-viewer div[class*="xl:grid-cols-6"] > :nth-last-child(-n + 2) {
+  display: none !important;
+}
+
 main,
 .min-w-0 {
   min-width: 0;
