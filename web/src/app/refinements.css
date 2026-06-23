@@ -15,6 +15,18 @@ body.role-viewer [data-analyst-only="true"] {
   display: none !important;
 }
 
+body.role-viewer button[aria-label="Delete document"] {
+  display: none !important;
+}
+
+body.role-viewer div[class*="lg:grid-cols-[1fr_360px]"] {
+  grid-template-columns: minmax(0, 1fr) !important;
+}
+
+body.role-viewer div[class*="lg:grid-cols-[1fr_360px]"] > :last-child:not(:first-child) {
+  display: none !important;
+}
+
 main,
 .min-w-0 {
   min-width: 0;
