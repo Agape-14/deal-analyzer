@@ -11,10 +11,10 @@ from pydantic import BaseModel, Field
 
 from app.auth import (
     auth_enabled,
-    check_login,
     clear_session,
     current_user,
     expected_username,
+    login_identity,
     set_session,
 )
 from app.rate_limit import limit
@@ -29,17 +29,16 @@ class LoginIn(BaseModel):
 
 @router.post("/login", dependencies=[Depends(limit("auth"))])
 async def login(data: LoginIn, request: Request):
-    """Validate credentials and start a session.
+    """Validate credentials and start a role-aware session.
 
-    A small constant-time delay on failure to slow down brute-force.
+    A small constant-time delay on failure slows down brute-force attempts.
     """
-    ok = check_login(data.username, data.password)
-    if not ok:
-        # Uniform delay makes timing attacks useless.
+    identity = login_identity(data.username, data.password)
+    if not identity:
         await asyncio.sleep(0.5)
         raise HTTPException(status_code=401, detail="Invalid username or password")
-    set_session(request, data.username)
-    return {"message": "Signed in", "username": data.username}
+    set_session(request, identity["u"], identity["r"])
+    return {"message": "Signed in", "username": identity["u"], "role": identity["r"]}
 
 
 @router.post("/logout")
@@ -50,18 +49,24 @@ async def logout(request: Request):
 
 @router.get("/me")
 async def me(request: Request):
-    """Identity probe used by the frontend to decide whether to show
-    the login page. Always returns 200 — the caller interprets the
-    `authenticated` flag.
+    """Identity probe used by the frontend to decide which tools to show.
+
+    Always returns 200 — the caller interprets the `authenticated` flag.
     """
     if not auth_enabled():
-        return {"authenticated": True, "username": expected_username(), "auth_disabled": True}
+        return {
+            "authenticated": True,
+            "username": expected_username(),
+            "role": "admin",
+            "auth_disabled": True,
+        }
     user = current_user(request)
     if not user:
         return {"authenticated": False}
     return {
         "authenticated": True,
         "username": user.get("u"),
+        "role": user.get("r", "admin"),
         "issued_at": user.get("iat"),
         "expires_at": user.get("exp"),
     }
