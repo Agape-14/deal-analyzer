@@ -13,6 +13,7 @@ import {
   Menu,
   X,
 } from "lucide-react";
+import { useCurrentUser } from "@/lib/auth-client";
 import { cn } from "@/lib/utils";
 
 const NAV: Array<{
@@ -80,6 +81,8 @@ function Brand() {
 }
 
 function LegacyLink({ onPick }: { onPick?: () => void }) {
+  const { isAnalyst } = useCurrentUser();
+  if (!isAnalyst) return null;
   return (
     <Link
       href="/legacy"
@@ -92,13 +95,7 @@ function LegacyLink({ onPick }: { onPick?: () => void }) {
 }
 
 function UserMenu({ onPick }: { onPick?: () => void }) {
-  const [user, setUser] = React.useState<{ username?: string; authenticated: boolean } | null>(null);
-  React.useEffect(() => {
-    fetch("/api/auth/me")
-      .then((r) => (r.ok ? r.json() : null))
-      .then((d) => setUser(d))
-      .catch(() => setUser(null));
-  }, []);
+  const { user, role } = useCurrentUser();
 
   if (!user?.authenticated) return null;
 
@@ -112,10 +109,17 @@ function UserMenu({ onPick }: { onPick?: () => void }) {
     window.location.href = "/login";
   }
 
+  const label = role === "viewer" ? "Viewer" : "Admin";
+
   return (
-    <div className="flex items-center justify-between gap-2">
-      <div className="text-[11px] text-muted-foreground truncate">
-        Signed in as <span className="text-foreground font-medium">{user.username || "user"}</span>
+    <div className="space-y-2">
+      <div className="flex items-center justify-between gap-2">
+        <div className="text-[11px] text-muted-foreground truncate">
+          Signed in as <span className="text-foreground font-medium">{user.username || "user"}</span>
+        </div>
+        <span className="shrink-0 rounded-full border border-border/70 bg-muted/60 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.12em] text-muted-foreground">
+          {label}
+        </span>
       </div>
       <button
         onClick={signOut}
