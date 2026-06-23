@@ -36,24 +36,21 @@ async def get_db():
 
 
 async def init_db():
-    """Create tables and apply schema patches.
+    """Create tables and apply conservative add-only schema patches.
 
-    When an `alembic_version` table exists the database is under real
-    migration control -- we leave it alone and `alembic upgrade head` is
-    expected to have already run (or will be run out-of-band). The
-    legacy `create_all` + ALTER-if-missing path remains as a fallback
-    for developers running against a blank SQLite file without invoking
-    Alembic.
+    Alembic remains the source of truth for normal migrations. The add-only
+    patch pass is still useful on Railway's persistent SQLite volume because
+    early prototype databases can predate a column that now exists in the
+    mapped model. Without this, a harmless upload can fail with a 500 during
+    INSERT even though the current code and migrations are valid.
     """
     # Make sure the mapped classes are registered on Base.metadata.
     import app.models  # noqa: F401
 
     async with engine.begin() as conn:
-        # If alembic_version exists, trust Alembic to manage schema.
         alembic_managed = await conn.run_sync(_is_alembic_managed)
-        if alembic_managed:
-            return
-        await conn.run_sync(Base.metadata.create_all)
+        if not alembic_managed:
+            await conn.run_sync(Base.metadata.create_all)
         await conn.run_sync(_apply_schema_patches)
 
 
@@ -64,9 +61,11 @@ def _is_alembic_managed(sync_conn) -> bool:
 
 
 def _apply_schema_patches(sync_conn) -> None:
-    """Add any columns declared on a mapped class but missing from the
-    live table. SQLite only supports `ALTER TABLE ... ADD COLUMN`, so we
-    keep this conservative: add-only, no drops, no type changes."""
+    """Add columns declared on mapped classes but missing from live tables.
+
+    This is intentionally conservative: add-only, no drops, no type changes,
+    and no missing-table creation for Alembic-managed databases.
+    """
     from sqlalchemy import inspect, text
 
     insp = inspect(sync_conn)
@@ -81,8 +80,8 @@ def _apply_schema_patches(sync_conn) -> None:
             null_sql = "" if col.nullable else " NOT NULL"
             default = ""
             if col.default is not None:
-                # Only support scalar SQL defaults here -- JSON/dict defaults
-                # are populated by the model layer on insert, which is fine.
+                # Only support scalar SQL defaults here. JSON/dict defaults are
+                # populated by the model layer on insert.
                 try:
                     arg = col.default.arg
                     if isinstance(arg, (int, float)):
