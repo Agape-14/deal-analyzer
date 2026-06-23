@@ -11,6 +11,7 @@ body {
 body.role-viewer #analyst-tools,
 body.role-viewer #analyst-review,
 body.role-viewer #technical-details,
+body.role-viewer details:has(#source-citations),
 body.role-viewer [data-analyst-only="true"] {
   display: none !important;
 }
