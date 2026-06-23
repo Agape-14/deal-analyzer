@@ -1,7 +1,10 @@
+"use client";
+
 import Link from "next/link";
 import { AlertTriangle, ArrowUpRight, CheckCircle2, HelpCircle, ShieldAlert } from "lucide-react";
 import { Card } from "@/components/ui/card";
 import { ScoreQualityBadge } from "@/components/deal-detail/score-quality-badge";
+import { useCurrentUser } from "@/lib/auth-client";
 import { cn } from "@/lib/utils";
 import type { DataQualityGate, DealQualitySummary, DealSummary } from "@/lib/types";
 
@@ -14,6 +17,9 @@ type ReviewIssue = {
 };
 
 export function NeedsReviewPanel({ deals }: { deals: DealSummary[] }) {
+  const { isAnalyst, loading } = useCurrentUser();
+  if (loading || !isAnalyst) return null;
+
   const issues = deals
     .map((deal): ReviewIssue | null => {
       const gate = getQualityGate(deal);
