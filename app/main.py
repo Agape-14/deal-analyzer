@@ -96,6 +96,10 @@ class EnforceAuthMiddleware(BaseHTTPMiddleware):
     """
 
     VIEWER_BLOCKED_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
+    VIEWER_READONLY_POSTS = {
+        "/api/deals/compare",
+        "/api/deals/compare/export",
+    }
 
     async def dispatch(self, request: FastRequest, call_next):
         if not auth_enabled():
@@ -110,7 +114,8 @@ class EnforceAuthMiddleware(BaseHTTPMiddleware):
             return JSONResponse({"detail": "Not authenticated"}, status_code=401)
 
         role = str(user.get("r") or "admin").lower()
-        if role == "viewer" and request.method.upper() in self.VIEWER_BLOCKED_METHODS:
+        method = request.method.upper()
+        if role == "viewer" and method in self.VIEWER_BLOCKED_METHODS and path not in self.VIEWER_READONLY_POSTS:
             return JSONResponse({"detail": "Viewer accounts are read-only"}, status_code=403)
 
         return await call_next(request)
