@@ -16,6 +16,7 @@ import {
 } from "lucide-react";
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import { api } from "@/lib/api";
+import { useCurrentUser } from "@/lib/auth-client";
 import type { DealSummary, Developer } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
@@ -29,6 +30,7 @@ import { cn } from "@/lib/utils";
  */
 export function CommandPalette() {
   const router = useRouter();
+  const { isAnalyst } = useCurrentUser();
   const [open, setOpen] = React.useState(false);
   const [deals, setDeals] = React.useState<DealSummary[] | null>(null);
   const [developers, setDevelopers] = React.useState<Developer[] | null>(null);
@@ -101,35 +103,39 @@ export function CommandPalette() {
             </Command.Empty>
 
             <Command.Group heading="Actions" className="[&_[cmdk-group-heading]]:px-3 [&_[cmdk-group-heading]]:py-2 [&_[cmdk-group-heading]]:text-[10px] [&_[cmdk-group-heading]]:uppercase [&_[cmdk-group-heading]]:tracking-[0.12em] [&_[cmdk-group-heading]]:text-muted-foreground">
-              <Item icon={Plus} onSelect={() => go("/?new=1")}>
-                New deal
-              </Item>
-              <Item
-                icon={Plus}
-                onSelect={() => {
-                  setOpen(false);
-                  // Navigate to portfolio + open the drawer; defer the dispatch
-                  // slightly so the drawer exists in the DOM before we fire.
-                  router.push("/portfolio");
-                  setTimeout(() => {
-                    document.dispatchEvent(new CustomEvent("open-new-investment"));
-                  }, 120);
-                }}
-              >
-                New investment
-              </Item>
-              <Item
-                icon={Plus}
-                onSelect={() => {
-                  setOpen(false);
-                  router.push("/developers");
-                  setTimeout(() => {
-                    document.dispatchEvent(new CustomEvent("open-new-developer"));
-                  }, 120);
-                }}
-              >
-                New developer
-              </Item>
+              {isAnalyst && (
+                <>
+                  <Item icon={Plus} onSelect={() => go("/?new=1")}>
+                    New deal
+                  </Item>
+                  <Item
+                    icon={Plus}
+                    onSelect={() => {
+                      setOpen(false);
+                      // Navigate to portfolio + open the drawer; defer the dispatch
+                      // slightly so the drawer exists in the DOM before we fire.
+                      router.push("/portfolio");
+                      setTimeout(() => {
+                        document.dispatchEvent(new CustomEvent("open-new-investment"));
+                      }, 120);
+                    }}
+                  >
+                    New investment
+                  </Item>
+                  <Item
+                    icon={Plus}
+                    onSelect={() => {
+                      setOpen(false);
+                      router.push("/developers");
+                      setTimeout(() => {
+                        document.dispatchEvent(new CustomEvent("open-new-developer"));
+                      }, 120);
+                    }}
+                  >
+                    New developer
+                  </Item>
+                </>
+              )}
               <Item icon={LayoutDashboard} onSelect={() => go("/")}>
                 Go to deals
               </Item>
