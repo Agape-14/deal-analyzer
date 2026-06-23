@@ -12,7 +12,8 @@ import { Card } from "@/components/ui/card";
 import { api } from "@/lib/api";
 
 /**
- * Login page. Pre-fills `username = "admin"` since that's the only user.
+ * Login page. Pre-fills `username = "admin"` for the operator account,
+ * but the same form also accepts the optional viewer/team account.
  * After a successful login we redirect to `?next=` (set by middleware)
  * or `/` as a fallback.
  */
@@ -99,7 +100,7 @@ export default function LoginPage() {
               <h1 className="text-lg font-semibold tracking-tight">Sign in</h1>
             </div>
             <p className="text-xs text-muted-foreground mb-6">
-              Single-user access. Use the credentials configured on the server.
+              Use the admin account for document review, or the team viewer account for read-only summaries.
             </p>
 
             <form onSubmit={submit} className="space-y-4">
@@ -136,8 +137,8 @@ export default function LoginPage() {
           </Card>
 
           <div className="text-[10px] text-muted-foreground mt-5 text-center leading-relaxed">
-            Session lasts 30 days. Configure <code className="font-mono">AUTH_USERNAME</code> and{" "}
-            <code className="font-mono">AUTH_PASSWORD_HASH</code> on the server.
+            Session lasts 30 days. Configure <code className="font-mono">AUTH_*</code> for admin and{" "}
+            <code className="font-mono">VIEWER_*</code> for the read-only team login.
           </div>
         </motion.div>
       </div>
