@@ -65,15 +65,17 @@ const nextConfig = {
   },
 
   // Proxy API calls, legacy UI, and legacy static assets to the FastAPI
-  // backend. Same origin in the browser so cookies/auth work without
-  // CORS gymnastics.
+  // backend. These are afterFiles fallbacks so dedicated Next app routes
+  // such as the multipart document upload handler can run first.
   async rewrites() {
-    return [
-      { source: "/api/:path*", destination: `${FASTAPI}/api/:path*` },
-      { source: "/legacy", destination: `${FASTAPI}/legacy` },
-      { source: "/legacy/:path*", destination: `${FASTAPI}/legacy/:path*` },
-      { source: "/static/:path*", destination: `${FASTAPI}/static/:path*` },
-    ];
+    return {
+      afterFiles: [
+        { source: "/api/:path*", destination: `${FASTAPI}/api/:path*` },
+        { source: "/legacy", destination: `${FASTAPI}/legacy` },
+        { source: "/legacy/:path*", destination: `${FASTAPI}/legacy/:path*` },
+        { source: "/static/:path*", destination: `${FASTAPI}/static/:path*` },
+      ],
+    };
   },
 };
 
