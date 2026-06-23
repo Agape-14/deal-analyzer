@@ -74,7 +74,7 @@ async def lifespan(app: FastAPI):
         else:
             log.info("[env] %s: ok", svc)
     if auth.get("enabled"):
-        log.info("[auth] enabled for user '%s'", auth.get("username"))
+        log.info("[auth] enabled for user '%s' roles=%s", auth.get("username"), auth.get("roles"))
     else:
         log.warning("[auth] %s", auth.get("message"))
     pipeline_task = start_pipeline_runner()
@@ -95,6 +95,8 @@ class EnforceAuthMiddleware(BaseHTTPMiddleware):
     untouched. If auth is globally disabled this is a no-op.
     """
 
+    VIEWER_BLOCKED_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
+
     async def dispatch(self, request: FastRequest, call_next):
         if not auth_enabled():
             return await call_next(request)
@@ -103,8 +105,14 @@ class EnforceAuthMiddleware(BaseHTTPMiddleware):
         if not path.startswith("/api/") or is_public_path(path):
             return await call_next(request)
 
-        if not current_user(request):
+        user = current_user(request)
+        if not user:
             return JSONResponse({"detail": "Not authenticated"}, status_code=401)
+
+        role = str(user.get("r") or "admin").lower()
+        if role == "viewer" and request.method.upper() in self.VIEWER_BLOCKED_METHODS:
+            return JSONResponse({"detail": "Viewer accounts are read-only"}, status_code=403)
+
         return await call_next(request)
 
 
