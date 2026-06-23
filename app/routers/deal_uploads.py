@@ -89,18 +89,19 @@ async def upload_document(
         )
 
         stage = "saving document record"
-        doc = DealDocument(
-            deal_id=deal_id,
-            filename=original_name,
-            file_path=file_path,
-            doc_type=doc_type,
-            extracted_text="",
-            page_count=0,
-            extraction_quality={"status": "queued", "document_kind": _document_kind(ext)},
+        doc = await _create_document_record_with_retry(
+            db,
+            {
+                "deal_id": deal_id,
+                "filename": original_name,
+                "file_path": file_path,
+                "doc_type": doc_type,
+                "extracted_text": "",
+                "page_count": 0,
+                "extraction_quality": {"status": "queued", "document_kind": _document_kind(ext)},
+            },
+            stage,
         )
-        db.add(doc)
-        await _commit_with_retry(db, stage)
-        await db.refresh(doc)
         doc_saved = True
 
         await _safe_emit(
@@ -281,6 +282,27 @@ def _remove_partial_file(file_path: str) -> None:
         log.warning("Could not remove partial upload file path=%s", file_path, exc_info=True)
 
 
+async def _create_document_record_with_retry(
+    db: AsyncSession,
+    values: dict[str, object],
+    stage: str,
+) -> DealDocument:
+    for attempt in range(3):
+        doc = DealDocument(**values)
+        db.add(doc)
+        try:
+            await db.commit()
+            await db.refresh(doc)
+            return doc
+        except OperationalError as exc:
+            await db.rollback()
+            if not _is_locked_error(exc) or attempt == 2:
+                raise
+            await asyncio.sleep(0.5 * (attempt + 1))
+            log.warning("Retrying %s after transient database lock", stage)
+    raise RuntimeError(f"Could not complete {stage}")
+
+
 async def _commit_with_retry(db: AsyncSession, stage: str) -> None:
     for attempt in range(3):
         try:
@@ -288,10 +310,14 @@ async def _commit_with_retry(db: AsyncSession, stage: str) -> None:
             return
         except OperationalError as exc:
             await db.rollback()
-            if "locked" not in str(exc).lower() or attempt == 2:
+            if not _is_locked_error(exc) or attempt == 2:
                 raise
-            await asyncio.sleep(0.25 * (attempt + 1))
+            await asyncio.sleep(0.5 * (attempt + 1))
             log.warning("Retrying %s after transient database lock", stage)
+
+
+def _is_locked_error(exc: OperationalError) -> bool:
+    return "locked" in str(exc).lower() or "busy" in str(exc).lower()
 
 
 def _public_error(exc: Exception) -> str:
