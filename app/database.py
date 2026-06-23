@@ -35,7 +35,12 @@ if DATABASE_URL.startswith("sqlite+aiosqlite"):
         cursor = dbapi_connection.cursor()
         try:
             cursor.execute("PRAGMA busy_timeout=30000")
-            cursor.execute("PRAGMA journal_mode=WAL")
+            try:
+                cursor.execute("PRAGMA journal_mode=WAL")
+            except Exception:
+                # WAL improves concurrent read/write behavior on SQLite, but
+                # uploads should not fail just because the host volume refuses it.
+                pass
         finally:
             cursor.close()
 
