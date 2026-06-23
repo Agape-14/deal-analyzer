@@ -7,6 +7,7 @@ import { MobileNav } from "@/components/app-sidebar";
 import { ThemeToggle } from "@/components/theme-toggle";
 import { HelpButton } from "@/components/help-overlay";
 import { NotificationsBell } from "@/components/notifications-bell";
+import { useCurrentUser } from "@/lib/auth-client";
 
 /**
  * Minimal header. Search placeholder triggers command palette (⌘K).
@@ -14,6 +15,8 @@ import { NotificationsBell } from "@/components/notifications-bell";
  * because it doesn't fit.
  */
 export function AppHeader() {
+  const { isAnalyst } = useCurrentUser();
+
   return (
     <header className="sticky top-0 z-30 h-16 border-b border-border/60 bg-background/80 backdrop-blur-md">
       <div className="h-full flex items-center gap-3 px-4 md:px-6">
@@ -32,14 +35,16 @@ export function AppHeader() {
         <NotificationsBell />
         <HelpButton />
         <ThemeToggle />
-        <Button
-          variant="default"
-          size="sm"
-          onClick={() => document.dispatchEvent(new CustomEvent("open-new-deal"))}
-        >
-          <Plus className="h-4 w-4" />
-          <span className="hidden sm:inline">New Deal</span>
-        </Button>
+        {isAnalyst && (
+          <Button
+            variant="default"
+            size="sm"
+            onClick={() => document.dispatchEvent(new CustomEvent("open-new-deal"))}
+          >
+            <Plus className="h-4 w-4" />
+            <span className="hidden sm:inline">New Deal</span>
+          </Button>
+        )}
       </div>
     </header>
   );
