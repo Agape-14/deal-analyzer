@@ -25,15 +25,6 @@ UPLOAD_DIR = os.environ.get(
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 
 MAX_UPLOAD_BYTES = 50 * 1024 * 1024
-ALLOWED_MIMETYPES = {
-    "application/pdf",
-    "application/x-pdf",
-    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-    "application/vnd.ms-excel.sheet.macroenabled.12",
-    "application/vnd.ms-excel",
-    "text/csv",
-    "application/csv",
-}
 ALLOWED_EXTS = {".pdf", ".xlsx", ".xlsm", ".xls", ".csv"}
 SPREADSHEET_EXTS = {".xlsx", ".xlsm", ".xls", ".csv"}
 MEDIA_TYPES = {
@@ -71,107 +62,75 @@ async def upload_document(
     ctype = (file.content_type or "").lower()
     if not ext:
         ext = MIMETYPE_EXTS.get(ctype, "")
-    if ext not in ALLOWED_EXTS and ctype not in ALLOWED_MIMETYPES:
+    if ext not in ALLOWED_EXTS and ctype in MIMETYPE_EXTS:
+        ext = MIMETYPE_EXTS[ctype]
+    if ext not in ALLOWED_EXTS:
         raise HTTPException(
             status_code=415,
             detail=f"Only PDF, Excel, or CSV uploads are supported (got {ctype or ext or 'unknown type'}).",
         )
 
-    unique_name = f"{uuid.uuid4().hex}{ext or '.pdf'}"
+    unique_name = f"{uuid.uuid4().hex}{ext}"
     file_path = os.path.join(UPLOAD_DIR, unique_name)
     total = 0
-    with open(file_path, "wb") as f:
-        while True:
-            chunk = await file.read(1 * 1024 * 1024)
-            if not chunk:
-                break
-            total += len(chunk)
-            if total > MAX_UPLOAD_BYTES:
-                f.close()
-                try:
-                    os.remove(file_path)
-                except OSError:
-                    pass
-                raise HTTPException(
-                    status_code=413,
-                    detail=f"File exceeds {MAX_UPLOAD_BYTES // (1024 * 1024)}MB upload limit.",
-                )
-            f.write(chunk)
-
-    if ext in SPREADSHEET_EXTS:
-        doc = DealDocument(
-            deal_id=deal_id,
-            filename=file.filename or unique_name,
-            file_path=file_path,
-            doc_type=doc_type,
-            extracted_text="",
-            page_count=0,
-            extraction_quality={"status": "queued", "document_kind": "spreadsheet"},
-        )
-        db.add(doc)
-        await db.commit()
-        await db.refresh(doc)
-        await notif_svc.emit(
-            db,
-            kind="info",
-            title=f"Uploaded {doc.filename}",
-            body="Spreadsheet saved · extraction queued",
-            href=f"/deals/{deal_id}?tab=documents",
-            payload={"deal_id": deal_id, "doc_id": doc.id, "queued": True},
-        )
-        await db.commit()
-        background_tasks.add_task(_extract_document_background, doc.id, file_path, ext)
-        return {
-            "id": doc.id,
-            "filename": doc.filename,
-            "doc_type": doc.doc_type,
-            "page_count": 0,
-            "text_length": 0,
-            "extraction": {"queued": True, "ocr_pages": 0, "tables": 0, "images": 0},
-            "message": "Spreadsheet uploaded; extraction queued",
-        }
-
-    extraction, quality, extracted_text, page_count = _extract_uploaded_file(file_path, ext)
+    try:
+        with open(file_path, "wb") as f:
+            while True:
+                chunk = await file.read(1 * 1024 * 1024)
+                if not chunk:
+                    break
+                total += len(chunk)
+                if total > MAX_UPLOAD_BYTES:
+                    f.close()
+                    try:
+                        os.remove(file_path)
+                    except OSError:
+                        pass
+                    raise HTTPException(
+                        status_code=413,
+                        detail=f"File exceeds {MAX_UPLOAD_BYTES // (1024 * 1024)}MB upload limit.",
+                    )
+                f.write(chunk)
+    except HTTPException:
+        raise
+    except OSError as exc:
+        log.exception("Could not save uploaded file %s", file.filename)
+        raise HTTPException(
+            status_code=500,
+            detail=f"Could not save uploaded file: {exc.strerror or str(exc)}",
+        ) from exc
 
     doc = DealDocument(
         deal_id=deal_id,
         filename=file.filename or unique_name,
         file_path=file_path,
         doc_type=doc_type,
-        extracted_text=extracted_text,
-        page_count=page_count,
-        extraction_quality=quality,
+        extracted_text="",
+        page_count=0,
+        extraction_quality={"status": "queued", "document_kind": _document_kind(ext)},
     )
     db.add(doc)
     await db.commit()
     await db.refresh(doc)
 
-    q_score = quality.get("quality_score") if isinstance(quality, dict) else None
-    body_bits = [f"{page_count} page{'s' if page_count != 1 else ''}"]
-    if q_score is not None:
-        body_bits.append(f"extraction quality {q_score}%")
-    empty = (quality or {}).get("empty_pages") or []
-    kind = "warning" if empty else "info"
-    if empty:
-        body_bits.append(f"{len(empty)} page{'s' if len(empty) != 1 else ''} failed OCR")
-    await notif_svc.emit(
+    await _safe_emit(
         db,
-        kind=kind,
+        kind="info",
         title=f"Uploaded {doc.filename}",
-        body=" · ".join(body_bits),
+        body=f"{_document_label(ext)} saved; extraction queued",
         href=f"/deals/{deal_id}?tab=documents",
-        payload={"deal_id": deal_id, "doc_id": doc.id},
+        payload={"deal_id": deal_id, "doc_id": doc.id, "queued": True},
     )
-    await db.commit()
+    background_tasks.add_task(_extract_document_background, doc.id, file_path, ext)
 
     return {
         "id": doc.id,
         "filename": doc.filename,
         "doc_type": doc.doc_type,
-        "page_count": page_count,
-        "text_length": len(extracted_text),
-        "extraction": extraction,
-        "message": "Document uploaded and text extracted",
+        "page_count": 0,
+        "text_length": 0,
+        "extraction": {"queued": True, "ocr_pages": 0, "tables": 0, "images": 0},
+        "message": "Document uploaded; extraction queued",
     }
 
 
@@ -243,6 +202,7 @@ def _extract_uploaded_file(file_path: str, ext: str) -> tuple[dict, dict, str, i
             "ocr_pages": result_x.ocr_page_count,
             "tables": len(result_x.tables),
             "images": len(result_x.images),
+            "cells": len(getattr(result_x, "cells", []) or []),
             "quality_score": result_x.quality_score,
             "empty_pages": empty_pages,
         }
@@ -252,16 +212,40 @@ def _extract_uploaded_file(file_path: str, ext: str) -> tuple[dict, dict, str, i
             "ocr_pages": result_x.ocr_page_count,
             "empty_pages": empty_pages,
             "page_diagnostics": result_x.page_diagnostics,
-            "document_kind": "spreadsheet" if ext in SPREADSHEET_EXTS else "pdf",
+            "document_kind": _document_kind(ext),
         }
+        if ext in SPREADSHEET_EXTS:
+            quality["cell_provenance"] = (getattr(result_x, "cells", []) or [])[:500]
         return extraction, quality, extracted_text, page_count
-    except Exception as e:
+    except Exception as exc:
         return (
-            {"ocr_pages": 0, "tables": 0, "images": 0, "error": str(e)},
-            {"status": "error", "error": str(e), "document_kind": "spreadsheet" if ext in SPREADSHEET_EXTS else "pdf"},
-            f"Error extracting text: {str(e)}",
+            {"ocr_pages": 0, "tables": 0, "images": 0, "error": str(exc)},
+            {"status": "error", "error": str(exc), "document_kind": _document_kind(ext)},
+            f"Error extracting text: {str(exc)}",
             0,
         )
+
+
+def _document_kind(ext: str) -> str:
+    return "spreadsheet" if ext in SPREADSHEET_EXTS else "pdf"
+
+
+def _document_label(ext: str) -> str:
+    return "Spreadsheet" if ext in SPREADSHEET_EXTS else "PDF"
+
+
+def _document_unit(ext: str, count: int) -> str:
+    base = "sheet" if ext in SPREADSHEET_EXTS else "page"
+    return base if count == 1 else f"{base}s"
+
+
+async def _safe_emit(db: AsyncSession, **kwargs) -> None:
+    try:
+        await notif_svc.emit(db, **kwargs)
+        await db.commit()
+    except Exception:
+        await db.rollback()
+        log.exception("Notification emit failed during document upload/extraction")
 
 
 async def _extract_document_background(doc_id: int, file_path: str, ext: str) -> None:
@@ -270,28 +254,32 @@ async def _extract_document_background(doc_id: int, file_path: str, ext: str) ->
         doc = result.scalar_one_or_none()
         if not doc:
             return
+
+        doc.extraction_quality = {"status": "extracting", "document_kind": _document_kind(ext)}
+        await db.commit()
+
         extraction, quality, extracted_text, page_count = _extract_uploaded_file(file_path, ext)
         doc.extracted_text = extracted_text
         doc.page_count = page_count
         doc.extraction_quality = quality
         await db.commit()
+
         if quality.get("status") == "error":
-            log.warning("Spreadsheet extraction failed for doc %s: %s", doc_id, quality.get("error"))
-            await notif_svc.emit(
+            log.warning("Document extraction failed for doc %s: %s", doc_id, quality.get("error"))
+            await _safe_emit(
                 db,
                 kind="warning",
-                title=f"Extraction failed · {doc.filename}",
+                title=f"Extraction failed - {doc.filename}",
                 body=str(quality.get("error") or "The file was saved, but extraction failed."),
                 href=f"/deals/{doc.deal_id}?tab=documents",
                 payload={"deal_id": doc.deal_id, "doc_id": doc.id, "error": quality.get("error")},
             )
         else:
-            await notif_svc.emit(
+            await _safe_emit(
                 db,
                 kind="info",
-                title=f"Extraction complete · {doc.filename}",
-                body=f"{page_count} sheet{'s' if page_count != 1 else ''} · {len(extracted_text)} characters extracted",
+                title=f"Extraction complete - {doc.filename}",
+                body=f"{page_count} {_document_unit(ext, page_count)}; {len(extracted_text)} characters extracted",
                 href=f"/deals/{doc.deal_id}?tab=documents",
                 payload={"deal_id": doc.deal_id, "doc_id": doc.id, **extraction},
             )
-        await db.commit()
