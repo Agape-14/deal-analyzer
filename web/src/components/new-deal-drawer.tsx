@@ -10,6 +10,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
 import { api } from "@/lib/api";
+import { useCurrentUser } from "@/lib/auth-client";
 import type { Developer, DealSummary } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
@@ -26,6 +27,7 @@ import { cn } from "@/lib/utils";
 export function NewDealDrawer() {
   const router = useRouter();
   const searchParams = useSearchParams();
+  const { isAnalyst, loading: authLoading } = useCurrentUser();
   const [open, setOpen] = React.useState(false);
   const [submitting, setSubmitting] = React.useState(false);
   const [developers, setDevelopers] = React.useState<Developer[] | null>(null);
@@ -42,16 +44,22 @@ export function NewDealDrawer() {
   // Read ?new=1 (from command palette) and respond to a custom event (from
   // the header button). Both open the drawer the same way.
   React.useEffect(() => {
-    if (searchParams?.get("new") === "1") setOpen(true);
-  }, [searchParams]);
+    if (authLoading) return;
+    if (searchParams?.get("new") !== "1") return;
+    if (isAnalyst) {
+      setOpen(true);
+    } else {
+      router.replace("/", { scroll: false });
+    }
+  }, [authLoading, isAnalyst, router, searchParams]);
 
   React.useEffect(() => {
     function onOpen() {
-      setOpen(true);
+      if (isAnalyst) setOpen(true);
     }
     document.addEventListener("open-new-deal", onOpen);
     return () => document.removeEventListener("open-new-deal", onOpen);
-  }, []);
+  }, [isAnalyst]);
 
   // Pull developers once the drawer opens (we don't need them before).
   React.useEffect(() => {
@@ -83,6 +91,10 @@ export function NewDealDrawer() {
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
+    if (!isAnalyst) {
+      toast.error("Viewer accounts are read-only");
+      return;
+    }
     if (!form.project_name.trim()) {
       toast.error("Project name is required");
       return;
@@ -119,6 +131,8 @@ export function NewDealDrawer() {
       setSubmitting(false);
     }
   }
+
+  if (!authLoading && !isAnalyst) return null;
 
   return (
     <Dialog open={open} onOpenChange={(o) => (o ? setOpen(true) : closeAndClear())}>
@@ -204,7 +218,7 @@ export function NewDealDrawer() {
             <select
               className={cn(
                 "flex h-9 w-full rounded-md border border-input bg-background/60 px-3 text-sm",
-                "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background",
+                "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-background",
               )}
               value={form.property_type}
               onChange={(e) => setForm((f) => ({ ...f, property_type: e.target.value }))}
