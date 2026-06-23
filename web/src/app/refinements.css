@@ -8,6 +8,13 @@ body {
   overflow-x: hidden;
 }
 
+body.role-viewer #analyst-tools,
+body.role-viewer #analyst-review,
+body.role-viewer #technical-details,
+body.role-viewer [data-analyst-only="true"] {
+  display: none !important;
+}
+
 main,
 .min-w-0 {
   min-width: 0;
