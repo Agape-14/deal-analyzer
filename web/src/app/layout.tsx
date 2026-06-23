@@ -45,7 +45,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
             prevent a flash of the wrong theme. Must be in <head>. */}
         <ThemeScript />
       </head>
-      <body className="min-h-screen bg-background">
+      <body className="role-viewer min-h-screen bg-background" data-role="viewer">
         <ThemeProvider>
           <RoleBodyClass />
           {/* Subtle radial highlight behind the main content */}
