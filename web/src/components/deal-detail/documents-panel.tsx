@@ -42,6 +42,8 @@ const DOC_TYPES: Array<{ key: string; label: string }> = [
 const ACCEPTED_UPLOAD_TYPES =
   "application/pdf,.pdf,.xlsx,.xlsm,.xls,.csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel,text/csv";
 
+const ACCEPTED_UPLOAD_EXTENSIONS = new Set([".pdf", ".xlsx", ".xlsm", ".xls", ".csv"]);
+
 export function DocumentsPanel({
   dealId,
   documents,
@@ -55,9 +57,19 @@ export function DocumentsPanel({
   const [uploads, setUploads] = React.useState<Upload[]>([]);
   const [previewDoc, setPreviewDoc] = React.useState<DealDocument | null>(null);
   const inputRef = React.useRef<HTMLInputElement>(null);
+  const dragDepth = React.useRef(0);
 
   async function handleFiles(files: FileList | File[]) {
-    const list = Array.from(files);
+    const list = Array.from(files).filter((file) => {
+      if (isAcceptedUpload(file)) return true;
+      toast.error("Unsupported file type", {
+        description: `${file.name} is not a PDF, Excel file, or CSV.`,
+      });
+      return false;
+    });
+
+    if (list.length === 0) return;
+
     for (const file of list) {
       const localId = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
       setUploads((prev) => [...prev, { id: localId, filename: file.name, status: "uploading", progress: 0 }]);
@@ -86,9 +98,44 @@ export function DocumentsPanel({
       } catch (e) {
         const msg = (e as Error)?.message || "Upload failed";
         setUploads((prev) => prev.map((u) => (u.id === localId ? { ...u, status: "error", error: msg } : u)));
-        toast.error("Upload failed", { description: file.name });
+        toast.error("Upload failed", { description: `${file.name}: ${msg}` });
       }
     }
+
+    if (inputRef.current) inputRef.current.value = "";
+  }
+
+  function handleDragEnter(e: React.DragEvent<HTMLElement>) {
+    if (!hasDraggedFiles(e)) return;
+    e.preventDefault();
+    e.stopPropagation();
+    dragDepth.current += 1;
+    setDragActive(true);
+  }
+
+  function handleDragLeave(e: React.DragEvent<HTMLElement>) {
+    if (!hasDraggedFiles(e)) return;
+    e.preventDefault();
+    e.stopPropagation();
+    dragDepth.current = Math.max(0, dragDepth.current - 1);
+    if (dragDepth.current === 0) setDragActive(false);
+  }
+
+  function handleDragOver(e: React.DragEvent<HTMLElement>) {
+    if (!hasDraggedFiles(e)) return;
+    e.preventDefault();
+    e.stopPropagation();
+    e.dataTransfer.dropEffect = "copy";
+    if (!dragActive) setDragActive(true);
+  }
+
+  function handleDrop(e: React.DragEvent<HTMLElement>) {
+    if (!hasDraggedFiles(e)) return;
+    e.preventDefault();
+    e.stopPropagation();
+    dragDepth.current = 0;
+    setDragActive(false);
+    if (e.dataTransfer.files.length) handleFiles(e.dataTransfer.files);
   }
 
   async function deleteDoc(docId: number, name: string) {
@@ -103,7 +150,16 @@ export function DocumentsPanel({
   }
 
   return (
-    <div className="grid grid-cols-1 lg:grid-cols-[1fr_360px] gap-6">
+    <div
+      className="relative grid grid-cols-1 lg:grid-cols-[1fr_360px] gap-6"
+      onDragEnter={handleDragEnter}
+      onDragLeave={handleDragLeave}
+      onDragOver={handleDragOver}
+      onDrop={handleDrop}
+    >
+      {dragActive && (
+        <div className="pointer-events-none absolute inset-0 z-10 rounded-xl border-2 border-dashed border-primary bg-primary/5 shadow-[inset_0_0_0_1px_hsl(var(--primary)/0.25)]" />
+      )}
       {/* Existing documents */}
       <Card elevated className="p-6">
         <div className="flex items-center justify-between mb-4">
@@ -238,20 +294,6 @@ export function DocumentsPanel({
         </div>
 
         <label
-          onDragEnter={(e) => {
-            e.preventDefault();
-            setDragActive(true);
-          }}
-          onDragLeave={() => setDragActive(false)}
-          onDragOver={(e) => {
-            e.preventDefault();
-            if (!dragActive) setDragActive(true);
-          }}
-          onDrop={(e) => {
-            e.preventDefault();
-            setDragActive(false);
-            if (e.dataTransfer.files.length) handleFiles(e.dataTransfer.files);
-          }}
           className={cn(
             "relative flex-1 min-h-[180px] rounded-lg border border-dashed flex flex-col items-center justify-center text-center p-6 cursor-pointer transition-all",
             dragActive
@@ -365,6 +407,7 @@ function uploadWithProgress(
     form.append("doc_type", docType);
 
     xhr.open("POST", `/api/deals/${dealId}/documents/upload`);
+    xhr.setRequestHeader("Accept", "application/json");
     xhr.upload.addEventListener("progress", (e) => {
       if (e.lengthComputable) onProgress(Math.min(99, Math.round((e.loaded / e.total) * 100)));
     });
@@ -379,7 +422,7 @@ function uploadWithProgress(
         let detail = xhr.statusText;
         try {
           const b = JSON.parse(xhr.responseText);
-          detail = b.detail ?? detail;
+          detail = typeof b.detail === "string" ? b.detail : JSON.stringify(b.detail ?? b);
         } catch {}
         reject(new Error(detail));
       }
@@ -393,4 +436,15 @@ function docUnit(filename: string, count: number): string {
   const lower = filename.toLowerCase();
   const singular = lower.endsWith(".xlsx") || lower.endsWith(".xlsm") || lower.endsWith(".xls") || lower.endsWith(".csv") ? "sheet" : "page";
   return count === 1 ? singular : `${singular}s`;
+}
+
+function hasDraggedFiles(e: React.DragEvent<HTMLElement>): boolean {
+  return Array.from(e.dataTransfer.types ?? []).includes("Files");
+}
+
+function isAcceptedUpload(file: File): boolean {
+  const lower = file.name.toLowerCase();
+  const dot = lower.lastIndexOf(".");
+  const ext = dot >= 0 ? lower.slice(dot) : "";
+  return ACCEPTED_UPLOAD_EXTENSIONS.has(ext);
 }
