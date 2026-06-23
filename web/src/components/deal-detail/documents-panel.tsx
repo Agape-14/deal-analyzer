@@ -78,12 +78,13 @@ export function DocumentsPanel({
         await uploadWithProgress(file, dealId, docType, (p) => {
           setUploads((prev) => prev.map((u) => (u.id === localId ? { ...u, progress: p } : u)));
         }).then((result) => {
+          const queued = Boolean(result.extraction?.queued);
           setUploads((prev) =>
             prev.map((u) =>
               u.id === localId
                 ? {
                     ...u,
-                    status: "done",
+                    status: queued ? "extracting" : "done",
                     progress: 100,
                     ocr_pages: result.extraction?.ocr_pages ?? 0,
                     tables: result.extraction?.tables ?? 0,
@@ -92,7 +93,11 @@ export function DocumentsPanel({
                 : u,
             ),
           );
-          toast.success("Document uploaded", { description: file.name });
+          toast.success("Document uploaded", {
+            description: queued
+              ? `${file.name} was saved. Extraction is running in the background.`
+              : file.name,
+          });
           router.refresh();
         });
       } catch (e) {
@@ -375,6 +380,8 @@ function UploadRow({ upload }: { upload: Upload }) {
           </div>
         ) : upload.status === "error" ? (
           <div className="text-xs text-destructive mt-0.5">{upload.error}</div>
+        ) : upload.status === "extracting" ? (
+          <div className="text-xs text-muted-foreground mt-0.5">Saved. Extracting in the background...</div>
         ) : (
           <div className="mt-1 h-1 rounded-full bg-muted overflow-hidden">
             <motion.div
@@ -399,7 +406,7 @@ function uploadWithProgress(
   dealId: number,
   docType: string,
   onProgress: (pct: number) => void,
-): Promise<{ extraction?: { ocr_pages?: number; tables?: number; images?: number } }> {
+): Promise<{ extraction?: { queued?: boolean; ocr_pages?: number; tables?: number; images?: number } }> {
   return new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest();
     const form = new FormData();
@@ -407,6 +414,8 @@ function uploadWithProgress(
     form.append("doc_type", docType);
 
     xhr.open("POST", `/api/deals/${dealId}/documents/upload`);
+    xhr.withCredentials = true;
+    xhr.timeout = 120000;
     xhr.setRequestHeader("Accept", "application/json");
     xhr.upload.addEventListener("progress", (e) => {
       if (e.lengthComputable) onProgress(Math.min(99, Math.round((e.loaded / e.total) * 100)));
@@ -419,17 +428,37 @@ function uploadWithProgress(
           resolve({});
         }
       } else {
-        let detail = xhr.statusText;
-        try {
-          const b = JSON.parse(xhr.responseText);
-          detail = typeof b.detail === "string" ? b.detail : JSON.stringify(b.detail ?? b);
-        } catch {}
-        reject(new Error(detail));
+        reject(new Error(uploadErrorMessage(xhr)));
       }
     };
-    xhr.onerror = () => reject(new Error("Network error"));
+    xhr.onerror = () => reject(new Error("Network error. Check your connection and try the upload again."));
+    xhr.ontimeout = () => reject(new Error("Upload timed out before the server responded. Try a smaller file or upload again."));
+    xhr.onabort = () => reject(new Error("Upload canceled."));
     xhr.send(form);
   });
+}
+
+function uploadErrorMessage(xhr: XMLHttpRequest): string {
+  const status = xhr.status
+    ? `HTTP ${xhr.status}${xhr.statusText ? ` ${xhr.statusText}` : ""}`
+    : "Upload request failed";
+  const raw = (xhr.responseText || "").trim();
+  if (!raw) {
+    return xhr.status ? status : "Upload request failed before the server returned a response.";
+  }
+
+  try {
+    const body = JSON.parse(raw) as { detail?: unknown; message?: unknown } | unknown;
+    const detail =
+      body && typeof body === "object" && ("detail" in body || "message" in body)
+        ? (body as { detail?: unknown; message?: unknown }).detail ??
+          (body as { detail?: unknown; message?: unknown }).message
+        : body;
+    if (typeof detail === "string") return `${status}: ${detail}`;
+    return `${status}: ${JSON.stringify(detail)}`;
+  } catch {
+    return `${status}: ${raw.slice(0, 300)}`;
+  }
 }
 
 function docUnit(filename: string, count: number): string {
