@@ -14,6 +14,8 @@ import {
   Image as ImageIcon,
   Table as TableIcon,
   ScanText,
+  AlertCircle,
+  Clock3,
 } from "lucide-react";
 import { toast } from "sonner";
 import { Card } from "@/components/ui/card";
@@ -21,8 +23,9 @@ import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import type { DealDocument } from "@/lib/types";
 
-type Upload = {
+type UploadState = {
   id: string;
+  docId?: number;
   filename: string;
   status: "uploading" | "extracting" | "done" | "error";
   progress: number;
@@ -30,6 +33,23 @@ type Upload = {
   tables?: number;
   images?: number;
   error?: string;
+};
+
+type UploadResult = {
+  id?: number;
+  filename?: string;
+  extraction?: {
+    queued?: boolean;
+    ocr_pages?: number;
+    tables?: number;
+    images?: number;
+  };
+};
+
+type ExtractionQuality = NonNullable<DealDocument["extraction_quality"]> & {
+  status?: string | null;
+  error?: string | null;
+  document_kind?: string | null;
 };
 
 const DOC_TYPES: Array<{ key: string; label: string }> = [
@@ -54,7 +74,7 @@ export function DocumentsPanel({
   const router = useRouter();
   const [dragActive, setDragActive] = React.useState(false);
   const [docType, setDocType] = React.useState<string>("offering_memo");
-  const [uploads, setUploads] = React.useState<Upload[]>([]);
+  const [uploads, setUploads] = React.useState<UploadState[]>([]);
   const [previewDoc, setPreviewDoc] = React.useState<DealDocument | null>(null);
   const inputRef = React.useRef<HTMLInputElement>(null);
   const dragDepth = React.useRef(0);
@@ -75,31 +95,37 @@ export function DocumentsPanel({
       setUploads((prev) => [...prev, { id: localId, filename: file.name, status: "uploading", progress: 0 }]);
 
       try {
-        await uploadWithProgress(file, dealId, docType, (p) => {
+        const result = await uploadWithProgress(file, dealId, docType, (p) => {
           setUploads((prev) => prev.map((u) => (u.id === localId ? { ...u, progress: p } : u)));
-        }).then((result) => {
-          const queued = Boolean(result.extraction?.queued);
-          setUploads((prev) =>
-            prev.map((u) =>
-              u.id === localId
-                ? {
-                    ...u,
-                    status: queued ? "extracting" : "done",
-                    progress: 100,
-                    ocr_pages: result.extraction?.ocr_pages ?? 0,
-                    tables: result.extraction?.tables ?? 0,
-                    images: result.extraction?.images ?? 0,
-                  }
-                : u,
-            ),
-          );
-          toast.success("Document uploaded", {
-            description: queued
-              ? `${file.name} was saved. Extraction is running in the background.`
-              : file.name,
-          });
-          router.refresh();
         });
+
+        const queued = Boolean(result.extraction?.queued);
+        setUploads((prev) =>
+          prev.map((u) =>
+            u.id === localId
+              ? {
+                  ...u,
+                  docId: result.id,
+                  status: queued ? "extracting" : "done",
+                  progress: 100,
+                  ocr_pages: result.extraction?.ocr_pages ?? 0,
+                  tables: result.extraction?.tables ?? 0,
+                  images: result.extraction?.images ?? 0,
+                }
+              : u,
+          ),
+        );
+
+        toast.success("Document uploaded", {
+          description: queued
+            ? `${file.name} was saved. Checking extraction status now.`
+            : file.name,
+        });
+        router.refresh();
+
+        if (queued && result.id) {
+          void pollExtractionStatus(result.id, localId, file.name);
+        }
       } catch (e) {
         const msg = (e as Error)?.message || "Upload failed";
         setUploads((prev) => prev.map((u) => (u.id === localId ? { ...u, status: "error", error: msg } : u)));
@@ -108,6 +134,86 @@ export function DocumentsPanel({
     }
 
     if (inputRef.current) inputRef.current.value = "";
+  }
+
+  async function pollExtractionStatus(docId: number, localId: string, filename: string) {
+    const attempts = 60;
+    for (let attempt = 0; attempt < attempts; attempt += 1) {
+      await delay(attempt === 0 ? 3000 : 5000);
+
+      try {
+        const doc = await fetchDocument(dealId, docId);
+        if (!doc) continue;
+
+        const quality = getExtractionQuality(doc);
+        if (quality?.status === "error") {
+          const message = quality.error || "Extraction failed after the upload was saved.";
+          setUploads((prev) =>
+            prev.map((u) => (u.id === localId ? { ...u, status: "error", error: message } : u)),
+          );
+          toast.error("Extraction failed", { description: `${filename}: ${message}` });
+          router.refresh();
+          return;
+        }
+
+        if (doc.has_text) {
+          const extractionError = await fetchExtractionError(doc.id);
+          if (extractionError) {
+            setUploads((prev) =>
+              prev.map((u) => (u.id === localId ? { ...u, status: "error", error: extractionError } : u)),
+            );
+            toast.error("Extraction failed", { description: `${filename}: ${extractionError}` });
+            router.refresh();
+            return;
+          }
+
+          setUploads((prev) =>
+            prev.map((u) =>
+              u.id === localId
+                ? {
+                    ...u,
+                    status: "done",
+                    progress: 100,
+                    ocr_pages: quality?.ocr_pages ?? 0,
+                  }
+                : u,
+            ),
+          );
+          toast.success("Extraction complete", { description: filename });
+          router.refresh();
+          return;
+        }
+
+        setUploads((prev) =>
+          prev.map((u) =>
+            u.id === localId
+              ? { ...u, status: "extracting", progress: Math.min(99, Math.max(u.progress, 35 + attempt)) }
+              : u,
+          ),
+        );
+      } catch (e) {
+        if (attempt >= 2) {
+          const msg = (e as Error)?.message || "Could not check extraction status.";
+          setUploads((prev) => prev.map((u) => (u.id === localId ? { ...u, error: msg } : u)));
+        }
+      }
+    }
+
+    setUploads((prev) =>
+      prev.map((u) =>
+        u.id === localId
+          ? {
+              ...u,
+              status: "error",
+              error: "Extraction is taking longer than expected. Refresh this page in a few minutes, or try reprocessing the document.",
+            }
+          : u,
+      ),
+    );
+    toast.warning("Extraction is still running", {
+      description: `${filename} was uploaded, but extraction has not finished yet.`,
+    });
+    router.refresh();
   }
 
   function handleDragEnter(e: React.DragEvent<HTMLElement>) {
@@ -165,7 +271,6 @@ export function DocumentsPanel({
       {dragActive && (
         <div className="pointer-events-none absolute inset-0 z-10 rounded-xl border-2 border-dashed border-primary bg-primary/5 shadow-[inset_0_0_0_1px_hsl(var(--primary)/0.25)]" />
       )}
-      {/* Existing documents */}
       <Card elevated className="p-6">
         <div className="flex items-center justify-between mb-4">
           <div>
@@ -185,74 +290,76 @@ export function DocumentsPanel({
           </div>
         ) : (
           <ul className="divide-y divide-border/60">
-            {documents.map((d) => (
-              <li key={d.id} className="py-3 flex items-center gap-3 group">
-                <div className="h-9 w-9 rounded-md bg-muted/60 ring-1 ring-border/70 grid place-items-center shrink-0">
-                  <FileText className="h-4 w-4 text-muted-foreground" />
-                </div>
-                <div className="min-w-0 flex-1">
-                  <button
-                    onClick={() => setPreviewDoc(d)}
-                    className="text-sm font-medium truncate text-left hover:text-primary transition-colors"
-                    title="Preview document"
-                  >
-                    {d.filename}
-                  </button>
-                  <div className="text-[11px] text-muted-foreground mt-0.5 flex items-center gap-2 flex-wrap">
-                    <span className="uppercase tracking-wider">{d.doc_type.replace(/_/g, " ")}</span>
-                    <span className="opacity-40">·</span>
-                    <span>
-                      {d.page_count} {docUnit(d.filename, d.page_count)}
-                    </span>
-                    {d.has_text && (
-                      <>
-                        <span className="opacity-40">·</span>
-                        <span className="inline-flex items-center gap-1 text-success">
-                          <CheckCircle2 className="h-3 w-3" />
-                          Extracted
-                        </span>
-                      </>
-                    )}
-                    {d.extraction_quality?.quality_score != null && d.extraction_quality.quality_score < 80 && (
-                      <>
-                        <span className="opacity-40">·</span>
-                        <span
-                          className="inline-flex items-center gap-1 text-warning"
-                          title={`Quality ${d.extraction_quality.quality_score}%. Pages with no usable text: ${
-                            d.extraction_quality.empty_pages?.join(", ") || "—"
-                          }`}
-                        >
-                          <span className="h-1.5 w-1.5 rounded-full bg-warning" />
-                          Quality {d.extraction_quality.quality_score}%
-                        </span>
-                      </>
-                    )}
-                    {(d.extraction_quality?.ocr_pages ?? 0) > 0 && (
-                      <>
-                        <span className="opacity-40">·</span>
-                        <span className="text-muted-foreground">
-                          {d.extraction_quality?.ocr_pages} OCR {d.extraction_quality?.ocr_pages === 1 ? "page" : "pages"}
-                        </span>
-                      </>
-                    )}
+            {documents.map((d) => {
+              const status = documentStatus(d);
+              return (
+                <li key={d.id} className="py-3 flex items-center gap-3 group">
+                  <div className="h-9 w-9 rounded-md bg-muted/60 ring-1 ring-border/70 grid place-items-center shrink-0">
+                    <FileText className="h-4 w-4 text-muted-foreground" />
                   </div>
-                </div>
-                <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 focus-within:opacity-100 transition-opacity">
-                  <PreviewButton doc={d} onOpen={(doc) => setPreviewDoc(doc)} />
-                  <button
-                    onClick={() => deleteDoc(d.id, d.filename)}
-                    className="p-1.5 rounded-md hover:bg-destructive/10 text-muted-foreground hover:text-destructive"
-                    aria-label="Delete document"
-                  >
-                    <Trash2 className="h-4 w-4" />
-                  </button>
-                </div>
-              </li>
-            ))}
+                  <div className="min-w-0 flex-1">
+                    <button
+                      onClick={() => setPreviewDoc(d)}
+                      className="text-sm font-medium truncate text-left hover:text-primary transition-colors"
+                      title="Preview document"
+                    >
+                      {d.filename}
+                    </button>
+                    <div className="text-[11px] text-muted-foreground mt-0.5 flex items-center gap-2 flex-wrap">
+                      <span className="uppercase tracking-wider">{d.doc_type.replace(/_/g, " ")}</span>
+                      <span className="opacity-40">-</span>
+                      <span>
+                        {d.page_count} {docUnit(d.filename, d.page_count)}
+                      </span>
+                      {status && (
+                        <>
+                          <span className="opacity-40">-</span>
+                          <span className={cn("inline-flex items-center gap-1", status.className)}>
+                            <status.icon className="h-3 w-3" />
+                            {status.label}
+                          </span>
+                        </>
+                      )}
+                      {d.extraction_quality?.quality_score != null && d.extraction_quality.quality_score < 80 && (
+                        <>
+                          <span className="opacity-40">-</span>
+                          <span
+                            className="inline-flex items-center gap-1 text-warning"
+                            title={`Quality ${d.extraction_quality.quality_score}%. Pages with no usable text: ${
+                              d.extraction_quality.empty_pages?.join(", ") || "none"
+                            }`}
+                          >
+                            <span className="h-1.5 w-1.5 rounded-full bg-warning" />
+                            Quality {d.extraction_quality.quality_score}%
+                          </span>
+                        </>
+                      )}
+                      {(d.extraction_quality?.ocr_pages ?? 0) > 0 && (
+                        <>
+                          <span className="opacity-40">-</span>
+                          <span className="text-muted-foreground">
+                            {d.extraction_quality?.ocr_pages} OCR {d.extraction_quality?.ocr_pages === 1 ? "page" : "pages"}
+                          </span>
+                        </>
+                      )}
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 focus-within:opacity-100 transition-opacity">
+                    <PreviewButton doc={d} onOpen={(doc) => setPreviewDoc(doc)} />
+                    <button
+                      onClick={() => deleteDoc(d.id, d.filename)}
+                      className="p-1.5 rounded-md hover:bg-destructive/10 text-muted-foreground hover:text-destructive"
+                      aria-label="Delete document"
+                    >
+                      <Trash2 className="h-4 w-4" />
+                    </button>
+                  </div>
+                </li>
+              );
+            })}
           </ul>
         )}
 
-        {/* In-flight uploads */}
         <AnimatePresence>
           {uploads.length > 0 && (
             <motion.div
@@ -269,7 +376,6 @@ export function DocumentsPanel({
         </AnimatePresence>
       </Card>
 
-      {/* Dropzone */}
       <Card elevated className="p-6 flex flex-col">
         <h3 className="text-base font-semibold tracking-tight mb-1">Upload</h3>
         <p className="text-xs text-muted-foreground mb-4">
@@ -277,9 +383,7 @@ export function DocumentsPanel({
         </p>
 
         <div className="mb-4">
-          <label className="text-[10px] uppercase tracking-[0.12em] text-muted-foreground">
-            Document type
-          </label>
+          <label className="text-[10px] uppercase tracking-[0.12em] text-muted-foreground">Document type</label>
           <div className="mt-2 flex flex-wrap gap-1.5">
             {DOC_TYPES.map((d) => (
               <button
@@ -334,23 +438,19 @@ export function DocumentsPanel({
         </label>
       </Card>
 
-      <PdfPreviewDialog
-        doc={previewDoc}
-        open={previewDoc !== null}
-        onOpenChange={(o) => !o && setPreviewDoc(null)}
-      />
+      <PdfPreviewDialog doc={previewDoc} open={previewDoc !== null} onOpenChange={(o) => !o && setPreviewDoc(null)} />
     </div>
   );
 }
 
-function UploadRow({ upload }: { upload: Upload }) {
+function UploadRow({ upload }: { upload: UploadState }) {
   return (
     <div className="flex items-center gap-3">
       <div className="h-8 w-8 rounded-md bg-muted/60 grid place-items-center shrink-0">
         {upload.status === "done" ? (
           <CheckCircle2 className="h-4 w-4 text-success" />
         ) : upload.status === "error" ? (
-          <FileText className="h-4 w-4 text-destructive" />
+          <AlertCircle className="h-4 w-4 text-destructive" />
         ) : (
           <Loader2 className="h-4 w-4 text-muted-foreground animate-spin" />
         )}
@@ -358,30 +458,11 @@ function UploadRow({ upload }: { upload: Upload }) {
       <div className="flex-1 min-w-0">
         <div className="text-sm font-medium truncate">{upload.filename}</div>
         {upload.status === "done" ? (
-          <div className="text-[11px] text-muted-foreground mt-1 flex items-center gap-2">
-            {upload.ocr_pages! > 0 && (
-              <span className="inline-flex items-center gap-1">
-                <ScanText className="h-3 w-3" />
-                {upload.ocr_pages} OCR
-              </span>
-            )}
-            {upload.tables! > 0 && (
-              <span className="inline-flex items-center gap-1">
-                <TableIcon className="h-3 w-3" />
-                {upload.tables} tables
-              </span>
-            )}
-            {upload.images! > 0 && (
-              <span className="inline-flex items-center gap-1">
-                <ImageIcon className="h-3 w-3" />
-                {upload.images} images
-              </span>
-            )}
-          </div>
+          <div className="text-[11px] text-success mt-0.5">Extraction complete</div>
         ) : upload.status === "error" ? (
           <div className="text-xs text-destructive mt-0.5">{upload.error}</div>
         ) : upload.status === "extracting" ? (
-          <div className="text-xs text-muted-foreground mt-0.5">Saved. Extracting in the background...</div>
+          <div className="text-xs text-muted-foreground mt-0.5">Saved. Checking extraction status...</div>
         ) : (
           <div className="mt-1 h-1 rounded-full bg-muted overflow-hidden">
             <motion.div
@@ -397,16 +478,12 @@ function UploadRow({ upload }: { upload: Upload }) {
   );
 }
 
-/**
- * Upload a file with real progress via XHR (fetch doesn't yet expose upload
- * progress in a stable cross-browser way). Returns the API's JSON response.
- */
 function uploadWithProgress(
   file: File,
   dealId: number,
   docType: string,
   onProgress: (pct: number) => void,
-): Promise<{ extraction?: { queued?: boolean; ocr_pages?: number; tables?: number; images?: number } }> {
+): Promise<UploadResult> {
   return new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest();
     const form = new FormData();
@@ -438,6 +515,30 @@ function uploadWithProgress(
   });
 }
 
+async function fetchDocument(dealId: number, docId: number): Promise<DealDocument | null> {
+  const res = await fetch(`/api/deals/${dealId}/documents`, {
+    cache: "no-store",
+    credentials: "include",
+  });
+  if (!res.ok) throw new Error(`Status check failed with HTTP ${res.status}`);
+  const docs = (await res.json()) as DealDocument[];
+  return docs.find((doc) => doc.id === docId) ?? null;
+}
+
+async function fetchExtractionError(docId: number): Promise<string | null> {
+  const res = await fetch(`/api/deals/documents/${docId}/text`, {
+    cache: "no-store",
+    credentials: "include",
+  });
+  if (!res.ok) return null;
+  const body = (await res.json()) as { text?: unknown };
+  const text = typeof body.text === "string" ? body.text.trim() : "";
+  if (text.toLowerCase().startsWith("error extracting text:")) {
+    return text.replace(/^error extracting text:\s*/i, "") || "Extraction failed.";
+  }
+  return null;
+}
+
 function uploadErrorMessage(xhr: XMLHttpRequest): string {
   const status = xhr.status
     ? `HTTP ${xhr.status}${xhr.statusText ? ` ${xhr.statusText}` : ""}`
@@ -461,6 +562,24 @@ function uploadErrorMessage(xhr: XMLHttpRequest): string {
   }
 }
 
+function documentStatus(doc: DealDocument): { label: string; className: string; icon: React.ElementType } | null {
+  const quality = getExtractionQuality(doc);
+  if (quality?.status === "error") {
+    return { label: "Extraction failed", className: "text-destructive", icon: AlertCircle };
+  }
+  if (doc.has_text) {
+    return { label: "Extracted", className: "text-success", icon: CheckCircle2 };
+  }
+  if (quality) {
+    return { label: "Extracting", className: "text-warning", icon: Clock3 };
+  }
+  return { label: "Pending", className: "text-muted-foreground", icon: Clock3 };
+}
+
+function getExtractionQuality(doc: DealDocument): ExtractionQuality | null {
+  return (doc.extraction_quality ?? null) as ExtractionQuality | null;
+}
+
 function docUnit(filename: string, count: number): string {
   const lower = filename.toLowerCase();
   const singular = lower.endsWith(".xlsx") || lower.endsWith(".xlsm") || lower.endsWith(".xls") || lower.endsWith(".csv") ? "sheet" : "page";
@@ -476,4 +595,8 @@ function isAcceptedUpload(file: File): boolean {
   const dot = lower.lastIndexOf(".");
   const ext = dot >= 0 ? lower.slice(dot) : "";
   return ACCEPTED_UPLOAD_EXTENSIONS.has(ext);
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolve) => window.setTimeout(resolve, ms));
 }
