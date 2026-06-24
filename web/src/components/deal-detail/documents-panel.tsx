@@ -27,7 +27,7 @@ type UploadState = {
   id: string;
   docId?: number;
   filename: string;
-  status: "uploading" | "extracting" | "done" | "error";
+  status: "uploading" | "extracting" | "reviewing" | "done" | "error";
   progress: number;
   ocr_pages?: number;
   tables?: number;
@@ -78,6 +78,9 @@ export function DocumentsPanel({
   const [previewDoc, setPreviewDoc] = React.useState<DealDocument | null>(null);
   const inputRef = React.useRef<HTMLInputElement>(null);
   const dragDepth = React.useRef(0);
+  const pendingExtractionIds = React.useRef<Set<string>>(new Set());
+  const reviewReadyRef = React.useRef(false);
+  const reviewStartLock = React.useRef(false);
 
   async function handleFiles(files: FileList | File[]) {
     const list = Array.from(files).filter((file) => {
@@ -90,8 +93,13 @@ export function DocumentsPanel({
 
     if (list.length === 0) return;
 
-    for (const file of list) {
-      const localId = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const uploadItems = list.map((file) => ({
+      file,
+      localId: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    }));
+    uploadItems.forEach(({ localId }) => pendingExtractionIds.current.add(localId));
+
+    for (const { file, localId } of uploadItems) {
       setUploads((prev) => [...prev, { id: localId, filename: file.name, status: "uploading", progress: 0 }]);
 
       try {
@@ -118,22 +126,66 @@ export function DocumentsPanel({
 
         toast.success("Document uploaded", {
           description: queued
-            ? `${file.name} was saved. Checking extraction status now.`
-            : file.name,
+            ? `${file.name} was saved. Reading the document now.`
+            : `${file.name} was saved. Starting document review next.`,
         });
         router.refresh();
 
         if (queued && result.id) {
           void pollExtractionStatus(result.id, localId, file.name);
+        } else {
+          markUploadSettled(localId, file.name, true);
         }
       } catch (e) {
         const msg = (e as Error)?.message || "Upload failed";
+        markUploadSettled(localId, file.name, false);
         setUploads((prev) => prev.map((u) => (u.id === localId ? { ...u, status: "error", error: msg } : u)));
         toast.error("Upload failed", { description: `${file.name}: ${msg}` });
       }
     }
 
     if (inputRef.current) inputRef.current.value = "";
+  }
+
+  function markUploadSettled(localId: string, filename: string, extracted: boolean) {
+    pendingExtractionIds.current.delete(localId);
+    if (extracted) reviewReadyRef.current = true;
+    if (pendingExtractionIds.current.size === 0 && reviewReadyRef.current) {
+      reviewReadyRef.current = false;
+      void startDocumentReview(filename);
+    }
+  }
+
+  async function startDocumentReview(filename: string) {
+    if (reviewStartLock.current) return;
+    reviewStartLock.current = true;
+    setUploads((prev) => prev.map((u) => (u.status === "done" ? { ...u, status: "reviewing" } : u)));
+
+    try {
+      await delay(1000);
+      const res = await fetch(`/api/deals/${dealId}/review`, {
+        method: "POST",
+        cache: "no-store",
+        credentials: "include",
+        headers: { Accept: "application/json" },
+      });
+      if (!res.ok) throw new Error(await responseErrorMessage(res));
+      toast.success("Document review started", {
+        description: "Reading documents, checking sources, math-checking, and updating the score.",
+      });
+      router.refresh();
+    } catch (e) {
+      setUploads((prev) =>
+        prev.map((u) => (u.status === "reviewing" ? { ...u, status: "done" } : u)),
+      );
+      toast.error("Document review did not start", {
+        description: `${filename}: ${(e as Error)?.message || "Use Review documents again."}`,
+      });
+    } finally {
+      window.setTimeout(() => {
+        reviewStartLock.current = false;
+      }, 5000);
+    }
   }
 
   async function pollExtractionStatus(docId: number, localId: string, filename: string) {
@@ -148,6 +200,7 @@ export function DocumentsPanel({
         const quality = getExtractionQuality(doc);
         if (quality?.status === "error") {
           const message = quality.error || "Extraction failed after the upload was saved.";
+          markUploadSettled(localId, filename, false);
           setUploads((prev) =>
             prev.map((u) => (u.id === localId ? { ...u, status: "error", error: message } : u)),
           );
@@ -159,6 +212,7 @@ export function DocumentsPanel({
         if (doc.has_text) {
           const extractionError = await fetchExtractionError(doc.id);
           if (extractionError) {
+            markUploadSettled(localId, filename, false);
             setUploads((prev) =>
               prev.map((u) => (u.id === localId ? { ...u, status: "error", error: extractionError } : u)),
             );
@@ -179,7 +233,8 @@ export function DocumentsPanel({
                 : u,
             ),
           );
-          toast.success("Extraction complete", { description: filename });
+          toast.success("Extraction complete", { description: `${filename} is ready. Document review will start automatically.` });
+          markUploadSettled(localId, filename, true);
           router.refresh();
           return;
         }
@@ -199,6 +254,7 @@ export function DocumentsPanel({
       }
     }
 
+    markUploadSettled(localId, filename, false);
     setUploads((prev) =>
       prev.map((u) =>
         u.id === localId
@@ -461,8 +517,10 @@ function UploadRow({ upload }: { upload: UploadState }) {
           <div className="text-[11px] text-success mt-0.5">Extraction complete</div>
         ) : upload.status === "error" ? (
           <div className="text-xs text-destructive mt-0.5">{upload.error}</div>
+        ) : upload.status === "reviewing" ? (
+          <div className="text-xs text-muted-foreground mt-0.5">Starting document review...</div>
         ) : upload.status === "extracting" ? (
-          <div className="text-xs text-muted-foreground mt-0.5">Saved. Checking extraction status...</div>
+          <div className="text-xs text-muted-foreground mt-0.5">Saved. Reading document...</div>
         ) : (
           <div className="mt-1 h-1 rounded-full bg-muted overflow-hidden">
             <motion.div
@@ -537,6 +595,24 @@ async function fetchExtractionError(docId: number): Promise<string | null> {
     return text.replace(/^error extracting text:\s*/i, "") || "Extraction failed.";
   }
   return null;
+}
+
+async function responseErrorMessage(res: Response): Promise<string> {
+  const status = `HTTP ${res.status}${res.statusText ? ` ${res.statusText}` : ""}`;
+  const raw = (await res.text()).trim();
+  if (!raw) return status;
+  try {
+    const body = JSON.parse(raw) as { detail?: unknown; message?: unknown } | unknown;
+    const detail =
+      body && typeof body === "object" && ("detail" in body || "message" in body)
+        ? (body as { detail?: unknown; message?: unknown }).detail ??
+          (body as { detail?: unknown; message?: unknown }).message
+        : body;
+    if (typeof detail === "string") return `${status}: ${detail}`;
+    return `${status}: ${JSON.stringify(detail)}`;
+  } catch {
+    return `${status}: ${raw.slice(0, 300)}`;
+  }
 }
 
 function uploadErrorMessage(xhr: XMLHttpRequest): string {
