@@ -66,6 +66,10 @@ class DealDocument(Base):
     deal_id = Column(Integer, ForeignKey("deals.id"), nullable=False, index=True)
     filename = Column(String(500), nullable=False)
     file_path = Column(String(1000), nullable=False)
+    # Hashes let the document review reuse unchanged extractions and
+    # verification results without weakening the review quality.
+    file_sha256 = Column(String(64), default="", index=True)
+    content_fingerprint = Column(String(64), default="", index=True)
     doc_type = Column(String(50), default="other")
     extracted_text = Column(Text, default="")
     page_count = Column(Integer, default=0)
