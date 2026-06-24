@@ -7,6 +7,7 @@ import { toast } from "sonner";
 import { motion } from "framer-motion";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
+import { AiUsagePanel } from "@/components/deal-detail/ai-usage-panel";
 import { api } from "@/lib/api";
 import { cn, fmtDate } from "@/lib/utils";
 import type { DataQualityGate, DealQualitySummary } from "@/lib/types";
@@ -262,6 +263,10 @@ export function QualityPanel({
           ))}
         </div>
       )}
+
+      <div className="mt-4 pt-4 border-t border-border/60">
+        <AiUsagePanel dealId={dealId} />
+      </div>
     </Card>
   );
 }
