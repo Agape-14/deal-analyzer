@@ -24,7 +24,7 @@ from app.services.data_integrity import (
     staleness_flags,
     now_iso,
 )
-from app.services.deal_extractor import extract_metrics_from_docs
+from app.services.deal_extractor_cost_aware import extract_metrics_from_docs
 from app.services.deal_scorer import score_deal
 from app.services.deal_validator import validate_deal_metrics
 from app.services.deal_verifier import apply_corrections, verify_deal_metrics
