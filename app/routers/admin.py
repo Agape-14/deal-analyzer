@@ -15,6 +15,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, Query
 
 from app.auth import require_auth
+from app.services.ai_usage import summarize_usage
 from app.services.operation_log import clear_entries, snapshot_entries
 
 
@@ -68,6 +69,23 @@ async def diagnostics(
         "counts": counts,
         "entries": entries,
     }
+
+
+@router.get(
+    "/ai-usage",
+    summary="Persistent AI usage and estimated cost",
+    dependencies=[Depends(require_auth)],
+)
+async def ai_usage(
+    deal_id: int | None = Query(None, ge=1, description="Limit usage to one deal"),
+    limit: int = Query(100, ge=1, le=500, description="Max event rows to return"),
+):
+    """Return persisted AI token usage and estimated cost.
+
+    This endpoint backs the operator-facing cost panel. It uses persisted
+    rows, so unlike `/diagnostics`, it survives deploys and process restarts.
+    """
+    return await summarize_usage(deal_id=deal_id, limit=limit)
 
 
 @router.post(
