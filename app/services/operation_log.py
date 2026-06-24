@@ -186,6 +186,12 @@ async def record(
                 "[op:%s] failed to append diagnostics entry: %r",
                 entry.id, entry,
             )
+        try:
+            from app.services.ai_usage import persist_operation_usage
+
+            await persist_operation_usage(entry)
+        except Exception:
+            logger.exception("[op:%s] failed to persist AI usage", entry.id)
 
 
 async def snapshot_entries(include_full_bodies: bool = False) -> list[dict]:
