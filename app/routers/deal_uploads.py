@@ -47,6 +47,14 @@ MIMETYPE_EXTS = {
 }
 
 
+@router.get("/{deal_id}/documents")
+async def list_uploaded_documents(deal_id: int, db: AsyncSession = Depends(get_db)):
+    result = await db.execute(
+        select(DealDocument).where(DealDocument.deal_id == deal_id).order_by(DealDocument.upload_date.desc())
+    )
+    return [_document_payload(doc) for doc in result.scalars().all()]
+
+
 @router.post("/{deal_id}/documents/upload", dependencies=[Depends(limit("upload"))])
 async def upload_document(
     deal_id: int,
@@ -199,6 +207,29 @@ async def get_document_file(doc_id: int, db: AsyncSession = Depends(get_db)):
             "Cache-Control": "private, max-age=60",
         },
     )
+
+
+def _document_payload(doc: DealDocument) -> dict:
+    q = doc.extraction_quality or {}
+    extraction_quality = None
+    if q:
+        extraction_quality = {
+            "status": q.get("status"),
+            "error": q.get("error"),
+            "document_kind": q.get("document_kind"),
+            "quality_score": q.get("quality_score"),
+            "ocr_pages": q.get("ocr_pages", 0),
+            "empty_pages": q.get("empty_pages", []),
+        }
+    return {
+        "id": doc.id,
+        "filename": doc.filename,
+        "doc_type": doc.doc_type,
+        "page_count": doc.page_count,
+        "upload_date": doc.upload_date.isoformat() if doc.upload_date else None,
+        "has_text": bool(doc.extracted_text),
+        "extraction_quality": extraction_quality,
+    }
 
 
 def _upload_extension(file: UploadFile) -> str:
