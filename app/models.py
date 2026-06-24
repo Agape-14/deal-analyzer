@@ -54,6 +54,7 @@ class Deal(Base):
     documents = relationship("DealDocument", back_populates="deal", cascade="all, delete-orphan")
     chats = relationship("DealChat", back_populates="deal", cascade="all, delete-orphan")
     investments = relationship("Investment", back_populates="deal", cascade="all, delete-orphan")
+    ai_usage_events = relationship("AIUsageEvent", back_populates="deal", cascade="all, delete-orphan")
 
 
 class DealDocument(Base):
@@ -86,6 +87,25 @@ class DealChat(Base):
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
 
     deal = relationship("Deal", back_populates="chats")
+
+
+class AIUsageEvent(Base):
+    __tablename__ = "ai_usage_events"
+
+    id = Column(Integer, primary_key=True, index=True)
+    deal_id = Column(Integer, ForeignKey("deals.id"), nullable=True, index=True)
+    operation = Column(String(50), nullable=False, index=True)
+    model = Column(String(120), default="")
+    status = Column(String(30), default="ok", index=True)
+    input_tokens = Column(Integer, nullable=True)
+    output_tokens = Column(Integer, nullable=True)
+    estimated_cost_usd = Column(Float, default=0)
+    duration_ms = Column(Integer, nullable=True)
+    error_message = Column(Text, nullable=True)
+    meta = Column(JSON, default=dict)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), index=True)
+
+    deal = relationship("Deal", back_populates="ai_usage_events")
 
 
 class Investment(Base):
