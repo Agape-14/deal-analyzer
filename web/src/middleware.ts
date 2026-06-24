@@ -18,6 +18,7 @@ const PUBLIC_PREFIXES = [
   "/_next/",
   "/favicon.ico",
   "/api/",
+  "/document-upload/",
   "/static/",
 ];
 
@@ -46,8 +47,8 @@ export function middleware(req: NextRequest) {
 }
 
 export const config = {
-  // Match application pages only. API paths are proxied directly to FastAPI.
+  // Match application pages only. API and upload paths return JSON errors.
   matcher: [
-    "/((?!_next/static|_next/image|favicon.ico|login|api|legacy|static).*)",
+    "/((?!_next/static|_next/image|favicon.ico|login|api|document-upload|legacy|static).*)",
   ],
 };
