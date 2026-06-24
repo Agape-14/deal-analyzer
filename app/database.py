@@ -86,16 +86,19 @@ def _is_alembic_managed(sync_conn) -> bool:
 
 
 def _apply_schema_patches(sync_conn) -> None:
-    """Add columns declared on mapped classes but missing from live tables.
+    """Add mapped schema that is missing from the live database.
 
-    This is intentionally conservative: add-only, no drops, no type changes,
-    and no missing-table creation for Alembic-managed databases.
+    This is intentionally conservative: create only the additive AI usage
+    ledger table when missing, then add missing columns to existing tables.
+    No drops or type changes happen here.
     """
     from sqlalchemy import inspect, text
 
     insp = inspect(sync_conn)
     for table in Base.metadata.sorted_tables:
         if not insp.has_table(table.name):
+            if table.name == "ai_usage_events":
+                table.create(sync_conn, checkfirst=True)
             continue
         existing = {c["name"] for c in insp.get_columns(table.name)}
         for col in table.columns:
