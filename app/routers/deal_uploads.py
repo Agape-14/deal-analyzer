@@ -334,6 +334,34 @@ async def _safe_emit(db: AsyncSession, **kwargs) -> None:
         log.exception("Notification emit failed during document upload/extraction")
 
 
+async def _mark_extraction_failed(db: AsyncSession, doc_id: int, ext: str, exc: Exception) -> None:
+    try:
+        result = await db.execute(select(DealDocument).where(DealDocument.id == doc_id))
+        doc = result.scalar_one_or_none()
+        if not doc:
+            return
+        message = _public_error(exc)
+        doc.extracted_text = f"Error extracting text: {message}"
+        doc.page_count = doc.page_count or 0
+        doc.extraction_quality = {
+            "status": "error",
+            "error": message,
+            "document_kind": _document_kind(ext),
+        }
+        await _commit_with_retry(db, "saving extraction failure")
+        await _safe_emit(
+            db,
+            kind="warning",
+            title=f"Extraction failed - {doc.filename}",
+            body=message or "The file was saved, but extraction failed.",
+            href=f"/deals/{doc.deal_id}?tab=documents",
+            payload={"deal_id": doc.deal_id, "doc_id": doc.id, "error": message},
+        )
+    except Exception:
+        await db.rollback()
+        log.exception("Could not persist background extraction failure for doc_id=%s", doc_id)
+
+
 async def _extract_document_background(doc_id: int, file_path: str, ext: str) -> None:
     async with async_session() as db:
         result = await db.execute(select(DealDocument).where(DealDocument.id == doc_id))
@@ -374,6 +402,7 @@ async def _extract_document_background(doc_id: int, file_path: str, ext: str) ->
                     href=f"/deals/{doc.deal_id}?tab=documents",
                     payload={"deal_id": doc.deal_id, "doc_id": doc.id, **extraction},
                 )
-        except Exception:
+        except Exception as exc:
             await db.rollback()
             log.exception("Background extraction failed for doc_id=%s", doc_id)
+            await _mark_extraction_failed(db, doc_id, ext, exc)
