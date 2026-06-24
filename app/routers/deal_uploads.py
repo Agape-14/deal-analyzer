@@ -1,4 +1,5 @@
 import asyncio
+import hashlib
 import logging
 import os
 import uuid
@@ -15,6 +16,7 @@ from app.rate_limit import limit
 from app.services.pdf_extractor import extract_pdf
 from app.services.spreadsheet_extractor import extract_spreadsheet
 from app.services import notifications as notif_svc
+from app.services.document_context import sha256_file, sha256_text
 
 router = APIRouter()
 log = logging.getLogger("kenyon.uploads")
@@ -87,12 +89,13 @@ async def upload_document(
         stage = "saving file"
         unique_name = f"{uuid.uuid4().hex}{ext}"
         file_path = os.path.join(UPLOAD_DIR, unique_name)
-        total = await _save_upload_file(file, file_path)
+        total, file_sha256 = await _save_upload_file(file, file_path)
         log.info(
-            "Saved uploaded document deal_id=%s filename=%s bytes=%s path=%s",
+            "Saved uploaded document deal_id=%s filename=%s bytes=%s sha256=%s path=%s",
             deal_id,
             original_name,
             total,
+            file_sha256[:12],
             file_path,
         )
 
@@ -103,10 +106,16 @@ async def upload_document(
                 "deal_id": deal_id,
                 "filename": original_name,
                 "file_path": file_path,
+                "file_sha256": file_sha256,
+                "content_fingerprint": "",
                 "doc_type": doc_type,
                 "extracted_text": "",
                 "page_count": 0,
-                "extraction_quality": {"status": "queued", "document_kind": _document_kind(ext)},
+                "extraction_quality": {
+                    "status": "queued",
+                    "document_kind": _document_kind(ext),
+                    "file_sha256": file_sha256,
+                },
             },
             stage,
         )
@@ -165,6 +174,8 @@ async def reprocess_document(doc_id: int, db: AsyncSession = Depends(get_db)):
     extraction, quality, extracted_text, page_count = _extract_uploaded_file(doc.file_path, ext)
     doc.extracted_text = extracted_text
     doc.page_count = page_count
+    doc.file_sha256 = quality.get("file_sha256") or doc.file_sha256 or sha256_file(doc.file_path)
+    doc.content_fingerprint = quality.get("content_fingerprint") or sha256_text(extracted_text)
     doc.extraction_quality = quality
     await _commit_with_retry(db, "saving reprocessed document")
 
@@ -220,6 +231,8 @@ def _document_payload(doc: DealDocument) -> dict:
             "quality_score": q.get("quality_score"),
             "ocr_pages": q.get("ocr_pages", 0),
             "empty_pages": q.get("empty_pages", []),
+            "file_sha256": q.get("file_sha256") or doc.file_sha256,
+            "content_fingerprint": q.get("content_fingerprint") or doc.content_fingerprint,
         }
     return {
         "id": doc.id,
@@ -242,8 +255,9 @@ def _upload_extension(file: UploadFile) -> str:
     return ext
 
 
-async def _save_upload_file(file: UploadFile, file_path: str) -> int:
+async def _save_upload_file(file: UploadFile, file_path: str) -> tuple[int, str]:
     total = 0
+    digest = hashlib.sha256()
     try:
         with open(file_path, "wb") as f:
             while True:
@@ -256,8 +270,9 @@ async def _save_upload_file(file: UploadFile, file_path: str) -> int:
                         status_code=413,
                         detail=f"File exceeds {MAX_UPLOAD_BYTES // (1024 * 1024)}MB upload limit.",
                     )
+                digest.update(chunk)
                 f.write(chunk)
-        return total
+        return total, digest.hexdigest()
     except Exception:
         _remove_partial_file(file_path)
         raise
@@ -268,14 +283,21 @@ def _extract_uploaded_file(file_path: str, ext: str) -> tuple[dict, dict, str, i
         result_x = extract_spreadsheet(file_path) if ext in SPREADSHEET_EXTS else extract_pdf(file_path)
         extracted_text = result_x.text
         page_count = result_x.page_count
+        file_hash = sha256_file(file_path)
+        content_fingerprint = sha256_text(extracted_text)
         empty_pages = [d["page"] for d in result_x.page_diagnostics if d.get("source") == "empty"]
+        cells = getattr(result_x, "cells", []) or []
+        key_rows = getattr(result_x, "key_rows", []) or []
         extraction = {
             "ocr_pages": result_x.ocr_page_count,
             "tables": len(result_x.tables),
             "images": len(result_x.images),
-            "cells": len(getattr(result_x, "cells", []) or []),
+            "cells": len(cells),
+            "key_rows": len(key_rows),
             "quality_score": result_x.quality_score,
             "empty_pages": empty_pages,
+            "file_sha256": file_hash,
+            "content_fingerprint": content_fingerprint,
         }
         quality = {
             "status": "extracted",
@@ -284,14 +306,23 @@ def _extract_uploaded_file(file_path: str, ext: str) -> tuple[dict, dict, str, i
             "empty_pages": empty_pages,
             "page_diagnostics": result_x.page_diagnostics,
             "document_kind": "spreadsheet" if ext in SPREADSHEET_EXTS else "pdf",
+            "file_sha256": file_hash,
+            "content_fingerprint": content_fingerprint,
         }
         if ext in SPREADSHEET_EXTS:
-            quality["cell_provenance"] = (getattr(result_x, "cells", []) or [])[:500]
+            quality["cell_provenance"] = cells[:500]
+            quality["key_rows"] = key_rows[:100]
         return extraction, quality, extracted_text, page_count
     except Exception as e:
+        file_hash = sha256_file(file_path)
         return (
-            {"ocr_pages": 0, "tables": 0, "images": 0, "error": str(e)},
-            {"status": "error", "error": str(e), "document_kind": "spreadsheet" if ext in SPREADSHEET_EXTS else "pdf"},
+            {"ocr_pages": 0, "tables": 0, "images": 0, "error": str(e), "file_sha256": file_hash},
+            {
+                "status": "error",
+                "error": str(e),
+                "document_kind": "spreadsheet" if ext in SPREADSHEET_EXTS else "pdf",
+                "file_sha256": file_hash,
+            },
             f"Error extracting text: {str(e)}",
             0,
         )
@@ -372,12 +403,15 @@ async def _mark_extraction_failed(db: AsyncSession, doc_id: int, ext: str, exc: 
         if not doc:
             return
         message = _public_error(exc)
+        existing_quality = dict(doc.extraction_quality or {})
         doc.extracted_text = f"Error extracting text: {message}"
         doc.page_count = doc.page_count or 0
         doc.extraction_quality = {
+            **existing_quality,
             "status": "error",
             "error": message,
             "document_kind": _document_kind(ext),
+            "file_sha256": doc.file_sha256 or existing_quality.get("file_sha256"),
         }
         await _commit_with_retry(db, "saving extraction failure")
         await _safe_emit(
@@ -400,7 +434,16 @@ async def _extract_document_background(doc_id: int, file_path: str, ext: str) ->
         if not doc:
             return
         try:
-            doc.extraction_quality = {"status": "extracting", "document_kind": _document_kind(ext)}
+            existing_quality = dict(doc.extraction_quality or {})
+            file_hash = doc.file_sha256 or existing_quality.get("file_sha256") or sha256_file(file_path)
+            if file_hash and not doc.file_sha256:
+                doc.file_sha256 = file_hash
+            doc.extraction_quality = {
+                **existing_quality,
+                "status": "extracting",
+                "document_kind": _document_kind(ext),
+                "file_sha256": file_hash,
+            }
             await _commit_with_retry(db, "marking document extracting")
 
             extraction, quality, extracted_text, page_count = _extract_uploaded_file(file_path, ext)
@@ -410,6 +453,8 @@ async def _extract_document_background(doc_id: int, file_path: str, ext: str) ->
                 return
             doc.extracted_text = extracted_text
             doc.page_count = page_count
+            doc.file_sha256 = quality.get("file_sha256") or doc.file_sha256 or file_hash
+            doc.content_fingerprint = quality.get("content_fingerprint") or sha256_text(extracted_text)
             doc.extraction_quality = quality
             await _commit_with_retry(db, "saving extracted document text")
 
