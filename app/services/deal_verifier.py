@@ -1,40 +1,51 @@
-"""
-Deal Verification Engine Ã¢â‚¬â€ Second-pass AI audit of extracted metrics.
+"""Deal verification engine.
 
-Pattern: Extract Ã¢â€ â€™ Verify Ã¢â€ â€™ Flag discrepancies
-- Sends the extracted metrics + original document back to AI
-- AI checks EVERY value against the source
-- Flags: CONFIRMED, WRONG, UNVERIFIABLE, CALCULATED (with recalc check)
-- Returns detailed audit trail
+Second-pass AI audit of extracted metrics:
+- verify extracted values against source documents;
+- flag wrong, missing, unverifiable, and calculated fields;
+- return an audit trail used by provenance, review queues, and confidence.
+
+The verifier is intentionally cost-aware but not quality-light. It uses a
+retrieval step to send each audit chunk the most relevant text and page images,
+while the extraction step still keeps full-document text coverage.
 """
 
-import os
-import io
-import json
+from __future__ import annotations
+
+import asyncio
 import base64
+import json
+import os
+from typing import Any
+
 import anthropic
 import fitz  # PyMuPDF
 
 from app.config import MODEL_VERIFY
+from app.services.document_context import (
+    documents_fingerprint,
+    metrics_sections_fingerprint,
+    select_context_for_sections,
+)
 
 
 VERIFY_PROMPT = """You are a forensic real estate investment auditor. Your job is to VERIFY extracted data against source documents.
 
 You will receive:
-1. A set of EXTRACTED METRICS (JSON) that an AI previously extracted from deal documents
-2. The ORIGINAL DOCUMENT PAGES (as images) to check against
-3. The full EXTRACTED TEXT from the source documents
+1. EXTRACTED METRICS JSON for only the sections being audited in this call
+2. RELEVANT EXTRACTED TEXT selected from the source documents
+3. SELECTED ORIGINAL DOCUMENT PAGE IMAGES when available
 
-Your task: Go through EVERY non-null extracted value and verify it against the source material. Use BOTH the page images AND the extracted text. If a value appears in the extracted text, that counts as confirmation even if the specific page image is not shown.
+Your task: verify every non-null extracted value in the provided sections. Use the text first and the page images as visual support for tables, screenshots, and formatted pages. If the selected evidence does not support a value, mark it wrong or unverifiable; do not guess.
 
-For EACH field, determine:
-- "confirmed" Ã¢â‚¬â€ The value matches what's in the source (from images OR text). Use this liberally: if the extracted text contains the same number, it's confirmed.
-- "wrong" Ã¢â‚¬â€ The extracted value does NOT match what's in the document. Provide the CORRECT value.
-- "unverifiable" Ã¢â‚¬â€ You cannot find this data point in ANY of the provided material (images AND text). Only use this as a last resort Ã¢â‚¬â€ search the extracted text thoroughly before marking unverifiable.
-- "calculated" Ã¢â‚¬â€ This is a derived/calculated value (e.g. price_per_unit = cost / units). Verify the math is correct and mark as "calculated" if math checks out.
-- "missing" Ã¢â‚¬â€ The value is null but you CAN see this data in the documents. Provide the correct value.
+For each field, determine:
+- "confirmed": the value matches source evidence. Include document/page/quote or formula.
+- "wrong": the extracted value does not match the source. Provide correct_value.
+- "unverifiable": you cannot find source support in the supplied evidence.
+- "calculated": this is derived and the math checks out.
+- "missing": the value is null but the evidence clearly contains it. Provide found_value.
 
-Return a JSON object with this structure:
+Return ONLY a valid JSON object with this structure:
 {
   "audit_results": [
     {
@@ -45,15 +56,6 @@ Return a JSON object with this structure:
       "correct_value": 53287500,
       "source": "Calculated from equity ($9,687,500) + debt ($43,600,000)",
       "note": "Math checks out: 9687500 + 43600000 = 53287500"
-    },
-    {
-      "section": "project_details",
-      "field": "unit_count",
-      "extracted_value": 119,
-      "status": "wrong",
-      "correct_value": 141,
-      "source": "Page 1 shows 141 Units Total (119 market rate + 22 affordable)",
-      "note": "Extracted only market rate units, should include all 141"
     }
   ],
   "missing_data": [
@@ -62,7 +64,7 @@ Return a JSON object with this structure:
       "field": "construction_budget",
       "found_value": 36000000,
       "source": "Page 3 shows Total Construction Budget: $36,000,000",
-      "note": "This was in the document but the extractor missed it"
+      "note": "This was present but not extracted"
     }
   ],
   "calculation_checks": [
@@ -87,27 +89,37 @@ Return a JSON object with this structure:
   }
 }
 
-IMPORTANT RULES:
-1. Return ONLY valid JSON
-2. Check EVERY non-null field Ã¢â‚¬â€ do not skip any
-3. For calculated fields, show your math step by step
-4. If you find data in the images or text that was NOT extracted, include it in missing_data
-5. Be especially careful with: unit counts (market rate vs total), dollar amounts, percentages, fee structures
-6. Double-check all division calculations (price/unit, price/sqft, etc.)
-7. Flag ANY inconsistency, even small ones
-8. confidence_score: 0-100 based on how much you could verify
-9. PREFER "confirmed" over "unverifiable" Ã¢â‚¬â€ if the extracted text contains a matching value, confirm it. Only mark "unverifiable" when neither images NOR text contain the data point.
-10. For risk scores (1-10 ratings) that the AI assigned during extraction, mark as "calculated" not "unverifiable" Ã¢â‚¬â€ these are AI assessments, not document data points.
-
-11. For every confirmed, wrong, calculated, or missing value, include the best available citation in `source`: page number when visible, document name when known, and a short quote or formula. Do not use vague sources like "document states" without the quote or math.
-12. A value from extracted text is source-backed only when you can quote the nearby text. If you cannot quote or calculate support for a value, mark it unverifiable or lower the confidence score.
+Rules:
+1. Return only valid JSON, no markdown.
+2. Check every non-null field in the supplied sections.
+3. For calculated fields, show the formula and math.
+4. Use "confirmed" only when there is clear source support.
+5. For every confirmed, wrong, calculated, or missing value, include the best available citation in source: document name/page and a short quote or formula.
+6. A value from text is source-backed only when you can quote nearby text.
+7. For risk scores assigned by analysis rather than stated by the document, mark as "calculated" with a note explaining the basis.
+8. If evidence conflicts, mark the field wrong or unverifiable and explain the conflict.
+9. Do not silently correct investor-level return metrics from a sponsor/GP column. Investor/LP returns should come from Investor, LP, Class A/B, or new-money investor columns.
 
 HERE ARE THE EXTRACTED METRICS TO VERIFY:
 """
 
 
-def _coerce_json_object(parsed, raw: str, context: str) -> dict:
-    """Ensure a parsed Claude response or stored metrics value is a JSON object."""
+VERIFY_SECTION_GROUPS: list[list[str]] = [
+    ["deal_structure"],
+    ["target_returns"],
+    ["project_details", "market_location"],
+    ["construction_costs"],
+    ["financial_projections", "underwriting_checks"],
+    ["sponsor_evaluation", "risk_assessment"],
+]
+VERIFY_MAX_IMAGE_PAGES_PER_CALL = int(os.getenv("VERIFY_MAX_IMAGE_PAGES_PER_CALL", "8"))
+VERIFY_MAX_CONTEXT_CHARS = int(os.getenv("VERIFY_MAX_CONTEXT_CHARS", "80000"))
+VERIFY_MAX_OUTPUT_TOKENS = int(os.getenv("VERIFY_MAX_OUTPUT_TOKENS", "16000"))
+VERIFY_CONCURRENCY = max(1, int(os.getenv("VERIFY_CONCURRENCY", "2")))
+VERIFICATION_CACHE_VERSION = 1
+
+
+def _coerce_json_object(parsed: Any, raw: str, context: str) -> dict:
     value = parsed
     for _ in range(2):
         if not isinstance(value, str):
@@ -133,7 +145,7 @@ def _coerce_json_object(parsed, raw: str, context: str) -> dict:
     )
 
 
-def _json_preview(value) -> str:
+def _json_preview(value: Any) -> str:
     if value is None:
         return ""
     try:
@@ -143,27 +155,19 @@ def _json_preview(value) -> str:
 
 
 def _parse_json_defensively(text: str) -> dict:
-    """Parse Claude's JSON output, recovering from common issues.
-
-    Claude sometimes wraps JSON in markdown fences, appends a stray
-    trailing comma, or prepends a one-line preamble. Walk through
-    a ladder of recovery attempts before giving up.
-    """
+    """Parse Claude JSON output, recovering from common formatting issues."""
     raw = text.strip()
 
-    # Strip markdown fences like ```json ... ```
     if raw.startswith("```"):
         lines = raw.split("\n")
-        lines = [l for l in lines if not l.startswith("```")]
+        lines = [line for line in lines if not line.startswith("```")]
         raw = "\n".join(lines).strip()
 
-    # Happy path
     try:
         return _coerce_json_object(json.loads(raw), raw, "Claude response")
     except json.JSONDecodeError:
         pass
 
-    # Fall back to the largest balanced {...} span we can find.
     start = raw.find("{")
     end = raw.rfind("}") + 1
     if start >= 0 and end > start:
@@ -171,76 +175,55 @@ def _parse_json_defensively(text: str) -> dict:
         try:
             return _coerce_json_object(json.loads(candidate), raw, "Claude response")
         except json.JSONDecodeError:
-            # Last-resort: drop trailing commas before a closing
-            # bracket/brace Ã¢â‚¬â€ Claude occasionally emits them.
             import re
+
             scrubbed = re.sub(r",(\s*[}\]])", r"\1", candidate)
             try:
                 return _coerce_json_object(json.loads(scrubbed), raw, "Claude response")
-            except json.JSONDecodeError as e:
+            except json.JSONDecodeError as exc:
                 raise ValueError(
-                    f"Could not parse verification response as JSON "
-                    f"(error: {e}; tried raw + span + trailing-comma "
-                    f"scrub; first 200 chars: {raw[:200]!r})"
-                )
+                    "Could not parse verification response as JSON "
+                    f"(error: {exc}; first 200 chars: {raw[:200]!r})"
+                ) from exc
 
-    raise ValueError(
-        f"No JSON object found in verification response "
-        f"(first 200 chars: {raw[:200]!r})"
-    )
+    raise ValueError(f"No JSON object found in verification response (first 200 chars: {raw[:200]!r})")
 
 
-# Groups of metric sections audited together Ã¢â‚¬â€ kept small so each
-# verify call stays well under Anthropic's input-tokens-per-minute
-# ceiling AND under the output-tokens cap we set per call. Early
-# attempts paired deal_structure + target_returns but that combo
-# hit ~45 fields Ãƒâ€” ~400 output-tokens = 18K which tripped the
-# per-call max_tokens ceiling. One section per group is the
-# conservative default; we only pair small sections.
-VERIFY_SECTION_GROUPS: list[list[str]] = [
-    ["deal_structure"],
-    ["target_returns"],
-    ["project_details", "market_location"],
-    ["construction_costs"],
-    ["financial_projections", "underwriting_checks"],
-    ["sponsor_evaluation", "risk_assessment"],
-]
-# Max PDF pages per verify call. Each page at 150 DPI JPEG is ~50-100KB
-# base64. 15 pages Ãƒâ€” 100KB = 1.5MB of image data per chunk, well under
-# Anthropic's request size limit. More pages = more fields confirmed
-# instead of "unverifiable".
-VERIFY_MAX_PAGES = 15
-# Output ceiling per chunk. Each audit row is ~300-500 tokens
-# (status + correct_value + source citation + note + confidence);
-# 16K gives us ~35-50 fields of headroom which comfortably covers
-# even the biggest single section (deal_structure ~25 fields).
-VERIFY_MAX_OUTPUT_TOKENS = 16000
-
-
-def _render_pdf_pages_to_b64(doc_paths: list[str], max_pages: int) -> list[tuple[str, int, int, str]]:
-    """Render the first `max_pages` pages of each PDF to base64 PNGs.
-
-    Returns a list of (filename, page_number, total_pages, b64_data) tuples.
-    Shared by all per-group verify calls so we only pay the PDF render
-    cost once per verify run.
-    """
+def _render_pdf_pages_to_b64(
+    pdf_docs: list[tuple[str, str]],
+    selected_pages_by_name: dict[str, list[int]],
+    max_pages: int,
+) -> list[tuple[str, int, int, str]]:
+    """Render selected PDF pages to base64 JPEGs."""
     rendered: list[tuple[str, int, int, str]] = []
-    for path in doc_paths:
-        if not os.path.exists(path):
+    remaining = max_pages
+    for original_name, path in pdf_docs:
+        if remaining <= 0:
+            break
+        if not path or not os.path.exists(path):
             continue
         pdf_doc = fitz.open(path)
         try:
-            fname = os.path.basename(path)
-            n = min(pdf_doc.page_count, max_pages)
-            for page_num in range(n):
-                page = pdf_doc[page_num]
+            selected = selected_pages_by_name.get(original_name) or []
+            if not selected:
+                selected = list(range(1, min(pdf_doc.page_count, remaining) + 1))
+            selected = [p for p in selected if 1 <= p <= pdf_doc.page_count]
+            for page_number in selected[:remaining]:
+                page = pdf_doc[page_number - 1]
                 mat = fitz.Matrix(150 / 72, 150 / 72)
                 pix = page.get_pixmap(matrix=mat)
-                img_bytes = pix.tobytes("jpeg")  # JPEG ~5x smaller than PNG
+                img_bytes = pix.tobytes("jpeg")
                 rendered.append(
-                    (fname, page_num + 1, pdf_doc.page_count,
-                     base64.b64encode(img_bytes).decode("utf-8"))
+                    (
+                        original_name,
+                        page_number,
+                        pdf_doc.page_count,
+                        base64.b64encode(img_bytes).decode("utf-8"),
+                    )
                 )
+                remaining -= 1
+                if remaining <= 0:
+                    break
         finally:
             pdf_doc.close()
     return rendered
@@ -249,66 +232,77 @@ def _render_pdf_pages_to_b64(doc_paths: list[str], max_pages: int) -> list[tuple
 async def _verify_sections(
     sections: list[str],
     subset_metrics: dict,
-    rendered_pages: list[tuple[str, int, int, str]],
+    pdf_docs: list[tuple[str, str]],
     doc_texts: list[dict],
     api_key: str,
     deal_id: int | None,
 ) -> dict:
-    """Verify one group of metric sections against the rendered PDF pages.
+    """Verify one metric section group against focused evidence."""
+    focused_text, selected_pages = select_context_for_sections(
+        doc_texts,
+        sections,
+        subset_metrics,
+        max_chars=VERIFY_MAX_CONTEXT_CHARS,
+        max_pages_per_doc=VERIFY_MAX_IMAGE_PAGES_PER_CALL,
+    )
+    rendered_pages = _render_pdf_pages_to_b64(
+        pdf_docs,
+        selected_pages,
+        VERIFY_MAX_IMAGE_PAGES_PER_CALL,
+    ) if pdf_docs else []
 
-    Returns the parsed verification dict (audit_results, missing_data,
-    summary). Runs inside a dedicated operation_log.record() so each
-    chunk is visible in the diagnostics panel with its own timing.
-    """
-    content_blocks: list[dict] = []
-    content_blocks.append({
-        "type": "text",
-        "text": (
-            VERIFY_PROMPT
-            + "\n\nFOCUS: only audit fields in these sections: "
-            + ", ".join(sections)
-            + ".\n\n"
-            + json.dumps(subset_metrics, indent=2)
-        ),
-    })
+    content_blocks: list[dict] = [
+        {
+            "type": "text",
+            "text": (
+                VERIFY_PROMPT
+                + "\n\nFOCUS: only audit fields in these sections: "
+                + ", ".join(sections)
+                + ".\n\n"
+                + json.dumps(subset_metrics, indent=2)
+            ),
+        }
+    ]
 
-    # Include full extracted text from all docs so the verifier can
-    # cross-reference values even from pages not included as images.
-    # This is the #1 fix for "unverifiable" counts Ã¢â‚¬â€ the text covers
-    # 100% of pages while images only cover VERIFY_MAX_PAGES.
-    if doc_texts:
-        # Send full document text Ã¢â‚¬â€ the verifier needs the same view
-        # of the document as the extractor to confirm values. Truncating
-        # caused the verifier to mark fields "unverifiable" simply
-        # because the relevant text was cut off.
-        text_block = "\n\nFULL EXTRACTED TEXT FROM DOCUMENTS (search this thoroughly to verify values Ã¢â‚¬â€ data may appear anywhere in the document):\n"
-        for dt in doc_texts:
-            text_block += f"\n===== {dt.get('filename', 'document')} =====\n"
-            text_block += (dt.get("text", "") or "")
-        content_blocks.append({"type": "text", "text": text_block})
+    if focused_text:
+        content_blocks.append(
+            {
+                "type": "text",
+                "text": "\n\nRELEVANT EXTRACTED TEXT FROM SOURCE DOCUMENTS:\n" + focused_text,
+            }
+        )
 
     if rendered_pages:
-        content_blocks.append({
-            "type": "text",
-            "text": "\n\nBELOW ARE THE ORIGINAL DOCUMENT PAGES. Check every extracted value against these:\n",
-        })
-        for fname, page_num, total, b64 in rendered_pages:
-            content_blocks.append({
+        content_blocks.append(
+            {
                 "type": "text",
-                "text": f"Document '{fname}' Ã¢â‚¬â€ Page {page_num} of {total}:",
-            })
-            content_blocks.append({
-                "type": "image",
-                "source": {"type": "base64", "media_type": "image/jpeg", "data": b64},
-            })
+                "text": "\n\nSELECTED ORIGINAL DOCUMENT PAGE IMAGES FOR THIS AUDIT CHUNK:\n",
+            }
+        )
+        for fname, page_num, total, b64 in rendered_pages:
+            content_blocks.append(
+                {"type": "text", "text": f"Document '{fname}' - Page {page_num} of {total}:"}
+            )
+            content_blocks.append(
+                {
+                    "type": "image",
+                    "source": {"type": "base64", "media_type": "image/jpeg", "data": b64},
+                }
+            )
 
     from app.services.operation_log import record
+
     async with record(
         "verify",
         deal_id=deal_id,
         model=MODEL_VERIFY,
         note=f"sections: {','.join(sections)}",
-        meta={"sections": sections, "pages": len(rendered_pages)},
+        meta={
+            "sections": sections,
+            "pages": len(rendered_pages),
+            "focused_text_chars": len(focused_text or ""),
+            "selected_pages": selected_pages,
+        },
     ) as op:
         client = anthropic.AsyncAnthropic(api_key=api_key)
         response_text = ""
@@ -346,25 +340,7 @@ async def _verify_sections(
 
 
 async def verify_deal_metrics(deal, db) -> dict:
-    """Run second-pass verification on extracted metrics.
-
-    Verification is split into multiple smaller Anthropic calls Ã¢â‚¬â€ one
-    per group of tightly-related metric sections Ã¢â‚¬â€ so we stay under
-    Anthropic's per-minute input-tokens rate limit on non-enterprise
-    tiers. A single monolithic call with all ~100 fields and 10 PDF
-    pages was hitting 429s. Per-chunk calls are short (8-15s each)
-    and their results are merged into one verification dict compatible
-    with the existing stamp_verification / apply_corrections pipeline.
-
-    Args:
-        deal: Deal ORM object with metrics and documents
-        db: Database session
-
-    Returns:
-        Verification results dict with audit trail (audit_results,
-        missing_data, summary) Ã¢â‚¬â€ same shape as before, regardless of
-        how many underlying calls ran.
-    """
+    """Run second-pass verification on extracted metrics."""
     api_key = os.environ.get("ANTHROPIC_API_KEY")
     if not api_key:
         raise ValueError("ANTHROPIC_API_KEY not set")
@@ -374,79 +350,78 @@ async def verify_deal_metrics(deal, db) -> dict:
     if not metrics:
         return {"error": "No metrics to verify"}
 
-    doc_paths = [
-        doc.file_path
+    pdf_docs = [
+        (doc.filename, doc.file_path)
         for doc in deal.documents
-        if doc.file_path and doc.file_path.endswith(".pdf")
+        if doc.file_path and str(doc.file_path).lower().endswith(".pdf")
     ]
-    # Render pages once up-front so each chunk reuses the same b64 data.
-    rendered = _render_pdf_pages_to_b64(doc_paths, VERIFY_MAX_PAGES) if doc_paths else []
-
-    # Collect full extracted text from all docs Ã¢â‚¬â€ sent alongside
-    # images so the verifier can confirm values from pages that
-    # aren't included as images. Dramatically reduces "unverifiable."
     doc_texts = []
-    for d in deal.documents:
-        text = (d.extracted_text or "").strip()
-        quality = d.extraction_quality or {}
-        if (
-            text
-            and not text.startswith("Error extracting text:")
-            and not (isinstance(quality, dict) and quality.get("error"))
-        ):
-            doc_texts.append({"filename": d.filename, "text": text})
+    for doc in deal.documents:
+        text = (doc.extracted_text or "").strip()
+        quality = doc.extraction_quality or {}
+        if text and not text.startswith("Error extracting text:") and not (isinstance(quality, dict) and quality.get("error")):
+            doc_texts.append({"filename": doc.filename, "text": text})
 
-    # Decide which section groups actually have something to audit.
     groups_to_run: list[list[str]] = []
     for group in VERIFY_SECTION_GROUPS:
-        if any(metrics.get(s) for s in group):
+        if any(metrics.get(section) for section in group):
             groups_to_run.append(group)
-    # Any sections the metrics have that we didn't plan for Ã¢â‚¬â€ fold
-    # them into their own group so nothing is silently skipped.
-    planned = {s for g in VERIFY_SECTION_GROUPS for s in g}
+
+    planned = {section for group in VERIFY_SECTION_GROUPS for section in group}
     extra_sections = [
-        s for s in metrics.keys()
-        if s not in planned
-        and not s.startswith("_")
-        and s not in ("validation_flags",)
-        and isinstance(metrics.get(s), dict)
-        and metrics.get(s)
+        section
+        for section in metrics.keys()
+        if section not in planned
+        and not str(section).startswith("_")
+        and section not in ("validation_flags",)
+        and isinstance(metrics.get(section), dict)
+        and metrics.get(section)
     ]
     if extra_sections:
         groups_to_run.append(extra_sections)
 
-    # Run chunks in PARALLEL Ã¢â‚¬â€ each chunk is independent (same PDF
-    # pages, different metric sections). Sequential took 5+ min
-    # (sum of all chunk durations); parallel takes ~90-100s (limited
-    # by the slowest chunk). Anthropic's rate limits on the Build
-    # tier handle 5 concurrent requests at ~10K input tokens each.
-    import asyncio
-    combined: dict = {"audit_results": [], "missing_data": [], "summary": {}}
+    docs_fp = documents_fingerprint(deal.documents or [])
+    metrics_fp = metrics_sections_fingerprint(metrics, [s for group in groups_to_run for s in group])
+    cache = metrics.get("_verification_cache")
+    if isinstance(cache, dict):
+        cached_verification = cache.get("verification")
+        if (
+            cache.get("cache_version") == VERIFICATION_CACHE_VERSION
+            and cache.get("documents_fingerprint") == docs_fp
+            and cache.get("metrics_fingerprint") == metrics_fp
+            and isinstance(cached_verification, dict)
+        ):
+            return cached_verification
+
+    combined: dict = {"audit_results": [], "missing_data": [], "calculation_checks": [], "summary": {}}
     confidences: list[float] = []
     errors: list[str] = []
+    semaphore = asyncio.Semaphore(VERIFY_CONCURRENCY)
 
     async def _run_one(group: list[str]) -> tuple[list[str], dict | Exception]:
-        subset = {s: metrics.get(s) for s in group if metrics.get(s) is not None}
-        try:
-            res = await _verify_sections(group, subset, rendered, doc_texts, api_key, getattr(deal, "id", None))
-            return group, res
-        except Exception as e:
-            return group, e
-
-    results = await asyncio.gather(*[_run_one(g) for g in groups_to_run])
-
-    for group, res in results:
-        if isinstance(res, Exception):
-            errors.append(f"{','.join(group)}: {res}")
-            continue
-        if isinstance(res, dict):
-            combined["audit_results"].extend(res.get("audit_results") or [])
-            combined["missing_data"].extend(res.get("missing_data") or [])
-            s = (res.get("summary") or {})
-            c = s.get("confidence_score")
+        subset = {section: metrics.get(section) for section in group if metrics.get(section) is not None}
+        async with semaphore:
             try:
-                if c is not None:
-                    confidences.append(float(c))
+                result = await _verify_sections(group, subset, pdf_docs, doc_texts, api_key, getattr(deal, "id", None))
+                return group, result
+            except Exception as exc:
+                return group, exc
+
+    results = await asyncio.gather(*[_run_one(group) for group in groups_to_run])
+
+    for group, result in results:
+        if isinstance(result, Exception):
+            errors.append(f"{','.join(group)}: {result}")
+            continue
+        if isinstance(result, dict):
+            combined["audit_results"].extend(result.get("audit_results") or [])
+            combined["missing_data"].extend(result.get("missing_data") or [])
+            combined["calculation_checks"].extend(result.get("calculation_checks") or [])
+            summary = result.get("summary") or {}
+            confidence = summary.get("confidence_score")
+            try:
+                if confidence is not None:
+                    confidences.append(float(confidence))
             except (TypeError, ValueError):
                 pass
 
@@ -455,31 +430,29 @@ async def verify_deal_metrics(deal, db) -> dict:
     if errors:
         combined["summary"]["partial_errors"] = errors
 
+    metrics["_verification_cache"] = {
+        "cache_version": VERIFICATION_CACHE_VERSION,
+        "documents_fingerprint": docs_fp,
+        "metrics_fingerprint": metrics_fp,
+        "verification": combined,
+        "updated_at": _now_iso(),
+    }
+    deal.metrics = metrics
     return combined
 
 
 def apply_corrections(metrics: dict, verification: dict) -> tuple[dict, list[str]]:
-    """Apply verified corrections to metrics.
-
-    Returns:
-        (corrected_metrics, list of changes made)
-
-    Also stashes the previous extracted value on the provenance tree
-    under `_provenance[<path>].previous_value` so the UI can show
-    "corrected from X Ã¢â€ â€™ Y" and offer a revert.
-    """
+    """Apply verified corrections to metrics and preserve provenance."""
     metrics = _coerce_json_object(metrics, _json_preview(metrics), "Metrics corrections input")
     verification = _coerce_json_object(verification, _json_preview(verification), "Verification corrections input")
     changes = []
     prov = dict(metrics.get("_provenance") or {})
 
-    # Apply corrections for wrong AND calculated-wrong fields
     for result in verification.get("audit_results", []):
         status = result.get("status", "")
         correct_val = result.get("correct_value")
         extracted_val = result.get("extracted_value")
-        # Correct if wrong, or if calculated and values differ
-        needs_fix = (status == "wrong")
+        needs_fix = status == "wrong"
         if status == "calculated" and correct_val is not None and extracted_val is not None:
             try:
                 needs_fix = abs(float(correct_val) - float(extracted_val)) > 0.01
@@ -488,28 +461,17 @@ def apply_corrections(metrics: dict, verification: dict) -> tuple[dict, list[str
         if needs_fix and correct_val is not None:
             section = result.get("section")
             field = result.get("field")
-            old_val = extracted_val
-            new_val = correct_val
-
             if section in metrics and isinstance(metrics[section], dict):
-                # Capture the pre-correction value from the actual
-                # metrics dict (more reliable than the verification
-                # result's extracted_value, which the model sometimes
-                # reformats before echoing back).
-                pre = metrics[section].get(field, old_val)
-                metrics[section][field] = new_val
+                pre = metrics[section].get(field, extracted_val)
+                metrics[section][field] = correct_val
                 changes.append(
-                    f"CORRECTED {section}.{field}: {pre} Ã¢â€ â€™ {new_val} "
+                    f"CORRECTED {section}.{field}: {pre} -> {correct_val} "
                     f"(Source: {result.get('source', 'verification')})"
                 )
-                # Stash previous value + correction metadata on
-                # provenance so the UI's integrity badge can render
-                # an actionable "corrected from X" card with a
-                # revert button.
                 path = f"{section}.{field}"
                 p = dict(prov.get(path) or {})
                 p["previous_value"] = pre
-                p["corrected_value"] = new_val
+                p["corrected_value"] = correct_val
                 if result.get("source"):
                     p["correction_source"] = str(result.get("source"))
                 if result.get("note"):
@@ -518,12 +480,10 @@ def apply_corrections(metrics: dict, verification: dict) -> tuple[dict, list[str
 
     metrics["_provenance"] = prov
 
-    # Apply missing data that was found
     for found in verification.get("missing_data", []):
         section = found.get("section")
         field = found.get("field")
         value = found.get("found_value")
-        
         if section and field and value is not None:
             if section not in metrics:
                 metrics[section] = {}
@@ -535,10 +495,16 @@ def apply_corrections(metrics: dict, verification: dict) -> tuple[dict, list[str
                         f"ADDED {section}.{field}: {value} "
                         f"(Source: {found.get('source', 'found in document')})"
                     )
-    
-    # Re-run post-processing to recalculate derived fields from corrected base values
+
     if changes:
         from app.services.deal_extractor import _post_process_metrics
+
         _post_process_metrics(metrics)
-    
+
     return metrics, changes
+
+
+def _now_iso() -> str:
+    from datetime import datetime, timezone
+
+    return datetime.now(timezone.utc).isoformat()
