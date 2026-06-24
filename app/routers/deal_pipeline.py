@@ -28,10 +28,13 @@ from app.services.deal_extractor import extract_metrics_from_docs
 from app.services.deal_scorer import score_deal
 from app.services.deal_validator import validate_deal_metrics
 from app.services.deal_verifier import apply_corrections, verify_deal_metrics
+from app.services.document_context import documents_fingerprint
 from app.services.math_checker import run_math_checks
 
 router = APIRouter()
 log = logging.getLogger("kenyon.deal_pipeline")
+
+EXTRACTION_CACHE_VERSION = 1
 
 
 def _deep_conflict_scan_enabled() -> bool:
@@ -339,10 +342,27 @@ async def _run_extract_background(deal_id: int):
                 return
 
             existing_metrics = _ensure_metrics_dict(deal.metrics, "Stored deal metrics")
+            docs_fp = documents_fingerprint(deal.documents or [])
+            extraction_cache = existing_metrics.get("_document_review_cache")
+            if not isinstance(extraction_cache, dict):
+                extraction_cache = {}
             usable_docs = [d for d in deal.documents if (d.extracted_text or "")]
             usable_pdfs = _pdf_docs(deal)
             per_doc_results: list[tuple[int, str, dict]] = []
-            if len(deal.documents) > 1 and _deep_conflict_scan_enabled():
+
+            incoming_metrics = None
+            cache_hit = False
+            cached_metrics = extraction_cache.get("extraction_metrics")
+            if (
+                extraction_cache.get("cache_version") == EXTRACTION_CACHE_VERSION
+                and extraction_cache.get("documents_fingerprint") == docs_fp
+                and isinstance(cached_metrics, dict)
+            ):
+                incoming_metrics = _ensure_metrics_dict(cached_metrics, "Cached document extraction")
+                cache_hit = True
+                log.info("Using cached extraction for deal %s docs_fp=%s", deal_id, docs_fp[:12])
+
+            if not cache_hit and len(deal.documents) > 1 and _deep_conflict_scan_enabled():
                 for doc in deal.documents:
                     text = doc.extracted_text or ""
                     path = doc.file_path if doc in usable_pdfs else None
@@ -364,11 +384,12 @@ async def _run_extract_background(deal_id: int):
                 {"filename": d.filename, "doc_type": d.doc_type, "text": d.extracted_text or ""}
                 for d in usable_docs
             ]
-            incoming_metrics = await extract_metrics_from_docs(
-                doc_texts,
-                doc_paths=[d.file_path for d in usable_pdfs],
-            )
-            incoming_metrics = _ensure_metrics_dict(incoming_metrics, "Document extraction")
+            if incoming_metrics is None:
+                incoming_metrics = await extract_metrics_from_docs(
+                    doc_texts,
+                    doc_paths=[d.file_path for d in usable_pdfs],
+                )
+                incoming_metrics = _ensure_metrics_dict(incoming_metrics, "Document extraction")
 
             primary_doc = usable_docs[0] if len(usable_docs) == 1 else None
             merged, changes = smart_merge(
@@ -392,6 +413,14 @@ async def _run_extract_background(deal_id: int):
                     prov[path] = existing_prov
                 merged["_provenance"] = prov
 
+            merged["_document_review_cache"] = {
+                "cache_version": EXTRACTION_CACHE_VERSION,
+                "documents_fingerprint": docs_fp,
+                "extraction_metrics": incoming_metrics,
+                "document_count": len(deal.documents),
+                "updated_at": now_iso(),
+            }
+
             history = list(merged.get("_extraction_history") or [])
             history.append(
                 {
@@ -399,6 +428,7 @@ async def _run_extract_background(deal_id: int):
                     "changes": changes[:50],
                     "doc_count": len(deal.documents),
                     "conflicts": list(conflicts.keys()),
+                    "cache_hit": cache_hit,
                 }
             )
             merged["_extraction_history"] = history[-20:]
@@ -431,7 +461,9 @@ async def _run_extract_background(deal_id: int):
 
             n_unresolved_conflicts = len(conflicts) - n_auto_resolved
             reds = [f for f in validation_flags if f.get("severity") == "red"]
-            body_parts = [f"{len(changes)} field{'s' if len(changes) != 1 else ''} updated"]
+            body_parts = [
+                "reused prior extraction" if cache_hit else f"{len(changes)} field{'s' if len(changes) != 1 else ''} updated"
+            ]
             if n_auto_resolved:
                 body_parts.append(f"{n_auto_resolved} conflict{'s' if n_auto_resolved != 1 else ''} auto-resolved")
             if n_unresolved_conflicts:
@@ -444,7 +476,7 @@ async def _run_extract_background(deal_id: int):
                 title=f"Metrics extracted for {deal.project_name}",
                 body=" - ".join(body_parts),
                 href=f"/deals/{deal.id}?tab=overview",
-                payload={"deal_id": deal.id, "changes": len(changes), "red_flags": len(reds)},
+                payload={"deal_id": deal.id, "changes": len(changes), "red_flags": len(reds), "cache_hit": cache_hit},
             )
             await db.commit()
         except Exception as e:
