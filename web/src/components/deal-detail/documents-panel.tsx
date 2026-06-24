@@ -413,7 +413,7 @@ function uploadWithProgress(
     form.append("file", file);
     form.append("doc_type", docType);
 
-    xhr.open("POST", `/api/deals/${dealId}/documents/upload`);
+    xhr.open("POST", `/document-upload/deals/${dealId}/documents`);
     xhr.withCredentials = true;
     xhr.timeout = 120000;
     xhr.setRequestHeader("Accept", "application/json");
