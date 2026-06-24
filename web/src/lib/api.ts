@@ -41,14 +41,6 @@ interface ApiError {
   detail: string;
 }
 
-type BatchFieldEditBody = {
-  edits?: Array<{
-    path: string;
-    value?: unknown;
-    lock?: boolean;
-  }>;
-};
-
 type ProvenanceLike = {
   status?: unknown;
   conflict?: unknown;
@@ -108,20 +100,6 @@ async function request<T>(
   return normalizeApiPayload(await res.json()) as T;
 }
 
-async function postJson<T>(path: string, body?: unknown): Promise<T> {
-  if (path.endsWith("/fields/batch-edit")) {
-    const batch = body as BatchFieldEditBody | undefined;
-    const edits = Array.isArray(batch?.edits) ? batch.edits : [];
-    const basePath = path.replace(/\/fields\/batch-edit$/, "/fields/edit");
-    const results = [];
-    for (const edit of edits) {
-      results.push(await request(basePath, { method: "POST", body: JSON.stringify(edit) }));
-    }
-    return { message: "Fields updated", results } as T;
-  }
-  return request<T>(path, { method: "POST", body: body ? JSON.stringify(body) : undefined });
-}
-
 function normalizeApiPayload(payload: unknown): unknown {
   if (Array.isArray(payload)) return payload.map(normalizeDealSummary);
   if (!isRecord(payload)) return payload;
@@ -174,7 +152,8 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 export const api = {
   get: <T>(path: string, opts?: { revalidate?: number | false }) =>
     request<T>(path, { method: "GET" }, opts?.revalidate ?? 0),
-  post: postJson,
+  post: <T>(path: string, body?: unknown) =>
+    request<T>(path, { method: "POST", body: body ? JSON.stringify(body) : undefined }),
   put: <T>(path: string, body?: unknown) =>
     request<T>(path, { method: "PUT", body: body ? JSON.stringify(body) : undefined }),
   delete: <T>(path: string) => request<T>(path, { method: "DELETE" }),
