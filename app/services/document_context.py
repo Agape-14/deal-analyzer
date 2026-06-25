@@ -64,6 +64,20 @@ _SECTION_TERMS = {
 
 _PAGE_RE = re.compile(r"---\s*Page\s+(\d+)\s*---", re.IGNORECASE)
 
+VOLATILE_META_KEYS = {
+    "_pipeline",
+    "_document_review_cache",
+    "_verification_cache",
+    "_extraction_history",
+    "_field_history",
+    "_math_checks",
+    "_canonical_returns",
+    "_data_quality",
+    "_shape_errors",
+    "_review_resolutions",
+    "_manual_edit_warning",
+}
+
 
 def sha256_file(path: str, *, chunk_size: int = 1024 * 1024) -> str:
     """Return the SHA-256 hash of a file, or an empty string if unavailable."""
@@ -90,10 +104,7 @@ def stable_fingerprint(value: Any) -> str:
             return {
                 str(k): scrub(val)
                 for k, val in sorted(v.items(), key=lambda item: str(item[0]))
-                if not str(k).startswith("_pipeline")
-                and not str(k).startswith("_document_review_cache")
-                and not str(k).startswith("_verification_cache")
-                and not str(k).startswith("_extraction_history")
+                if str(k) not in VOLATILE_META_KEYS
             }
         if isinstance(v, list):
             return [scrub(item) for item in v]
@@ -188,6 +199,7 @@ def select_context_for_sections(
     *,
     max_chars: int = 70000,
     max_pages_per_doc: int = 8,
+    full_text_threshold_chars: int = 50000,
 ) -> tuple[str, dict[str, list[int]]]:
     """Return focused text plus selected page numbers for verification.
 
@@ -199,6 +211,7 @@ def select_context_for_sections(
     selected_pages: dict[str, list[int]] = {}
     blocks: list[str] = []
     remaining = max_chars
+    total_text_chars = sum(len(doc.get("text") or "") for doc in doc_texts or [])
 
     for doc in doc_texts or []:
         filename = doc.get("filename") or "document"
@@ -212,17 +225,24 @@ def select_context_for_sections(
                 score += 3
             scored.append((score, page_num, page_text))
         scored.sort(key=lambda item: (-item[0], item[1] or 999999))
-        top = scored[:max_pages_per_doc]
+
+        # When the extracted package is small enough, send the full text for
+        # accuracy and still render only the best pages as images. This avoids
+        # false "unverifiable" results caused by an over-tight retrieval cut.
+        use_full_text = total_text_chars <= min(max_chars, full_text_threshold_chars)
+        top = scored if use_full_text else scored[:max_pages_per_doc]
+        image_top = scored[:max_pages_per_doc]
         top.sort(key=lambda item: item[1] or 999999)
 
-        nums = [page_num for _, page_num, _ in top if page_num is not None]
+        nums = [page_num for _, page_num, _ in image_top if page_num is not None]
         if nums:
             selected_pages[filename] = sorted(set(nums))
 
-        doc_block_lines = [f"===== RELEVANT TEXT: {filename} ====="]
+        heading = "FULL EXTRACTED TEXT" if use_full_text else "RELEVANT TEXT"
+        doc_block_lines = [f"===== {heading}: {filename} ====="]
         for score, page_num, page_text in top:
             label = f"--- Page {page_num} (relevance {score}) ---" if page_num is not None else "--- Text excerpt ---"
-            excerpt = page_text[: min(len(page_text), max(3000, remaining // 3))]
+            excerpt = page_text if use_full_text else page_text[: min(len(page_text), max(3000, remaining // 3))]
             doc_block_lines.append(label)
             doc_block_lines.append(excerpt)
         block = "\n".join(doc_block_lines)
