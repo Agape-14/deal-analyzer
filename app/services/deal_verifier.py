@@ -112,10 +112,20 @@ VERIFY_SECTION_GROUPS: list[list[str]] = [
     ["financial_projections", "underwriting_checks"],
     ["sponsor_evaluation", "risk_assessment"],
 ]
-VERIFY_MAX_IMAGE_PAGES_PER_CALL = int(os.getenv("VERIFY_MAX_IMAGE_PAGES_PER_CALL", "8"))
-VERIFY_MAX_CONTEXT_CHARS = int(os.getenv("VERIFY_MAX_CONTEXT_CHARS", "80000"))
-VERIFY_MAX_OUTPUT_TOKENS = int(os.getenv("VERIFY_MAX_OUTPUT_TOKENS", "16000"))
-VERIFY_CONCURRENCY = max(1, int(os.getenv("VERIFY_CONCURRENCY", "2")))
+
+
+def _env_int(name: str, default: int) -> int:
+    try:
+        return int(os.getenv(name, str(default)))
+    except (TypeError, ValueError):
+        return default
+
+
+VERIFY_MAX_IMAGE_PAGES_PER_CALL = _env_int("VERIFY_MAX_IMAGE_PAGES_PER_CALL", 8)
+VERIFY_MAX_CONTEXT_CHARS = _env_int("VERIFY_MAX_CONTEXT_CHARS", 80000)
+VERIFY_FULL_TEXT_THRESHOLD_CHARS = _env_int("VERIFY_FULL_TEXT_THRESHOLD_CHARS", 50000)
+VERIFY_MAX_OUTPUT_TOKENS = _env_int("VERIFY_MAX_OUTPUT_TOKENS", 16000)
+VERIFY_CONCURRENCY = max(1, _env_int("VERIFY_CONCURRENCY", 2))
 VERIFICATION_CACHE_VERSION = 1
 
 
@@ -244,6 +254,7 @@ async def _verify_sections(
         subset_metrics,
         max_chars=VERIFY_MAX_CONTEXT_CHARS,
         max_pages_per_doc=VERIFY_MAX_IMAGE_PAGES_PER_CALL,
+        full_text_threshold_chars=VERIFY_FULL_TEXT_THRESHOLD_CHARS,
     )
     rendered_pages = _render_pdf_pages_to_b64(
         pdf_docs,
