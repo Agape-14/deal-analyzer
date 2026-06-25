@@ -35,14 +35,16 @@ DICT_META_KEYS = {
     "_pipeline",
     "_canonical_returns",
     "_data_quality",
-    "_shape_errors",
     "_review_resolutions",
+    "_document_review_cache",
+    "_verification_cache",
 }
 
 LIST_META_KEYS = {
     "validation_flags",
     "_extraction_history",
     "_field_history",
+    "_shape_errors",
 }
 
 NUMERIC_FIELDS_BY_SECTION = {
