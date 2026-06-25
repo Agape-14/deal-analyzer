@@ -11,6 +11,7 @@ import { ReviewQueue } from "@/components/deal-detail/review-queue";
 import { PipelineTimeline } from "@/components/deal-detail/pipeline-timeline";
 import { SourceCitations } from "@/components/deal-detail/source-citations";
 import { UploadCompleteness } from "@/components/deal-detail/upload-completeness";
+import { useCurrentUser } from "@/lib/auth-client";
 import { getHeadlineReturnMetrics } from "@/lib/return-metrics";
 import type { DataQualityGate, DealDetail, FieldProvenance } from "@/lib/types";
 import { fmtMoney, fmtMultiple, fmtPct } from "@/lib/utils";
@@ -27,6 +28,7 @@ const HERO_KEYS = [
 type ProvenanceMap = Record<string, FieldProvenance>;
 
 export function OverviewTab({ deal }: { deal: DealDetail }) {
+  const { isAnalyst, loading } = useCurrentUser();
   const ds = (deal.metrics?.deal_structure ?? {}) as Record<string, unknown>;
   const fp = (deal.metrics?.financial_projections ?? {}) as Record<string, unknown>;
   const pd = (deal.metrics?.project_details ?? {}) as Record<string, unknown>;
@@ -51,27 +53,11 @@ export function OverviewTab({ deal }: { deal: DealDetail }) {
         headlineMultiple={headlineMultiple}
       />
 
-      <details id="analyst-review" className="group">
-        <summary className="cursor-pointer list-none rounded-xl border border-border/80 bg-card/80 p-4 text-sm font-semibold tracking-tight text-foreground shadow-sm marker:hidden">
-          <span className="flex flex-wrap items-center justify-between gap-3">
-            <span className="flex min-w-0 flex-col gap-1">
-              <span>Analyst review workspace</span>
-              <span className="text-xs font-normal leading-relaxed text-muted-foreground">
-                Hidden by default for viewer-friendly deal review. Open this when you need to confirm sources, correct inputs, or clear review items.
-              </span>
-            </span>
-            <span className="shrink-0 rounded-full border border-border/70 bg-background px-3 py-1 text-xs font-semibold text-muted-foreground group-open:hidden">
-              Open tools
-            </span>
-            <span className="hidden shrink-0 rounded-full border border-border/70 bg-background px-3 py-1 text-xs font-semibold text-muted-foreground group-open:inline">
-              Hide tools
-            </span>
-          </span>
-        </summary>
-        <div className="mt-4">
+      {!loading && isAnalyst ? (
+        <section id="analyst-review" data-analyst-only="true" aria-label="Admin review queue">
           <ReviewQueue deal={deal} />
-        </div>
-      </details>
+        </section>
+      ) : null}
 
       <div className="grid grid-cols-1 lg:grid-cols-[1.2fr_1fr] gap-6 items-stretch">
         <SnapshotCard
