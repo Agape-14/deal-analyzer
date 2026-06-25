@@ -113,6 +113,23 @@ def _needs_backend_verification(metrics: dict[str, Any]) -> bool:
 
     pipeline = metrics.get("_pipeline") or {}
     if isinstance(pipeline, dict):
+        modern_status = str(pipeline.get("status") or "").lower()
+        modern_step = str(pipeline.get("step") or "").lower()
+        modern_updated = _parse_iso(pipeline.get("updated_at"))
+        if modern_status == "running" and modern_updated and _age_seconds(modern_updated) < RUNNING_TIMEOUT_SECONDS:
+            return False
+        if modern_status == "complete" and modern_updated and modern_updated >= latest_extracted:
+            return False
+        if modern_status == "failed" and modern_updated and modern_updated >= latest_extracted:
+            return False
+        if modern_status == "verify_complete" and modern_updated and modern_updated >= latest_extracted:
+            return False
+        if modern_status == "extract_complete" and modern_step == "extract" and modern_updated and _age_seconds(modern_updated) < 10:
+            # The newer full document-review job advances from extract_complete
+            # to verify almost immediately. Give it a brief window so this
+            # legacy follow-through runner does not double-call verification.
+            return False
+
         status = str(pipeline.get("verify_status") or "").lower()
         started = _parse_iso(pipeline.get("verify_started_at"))
         finished = _parse_iso(pipeline.get("verify_finished_at"))
@@ -133,6 +150,11 @@ async def _verify_score_and_commit(db, deal: Deal) -> None:
     pipeline = dict(metrics.get("_pipeline") or {})
     pipeline.update(
         {
+            "status": "running",
+            "step": "verify",
+            "message": "Backend follow-through is checking extracted values against source documents.",
+            "updated_at": now_iso(),
+            "progress_pct": 55,
             "verify_status": "running",
             "verify_started_at": now_iso(),
             "verify_source": "backend_pipeline",
@@ -152,7 +174,7 @@ async def _verify_score_and_commit(db, deal: Deal) -> None:
         math_results = run_math_checks(metrics)
         metrics["_math_checks"] = {
             "checked_at": now_iso(),
-            "summary": summarize_math_checks(math_results),
+            "summary": summarize_math_checks(math_results, metrics),
             "results": math_results,
         }
 
@@ -164,6 +186,11 @@ async def _verify_score_and_commit(db, deal: Deal) -> None:
         pipeline = dict(metrics.get("_pipeline") or {})
         pipeline.update(
             {
+                "status": "complete",
+                "step": "score",
+                "message": "Document review complete. Values were extracted, source-checked, math-checked, and scored.",
+                "updated_at": now_iso(),
+                "progress_pct": 100,
                 "verify_status": "complete",
                 "verify_finished_at": now_iso(),
                 "corrections_applied": len(changes),
@@ -182,6 +209,12 @@ async def _verify_score_and_commit(db, deal: Deal) -> None:
         pipeline = dict(metrics.get("_pipeline") or {})
         pipeline.update(
             {
+                "status": "failed",
+                "step": "verify",
+                "message": "Source verification failed.",
+                "updated_at": now_iso(),
+                "error": str(exc),
+                "progress_pct": pipeline.get("progress_pct") or 55,
                 "verify_status": "failed",
                 "verify_finished_at": now_iso(),
                 "last_error": str(exc),
