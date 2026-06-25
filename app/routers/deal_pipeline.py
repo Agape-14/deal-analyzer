@@ -468,10 +468,6 @@ async def _run_extract_background(deal_id: int):
                 deal.city = ml["city"]
             if not deal.state and ml.get("state"):
                 deal.state = ml["state"]
-            try:
-                deal.scores = score_deal(merged)
-            except Exception:
-                log.exception("score refresh after extraction failed for deal %s", deal_id)
 
             n_unresolved_conflicts = len(conflicts) - n_auto_resolved
             reds = [f for f in validation_flags if f.get("severity") == "red"]
