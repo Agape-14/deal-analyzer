@@ -197,6 +197,20 @@ def _pdf_docs(deal: Deal):
     ]
 
 
+def _doc_has_usable_text(doc) -> bool:
+    text = (getattr(doc, "extracted_text", "") or "").strip()
+    quality = getattr(doc, "extraction_quality", None) or {}
+    if not text or text.startswith("Error extracting text:"):
+        return False
+    if isinstance(quality, dict) and quality.get("status") == "error":
+        return False
+    return True
+
+
+def _usable_text_docs(deal: Deal):
+    return [d for d in deal.documents if _doc_has_usable_text(d)]
+
+
 @router.get("/{deal_id}/quality")
 async def deal_quality(deal_id: int, db: AsyncSession = Depends(get_db)):
     result = await db.execute(select(Deal).options(selectinload(Deal.documents)).where(Deal.id == deal_id))
@@ -222,7 +236,7 @@ async def extract_deal_metrics(deal_id: int, db: AsyncSession = Depends(get_db))
     if not deal.documents:
         raise HTTPException(status_code=400, detail="No documents uploaded yet")
 
-    usable_docs = [d for d in deal.documents if (d.extracted_text or "")]
+    usable_docs = _usable_text_docs(deal)
     usable_pdfs = _pdf_docs(deal)
     if not usable_docs and not usable_pdfs:
         raise HTTPException(status_code=400, detail="No extracted text or PDF files available")
@@ -253,7 +267,7 @@ async def review_deal_documents(deal_id: int, db: AsyncSession = Depends(get_db)
     if not deal.documents:
         raise HTTPException(status_code=400, detail="No documents uploaded yet")
 
-    usable_docs = [d for d in deal.documents if (d.extracted_text or "")]
+    usable_docs = _usable_text_docs(deal)
     usable_pdfs = _pdf_docs(deal)
     if not usable_docs and not usable_pdfs:
         raise HTTPException(status_code=400, detail="No extracted text or PDF files available")
@@ -346,7 +360,7 @@ async def _run_extract_background(deal_id: int):
             extraction_cache = existing_metrics.get("_document_review_cache")
             if not isinstance(extraction_cache, dict):
                 extraction_cache = {}
-            usable_docs = [d for d in deal.documents if (d.extracted_text or "")]
+            usable_docs = _usable_text_docs(deal)
             usable_pdfs = _pdf_docs(deal)
             per_doc_results: list[tuple[int, str, dict]] = []
 
