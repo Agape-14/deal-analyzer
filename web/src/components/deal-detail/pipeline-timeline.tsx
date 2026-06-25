@@ -7,6 +7,11 @@ import type { DealDetail, FieldProvenance } from "@/lib/types";
 
 type StepState = "done" | "running" | "blocked" | "pending";
 type PipelineMeta = {
+  status?: string;
+  step?: string;
+  message?: string;
+  error?: string | null;
+  updated_at?: string;
   verify_status?: string;
   verify_started_at?: string;
   verify_finished_at?: string;
@@ -30,7 +35,9 @@ export function PipelineTimeline({ deal }: { deal: DealDetail }) {
   const mathAt = metrics._math_checks?.checked_at ?? null;
   const scoreReady = deal.scores?.overall != null || deal.scores?.provisional_overall != null;
   const mathFails = metrics._math_checks?.summary?.fail ?? 0;
-  const pipelineFailed = pipeline.verify_status === "failed";
+  const pipelineStatus = String(pipeline.status ?? "").toLowerCase();
+  const verifyStatus = String(pipeline.verify_status ?? "").toLowerCase();
+  const pipelineFailed = pipelineStatus === "failed" || verifyStatus === "failed";
 
   const steps = [
     {
@@ -56,7 +63,7 @@ export function PipelineTimeline({ deal }: { deal: DealDetail }) {
     },
     {
       label: "Docs verified",
-      detail: pipelineFailed ? pipeline.last_error || "Verification failed" : verificationDetail(pipeline.verify_status),
+      detail: pipelineFailed ? pipeline.error || pipeline.last_error || "Verification failed" : verificationDetail(pipeline),
       at: verificationAt,
       state: verificationState(pipeline, latestExtraction, verificationAt),
       Icon: ShieldCheck,
@@ -144,16 +151,22 @@ function stateClass(state: StepState): string {
 }
 
 function verificationState(pipeline: PipelineMeta, latestExtraction: string | null, verifiedAt: string | null): StepState {
-  if (pipeline.verify_status === "failed") return "blocked";
+  const status = String(pipeline.status ?? "").toLowerCase();
+  const step = String(pipeline.step ?? "").toLowerCase();
+  if (status === "failed" || pipeline.verify_status === "failed") return "blocked";
+  if (status === "running" && (step === "verify" || step === "score")) return "running";
   if (pipeline.verify_status === "running") return "running";
+  if (status === "complete" || status === "verify_complete") return "done";
   if (verifiedAt) return "done";
   if (latestExtraction) return "running";
   return "pending";
 }
 
-function verificationDetail(status: string | undefined): string {
+function verificationDetail(pipeline: PipelineMeta): string {
+  const status = String(pipeline.status ?? pipeline.verify_status ?? "").toLowerCase();
+  if (pipeline.message && status === "running") return pipeline.message;
   if (status === "running") return "Verifying against source documents";
-  if (status === "complete") return "Source verification complete";
+  if (status === "complete" || status === "verify_complete") return "Source verification complete";
   return "Waiting for extracted metrics";
 }
 
