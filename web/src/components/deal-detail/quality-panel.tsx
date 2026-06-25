@@ -50,14 +50,23 @@ export function QualityPanel({
         return;
       }
       try {
-        const res = await api.get<{ summary: DealQualitySummary }>(`/api/deals/${dealId}/quality`);
+        const res = await api.get<{ summary: DealQualitySummary; pipeline?: { status?: string; error?: string | null } | null }>(`/api/deals/${dealId}/quality`);
         const newTs = res.summary?.last_extracted_at;
-        if (newTs && newTs !== beforeTs) {
+        const status = String(res.pipeline?.status ?? "").toLowerCase();
+        if (status === "failed") {
           if (pollRef.current) clearInterval(pollRef.current);
           pollRef.current = null;
           setBusy(null);
-          toast.success("Extraction complete", {
-            description: "Backend verification and scoring will continue automatically.",
+          toast.error("Document review stopped", { description: res.pipeline?.error ?? undefined });
+          router.refresh();
+          return;
+        }
+        if (status === "complete" || (newTs && newTs !== beforeTs)) {
+          if (pollRef.current) clearInterval(pollRef.current);
+          pollRef.current = null;
+          setBusy(null);
+          toast.success(status === "complete" ? "Document review complete" : "Documents read", {
+            description: status === "complete" ? "Values were source-checked, math-checked, and scored." : "Source checking and scoring will continue automatically.",
           });
           router.refresh();
         }
@@ -71,11 +80,11 @@ export function QualityPanel({
     setBusy("extract");
     try {
       const beforeExtractTs = isQualitySummary(quality) ? quality.last_extracted_at : null;
-      await api.post(`/api/deals/${dealId}/extract`);
-      toast.success("Pipeline started - verification and scoring will run automatically.", { duration: 5000 });
+      await api.post(`/api/deals/${dealId}/review`);
+      toast.success("Document review started - source checking and scoring will run automatically.", { duration: 5000 });
       startPolling(beforeExtractTs);
     } catch (e) {
-      toast.error("Pipeline failed to start", { description: (e as { detail?: string })?.detail });
+      toast.error("Document review failed to start", { description: (e as { detail?: string })?.detail });
       setBusy(null);
     }
   }
@@ -114,7 +123,7 @@ export function QualityPanel({
     : null;
   const stale = ageDays != null && ageDays >= 60;
 
-  const busyLabel = busy === "extract" ? "Running pipeline..." : null;
+  const busyLabel = busy === "extract" ? "Reviewing documents..." : null;
 
   return (
     <Card elevated className="p-6">
@@ -149,7 +158,7 @@ export function QualityPanel({
               {busyLabel
                 ? busyLabel
                 : total === 0 && !gate
-                  ? "No metrics extracted yet - upload an OM and run the pipeline."
+                  ? "No metrics extracted yet - upload an OM and review the documents."
                   : trust != null
                     ? `${gate ? "Gate confidence" : "Trust score"} ${trust}%${total ? ` - ${total} tracked field${total === 1 ? "" : "s"}` : ""}`
                     : ""}
@@ -159,7 +168,7 @@ export function QualityPanel({
 
         <Button size="sm" onClick={runExtract} disabled={busy !== null}>
           {busy === "extract" ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />}
-          Re-run pipeline
+          Review documents
         </Button>
       </div>
 
@@ -208,7 +217,7 @@ export function QualityPanel({
                   label="Verified"
                   value={q.verified}
                   color="text-success"
-                  hint={q.verified === 0 ? "Pipeline will verify automatically" : undefined}
+                  hint={q.verified === 0 ? "Document review will verify automatically" : undefined}
                 />
                 <Counter label="Extracted" value={q.extracted} />
                 <Counter label="Calculated" value={q.calculated} />
@@ -242,7 +251,7 @@ export function QualityPanel({
               {stale && (
                 <div className="mt-3 inline-flex items-center gap-2 rounded-md bg-warning/10 text-warning ring-1 ring-warning/30 px-2.5 py-1 text-xs">
                   <AlertTriangle className="h-3 w-3" />
-                  Metrics are {ageDays}+ days old - re-run the pipeline if newer documents are available.
+                  Metrics are {ageDays}+ days old - review the documents again if newer files are available.
                 </div>
               )}
             </>
