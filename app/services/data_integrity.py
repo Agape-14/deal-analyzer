@@ -43,8 +43,25 @@ from typing import Any, Iterable
 # ----------------------------- constants --------------------------------- #
 
 # Keys under `deal.metrics` that we treat as metadata, not metric values.
-# Merges / validators skip these.
-META_KEYS = {"_provenance", "_verification", "_locks", "_extraction_history", "validation_flags"}
+# Merges / validators skip these. Keep this in sync with json_parser_guard so
+# extraction merges never mistake audit/cache data for a metric section.
+META_KEYS = {
+    "_provenance",
+    "_verification",
+    "_locks",
+    "_extraction_history",
+    "_field_history",
+    "_math_checks",
+    "_pipeline",
+    "_document_review_cache",
+    "_verification_cache",
+    "_canonical_returns",
+    "_data_quality",
+    "_shape_errors",
+    "_review_resolutions",
+    "_manual_edit_warning",
+    "validation_flags",
+}
 
 # Sections of `deal.metrics` that contain user-facing metrics.
 METRIC_SECTIONS = (
