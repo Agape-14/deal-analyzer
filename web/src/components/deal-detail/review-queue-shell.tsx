@@ -9,9 +9,9 @@ export function ReviewQueueEmptyState() {
           <CheckCircle2 className="h-5 w-5" />
         </div>
         <div>
-          <div className="text-[10px] uppercase tracking-[0.14em] text-muted-foreground">Deal Readiness</div>
-          <h3 className="text-base font-semibold tracking-tight">Ready to score</h3>
-          <p className="mt-0.5 text-xs text-muted-foreground">Every open review item has been corrected or confirmed.</p>
+          <div className="text-[10px] uppercase tracking-[0.14em] text-muted-foreground">Admin Review Center</div>
+          <h3 className="text-base font-semibold tracking-tight">No admin review items open</h3>
+          <p className="mt-0.5 text-xs text-muted-foreground">Every flagged value has been corrected or confirmed for this deal.</p>
         </div>
       </div>
     </Card>
@@ -27,12 +27,12 @@ export function ReviewQueueHeader({ visibleCount, hiddenCount }: { visibleCount:
           <ShieldAlert className="h-5 w-5" />
         </div>
         <div>
-          <div className="text-[10px] font-extrabold uppercase tracking-[0.14em] text-muted-foreground">Deal Readiness</div>
+          <div className="text-[10px] font-extrabold uppercase tracking-[0.14em] text-muted-foreground">Admin Review Center</div>
           <h3 className="text-lg font-extrabold">
             {total} item{total === 1 ? "" : "s"} need review
           </h3>
           <p className="mt-1 text-sm leading-relaxed text-muted-foreground">
-            Work these like an analyst checklist: inspect the source, correct any bad value, then confirm to clear the item.
+            One workspace for source checks and corrections. Inspect the evidence, edit any bad value, then confirm to clear the item.
           </p>
         </div>
       </div>
@@ -48,9 +48,9 @@ export function ReviewQueueHeader({ visibleCount, hiddenCount }: { visibleCount:
 export function ReviewQueueSteps() {
   return (
     <div className="mt-5 grid overflow-hidden rounded-xl border border-border/80 bg-background sm:grid-cols-3">
-      <ActionHint label="1. Inspect" detail="Open the exact source evidence." />
-      <ActionHint label="2. Correct" detail="Edit only values that are wrong." />
-      <ActionHint label="3. Confirm" detail="Clear the row when it is acceptable." />
+      <ActionHint label="1. Inspect" detail="Open the cited source evidence." />
+      <ActionHint label="2. Correct" detail="Edit the value if the source is wrong." />
+      <ActionHint label="3. Clear" detail="Confirm once the item is acceptable." />
     </div>
   );
 }
