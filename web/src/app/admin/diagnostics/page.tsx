@@ -105,7 +105,7 @@ export default function DiagnosticsPage() {
         <div>
           <h1 className="text-2xl font-semibold tracking-tight">Diagnostics</h1>
           <p className="text-sm text-muted-foreground mt-1">
-            Live operation log. AI pipeline calls — what succeeded, what failed, and why.
+            Live operation log. AI document-review calls - what succeeded, what failed, and why.
           </p>
         </div>
 
