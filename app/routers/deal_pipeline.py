@@ -551,7 +551,6 @@ async def _run_verify_background(deal_id: int, auto_correct: bool):
                 progress_pct=82,
             )
             deal.metrics = metrics
-            deal.scores = score_deal(metrics, math_checks=math_results)
             await notif_svc.emit(
                 db,
                 kind="success",
@@ -583,7 +582,9 @@ async def score_deal_endpoint(deal_id: int, db: AsyncSession = Depends(get_db)):
     try:
         metrics = _ensure_metrics_dict(deal.metrics, "Stored deal metrics")
         metrics = annotate_canonical_metrics(metrics)
-        scores = score_deal(metrics)
+        math_checks = metrics.get("_math_checks", {})
+        results = math_checks.get("results") if isinstance(math_checks, dict) else None
+        scores = score_deal(metrics, math_checks=results if isinstance(results, list) else None)
     except Exception as e:
         await _persist_pipeline_failure(db, deal_id, "score", "Score update failed.", e)
         raise HTTPException(status_code=503, detail=_pipeline_error_message(e))
