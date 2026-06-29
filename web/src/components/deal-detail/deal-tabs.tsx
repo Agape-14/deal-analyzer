@@ -11,6 +11,7 @@ import {
   MapPin,
 } from "lucide-react";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
+import { useCurrentUser } from "@/lib/auth-client";
 
 const TABS = [
   { key: "overview", label: "Overview", icon: Gauge },
@@ -48,14 +49,28 @@ export function DealTabs({
   const router = useRouter();
   const pathname = usePathname();
   const searchParams = useSearchParams();
+  const { isAnalyst, loading } = useCurrentUser();
+  const visibleTabs = React.useMemo(
+    () => (loading || !isAnalyst ? TABS.filter((tab) => tab.key !== "chat") : [...TABS]),
+    [isAnalyst, loading],
+  );
   const urlTab = (searchParams?.get("tab") as DealTabKey) || defaultTab;
   const [active, setActive] = React.useState<DealTabKey>(urlTab);
+  const resolvedActive = visibleTabs.some((tab) => tab.key === active) ? active : "overview";
 
   // Keep local state in sync with URL (e.g. back button)
   React.useEffect(() => {
     if (urlTab && urlTab !== active) setActive(urlTab);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [urlTab]);
+
+  React.useEffect(() => {
+    if (visibleTabs.some((tab) => tab.key === active)) return;
+    setActive("overview");
+    const params = new URLSearchParams(searchParams?.toString() ?? "");
+    params.set("tab", "overview");
+    router.replace(`${pathname}?${params.toString()}`, { scroll: false });
+  }, [active, pathname, router, searchParams, visibleTabs]);
 
   function onValueChange(v: string) {
     const next = v as DealTabKey;
@@ -66,9 +81,9 @@ export function DealTabs({
   }
 
   return (
-    <Tabs value={active} onValueChange={onValueChange} className="w-full">
+    <Tabs value={resolvedActive} onValueChange={onValueChange} className="w-full">
       <TabsList className="overflow-x-auto w-full">
-        {TABS.map((t) => (
+        {visibleTabs.map((t) => (
           <TabsTrigger
             key={t.key}
             value={t.key}
