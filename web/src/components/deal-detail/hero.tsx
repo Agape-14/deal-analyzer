@@ -3,12 +3,13 @@
 import * as React from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { AlertCircle, ArrowLeft, CheckCircle2, MapPin, Building2, Sparkles, FileDown, Loader2, RefreshCw } from "lucide-react";
+import { AlertCircle, ArrowLeft, CheckCircle2, MapPin, Building2, Sparkles, FileDown, FileText, Loader2, RefreshCw } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { BigScoreRing } from "@/components/deal-detail/score-ring";
 import { ScoreQualityBadge } from "@/components/deal-detail/score-quality-badge";
 import { FadeIn } from "@/components/motion";
+import { useCurrentUser } from "@/lib/auth-client";
 import { api } from "@/lib/api";
 import { getHeadlineReturnMetrics } from "@/lib/return-metrics";
 import { cn, fmtMoney, fmtMultiple, fmtPct } from "@/lib/utils";
@@ -41,6 +42,7 @@ type QualityResponse = { summary?: DealQualitySummary; stale_flags?: unknown[]; 
 
 export function DealHero({ deal }: { deal: DealDetail }) {
   const router = useRouter();
+  const { isAnalyst, loading } = useCurrentUser();
   const metrics = deal.metrics ?? {};
   const [scoring, setScoring] = React.useState(false);
   const [pipelineRunning, setPipelineRunning] = React.useState(false);
@@ -57,7 +59,8 @@ export function DealHero({ deal }: { deal: DealDetail }) {
   const reviewSummary = dealReviewSummary(gate);
   const viewerSummary = viewerScoreSummary(gate);
   const reviewStatusName = normalizedPipelineStatus(pipelineStatus);
-  const openAnalystTools = pipelineRunning || reviewStatusName === "failed" || reviewStatusName === "running";
+  const showAnalystTools = !loading && isAnalyst;
+  const openAnalystTools = showAnalystTools && (pipelineRunning || reviewStatusName === "failed" || reviewStatusName === "running");
   const docsRead = readableDocumentCount(deal);
   const totalDocs = deal.documents?.length ?? 0;
 
@@ -210,43 +213,51 @@ export function DealHero({ deal }: { deal: DealDetail }) {
             </div>
 
             <div className="mt-4 grid gap-2">
+              <Button size="sm" variant="secondary" asChild className="justify-center">
+                <a href="#executive-memo">
+                  <FileText className="h-4 w-4" />
+                  Executive memo
+                </a>
+              </Button>
               <Button size="sm" variant="outline" asChild className="justify-center">
                 <a href={`/api/reports/deal/${deal.id}/pdf`} target="_blank" rel="noreferrer">
                   <FileDown className="h-4 w-4" />
                   Export PDF
                 </a>
               </Button>
-              <details
-                id="analyst-tools"
-                open={openAnalystTools}
-                className="group rounded-lg border border-border/80 bg-muted/25"
-              >
-                <summary className="flex cursor-pointer list-none items-center justify-between gap-3 px-3 py-2 text-xs font-semibold text-muted-foreground marker:hidden hover:text-foreground">
-                  <span>Analyst tools</span>
-                  <span className="text-[11px] font-medium group-open:hidden">Show</span>
-                  <span className="hidden text-[11px] font-medium group-open:inline">Hide</span>
-                </summary>
-                <div className="space-y-3 border-t border-border/70 p-3">
-                  <div>
-                    <ScoreQualityBadge gate={gate} />
-                    <p className="mt-2 text-xs leading-relaxed text-muted-foreground">{reviewSummary}</p>
+              {showAnalystTools ? (
+                <details
+                  id="analyst-tools"
+                  open={openAnalystTools}
+                  className="group rounded-lg border border-border/80 bg-muted/25"
+                >
+                  <summary className="flex cursor-pointer list-none items-center justify-between gap-3 px-3 py-2 text-xs font-semibold text-muted-foreground marker:hidden hover:text-foreground">
+                    <span>Analyst tools</span>
+                    <span className="text-[11px] font-medium group-open:hidden">Show</span>
+                    <span className="hidden text-[11px] font-medium group-open:inline">Hide</span>
+                  </summary>
+                  <div className="space-y-3 border-t border-border/70 p-3">
+                    <div>
+                      <ScoreQualityBadge gate={gate} />
+                      <p className="mt-2 text-xs leading-relaxed text-muted-foreground">{reviewSummary}</p>
+                    </div>
+                    <div className="grid gap-2">
+                      <Button size="sm" onClick={runPipeline} disabled={pipelineRunning || scoring} className="justify-center">
+                        {pipelineRunning ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
+                        {pipelineLabel}
+                      </Button>
+                      <Button size="sm" variant="secondary" onClick={runScore} disabled={scoring || pipelineRunning}>
+                        {scoring ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
+                        {scoring ? "Calculating..." : "Recalculate score"}
+                      </Button>
+                    </div>
+                    <PipelineNotice status={pipelineStatus} running={pipelineRunning} />
+                    <p className="text-[11px] leading-relaxed text-muted-foreground">
+                      Review documents re-reads every uploaded file. Recalculate score only uses values already saved from the last document review.
+                    </p>
                   </div>
-                  <div className="grid gap-2">
-                    <Button size="sm" onClick={runPipeline} disabled={pipelineRunning || scoring} className="justify-center">
-                      {pipelineRunning ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
-                      {pipelineLabel}
-                    </Button>
-                    <Button size="sm" variant="secondary" onClick={runScore} disabled={scoring || pipelineRunning}>
-                      {scoring ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
-                      {scoring ? "Calculating..." : "Recalculate score"}
-                    </Button>
-                  </div>
-                  <PipelineNotice status={pipelineStatus} running={pipelineRunning} />
-                  <p className="text-[11px] leading-relaxed text-muted-foreground">
-                    Review documents re-reads every uploaded file. Recalculate score only uses values already saved from the last document review.
-                  </p>
-                </div>
-              </details>
+                </details>
+              ) : null}
             </div>
           </aside>
         </div>
