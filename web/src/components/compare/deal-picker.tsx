@@ -65,7 +65,7 @@ export function DealPicker({
         <div className="px-5 py-4 border-b border-border/70">
           <DialogTitle>Pick deals to compare</DialogTitle>
           <DialogDescription>
-            Select up to {max} deals. Unselected deals stay in your pipeline.
+            Select up to {max} deals. Unselected deals stay in your deal list.
           </DialogDescription>
           <div className="relative mt-3">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground pointer-events-none" />
