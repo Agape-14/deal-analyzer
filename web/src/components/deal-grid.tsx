@@ -1,6 +1,7 @@
 "use client";
 
 import * as React from "react";
+import Link from "next/link";
 import { AnimatePresence, motion } from "framer-motion";
 import {
   Search,
@@ -20,6 +21,7 @@ import type { DealStatus, DealSummary } from "@/lib/types";
 import { DealCard } from "@/components/deal-card";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
+import { useCurrentUser } from "@/lib/auth-client";
 import { cn, fmtMoney, fmtMultiple, fmtPct } from "@/lib/utils";
 
 type SortKey = "score" | "irr" | "multiple" | "recent" | "name";
@@ -42,6 +44,7 @@ const STATUSES: Array<{ key: DealStatus | "all"; label: string }> = [
 ];
 
 export function DealGrid({ deals }: { deals: DealSummary[] }) {
+  const { isAnalyst, loading } = useCurrentUser();
   const [query, setQuery] = React.useState("");
   const [status, setStatus] = React.useState<DealStatus | "all">("all");
   const [sort, setSort] = React.useState<SortKey>("score");
@@ -81,9 +84,12 @@ export function DealGrid({ deals }: { deals: DealSummary[] }) {
   const activeSort = SORTS.find((s) => s.key === sort)!;
   const focusDeal = filtered[0] ?? null;
   const visibleExposure = filtered.reduce((sum, deal) => sum + (deal.minimum_investment ?? 0), 0);
+  const showTeamCompare = !loading && !isAnalyst && deals.length > 1;
 
   return (
     <div className="relative z-10 clear-both">
+      {showTeamCompare ? <TeamCompareBar deals={deals} /> : null}
+
       <div className="relative z-20 mb-8 flex flex-col gap-3 rounded-xl bg-background/90 xl:flex-row xl:items-center xl:justify-between">
         <div className="relative w-full xl:max-w-[440px]">
           <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
@@ -211,6 +217,31 @@ export function DealGrid({ deals }: { deals: DealSummary[] }) {
 
         <FocusPanel deal={focusDeal} visibleExposure={visibleExposure} />
         <NextActionsPanel deal={focusDeal} dealCount={filtered.length} />
+      </div>
+    </div>
+  );
+}
+
+function TeamCompareBar({ deals }: { deals: DealSummary[] }) {
+  const scored = deals.filter((deal) => typeof deal.overall_score === "number").length;
+  const topDeal = [...deals].sort((a, b) => (b.overall_score ?? -1) - (a.overall_score ?? -1))[0];
+
+  return (
+    <div className="mb-6 overflow-hidden rounded-xl border border-border/80 bg-card/80 p-4 shadow-sm">
+      <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+        <div className="min-w-0">
+          <div className="text-[10px] font-extrabold uppercase tracking-[0.14em] text-primary">Team comparison</div>
+          <h2 className="mt-1 text-lg font-extrabold tracking-tight text-foreground">Compare the active deal set</h2>
+          <p className="mt-1 text-sm leading-relaxed text-muted-foreground">
+            {scored}/{deals.length} deals have scores. {topDeal ? `${topDeal.project_name} is currently the highest-ranked visible option.` : "Open the comparison table to review side by side."}
+          </p>
+        </div>
+        <Button asChild>
+          <Link href="/compare">
+            <GitCompareArrows className="h-4 w-4" />
+            Open compare view
+          </Link>
+        </Button>
       </div>
     </div>
   );
