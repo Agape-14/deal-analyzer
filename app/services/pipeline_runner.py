@@ -1,14 +1,15 @@
-"""Backend-owned deal pipeline runner.
+"""Legacy backend-owned deal pipeline runner.
 
-The UI can start extraction, but the browser should not be responsible for the
-high-confidence part of the workflow. This lightweight worker runs in the API
-process and looks for deals whose extracted metrics have not yet been verified
-against the source documents. It then runs:
+The current product workflow starts a full document review from the upload
+handler or the explicit `/review` endpoint. This lightweight worker is kept as
+an opt-in safety net for older extract-only flows: it looks for deals whose
+extracted metrics have not yet been verified against source documents. It then
+runs:
 
     verification -> deterministic math checks -> confidence gates -> scoring
 
-That keeps deal scoring from depending on an operator clicking a second button
-or leaving a browser tab open.
+Keeping this disabled by default avoids background scans and duplicate AI
+verification calls in the normal document-review flow.
 """
 
 import asyncio
@@ -38,10 +39,10 @@ RUNNING_TIMEOUT_SECONDS = 30 * 60
 
 
 def start_pipeline_runner() -> Optional[asyncio.Task]:
-    """Start the background verifier unless disabled by env."""
-    enabled = os.getenv("DEAL_PIPELINE_RUNNER", "1").strip().lower() not in {"0", "false", "no"}
+    """Start the legacy background verifier only when explicitly enabled."""
+    enabled = os.getenv("DEAL_PIPELINE_RUNNER", "0").strip().lower() in {"1", "true", "yes"}
     if not enabled:
-        log.info("deal pipeline runner disabled")
+        log.info("legacy deal pipeline runner disabled")
         return None
     try:
         loop = asyncio.get_running_loop()
@@ -49,7 +50,7 @@ def start_pipeline_runner() -> Optional[asyncio.Task]:
         log.warning("deal pipeline runner skipped: no running event loop")
         return None
     task = loop.create_task(_run_loop(), name="deal-pipeline-runner")
-    log.info("deal pipeline runner started")
+    log.info("legacy deal pipeline runner started")
     return task
 
 
@@ -124,9 +125,9 @@ def _needs_backend_verification(metrics: dict[str, Any]) -> bool:
             return False
         if modern_status == "verify_complete" and modern_updated and modern_updated >= latest_extracted:
             return False
-        if modern_status == "extract_complete" and modern_step == "extract" and modern_updated and _age_seconds(modern_updated) < 10:
+        if modern_status == "extract_complete" and modern_step == "extract" and modern_updated and _age_seconds(modern_updated) < 60:
             # The newer full document-review job advances from extract_complete
-            # to verify almost immediately. Give it a brief window so this
+            # to verify almost immediately. Give it a safety window so this
             # legacy follow-through runner does not double-call verification.
             return False
 
@@ -249,7 +250,7 @@ async def _emit_verification_notification(db, deal: Deal, verification: dict[str
         db,
         kind="warning" if wrong or missing else "success",
         title=f"Verification complete - {deal.project_name}",
-        body=" · ".join(body_parts) if body_parts else "All extracted values match the source docs.",
+        body=" - ".join(body_parts) if body_parts else "All extracted values match the source docs.",
         href=f"/deals/{deal.id}?tab=overview",
         payload={"deal_id": deal.id, **totals, "confidence": confidence, "backend_pipeline": True},
     )
