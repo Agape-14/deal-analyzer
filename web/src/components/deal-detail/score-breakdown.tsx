@@ -47,7 +47,13 @@ function cleanScoreNote(note: string): string {
  * score, and the scorer's notes. The bar grows in on mount for a bit of
  * dashboard-y polish.
  */
-export function ScoreBreakdown({ scores }: { scores: Partial<DealScores> }) {
+export function ScoreBreakdown({
+  scores,
+  viewerMode = false,
+}: {
+  scores: Partial<DealScores>;
+  viewerMode?: boolean;
+}) {
   if (!scores || Object.keys(scores).length === 0) {
     return (
       <Card elevated className="p-8 text-center">
@@ -65,13 +71,17 @@ export function ScoreBreakdown({ scores }: { scores: Partial<DealScores> }) {
     <Card elevated className="p-6">
       <div className="flex items-start justify-between gap-4 mb-5">
         <div>
-          <h3 className="text-base font-semibold tracking-tight">Score breakdown</h3>
+          <h3 className="text-base font-semibold tracking-tight">{viewerMode ? "Decision drivers" : "Score breakdown"}</h3>
           <p className="text-xs text-muted-foreground mt-0.5">
-            Weighted composite of 7 analyst categories.
+            {viewerMode
+              ? "A simplified view of what is helping or hurting this deal."
+              : "Weighted composite of 7 analyst categories."}
           </p>
-          <div className="mt-2">
-            <ScoreQualityBadge gate={scores.data_quality} />
-          </div>
+          {!viewerMode && (
+            <div className="mt-2">
+              <ScoreQualityBadge gate={scores.data_quality} />
+            </div>
+          )}
         </div>
         {typeof visibleOverall === "number" && (
           <div className="text-right">
@@ -97,7 +107,7 @@ export function ScoreBreakdown({ scores }: { scores: Partial<DealScores> }) {
               : score >= 6
                 ? "bg-warning"
                 : "bg-destructive";
-          const notes = typeof cat.notes === "string" ? scoreNoteParts(cat.notes) : [];
+          const notes = typeof cat.notes === "string" ? scoreNoteParts(cat.notes).slice(0, viewerMode ? 1 : 4) : [];
 
           return (
             <div key={c.key}>
