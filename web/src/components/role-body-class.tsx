@@ -16,7 +16,7 @@ export function RoleBodyClass() {
 
     if (isAnalyst) {
       document
-        .querySelectorAll<HTMLDetailsElement>("details#analyst-tools, details#analyst-review")
+        .querySelectorAll<HTMLDetailsElement>("details#analyst-tools")
         .forEach((section) => {
           section.open = true;
         });
