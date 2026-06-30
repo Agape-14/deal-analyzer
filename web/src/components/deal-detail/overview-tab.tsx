@@ -65,7 +65,7 @@ export function OverviewTab({ deal }: { deal: DealDetail }) {
       />
 
       {showAnalyst ? (
-        <section id="analyst-review" data-analyst-only="true" aria-label="Admin review queue">
+        <section id="admin-review-center" aria-label="Admin review queue">
           <ReviewQueue deal={deal} />
         </section>
       ) : null}
@@ -638,7 +638,7 @@ function MetricSourceDrawer({
           <div className="grid gap-2 sm:grid-cols-2">
             {showAdminAction ? (
               <Button variant="secondary" asChild>
-                <a href="#analyst-review" onClick={onClose}>
+                <a href="#admin-review-center" onClick={onClose}>
                   Open Admin Review Center
                 </a>
               </Button>
