@@ -11,7 +11,7 @@ export function ReviewQueueEmptyState() {
         <div>
           <div className="text-[10px] uppercase tracking-[0.14em] text-muted-foreground">Admin Review Center</div>
           <h3 className="text-base font-semibold tracking-tight">No admin review items open</h3>
-          <p className="mt-0.5 text-xs text-muted-foreground">Every flagged value has been corrected or confirmed for this deal.</p>
+          <p className="mt-0.5 text-xs text-muted-foreground">Every flagged value has been corrected, confirmed, or marked unsure for this deal.</p>
         </div>
       </div>
     </Card>
@@ -29,10 +29,10 @@ export function ReviewQueueHeader({ visibleCount, hiddenCount }: { visibleCount:
         <div>
           <div className="text-[10px] font-extrabold uppercase tracking-[0.14em] text-muted-foreground">Admin Review Center</div>
           <h3 className="text-lg font-extrabold">
-            {total} item{total === 1 ? "" : "s"} need review
+            {total} item{total === 1 ? " needs" : "s need"} review
           </h3>
           <p className="mt-1 text-sm leading-relaxed text-muted-foreground">
-            One workspace for source checks and corrections. Inspect the evidence, edit any bad value, then confirm to clear the item.
+            One workspace for source checks and corrections. Inspect the evidence, edit any bad value, then confirm it or mark it unsure.
           </p>
         </div>
       </div>
@@ -50,7 +50,7 @@ export function ReviewQueueSteps() {
     <div className="mt-5 grid overflow-hidden rounded-xl border border-border/80 bg-background sm:grid-cols-3">
       <ActionHint label="1. Inspect" detail="Open the cited source evidence." />
       <ActionHint label="2. Correct" detail="Edit the value if the source is wrong." />
-      <ActionHint label="3. Clear" detail="Confirm once the item is acceptable." />
+      <ActionHint label="3. Clear" detail="Confirm the item, or mark it unsure when support is not clear." />
     </div>
   );
 }
