@@ -10,7 +10,7 @@ import { ValidationFlagsPanel } from "@/components/deal-detail/validation-flags"
 import { MetricsSection } from "@/components/deal-detail/metrics-section";
 import { AuditTrail } from "@/components/deal-detail/audit-trail";
 import { QualityPanel } from "@/components/deal-detail/quality-panel";
-import { ReviewQueue } from "@/components/deal-detail/review-queue";
+import { ReviewQueue, buildReviewItems } from "@/components/deal-detail/review-queue";
 import { PipelineTimeline } from "@/components/deal-detail/pipeline-timeline";
 import { SourceCitations } from "@/components/deal-detail/source-citations";
 import { UploadCompleteness } from "@/components/deal-detail/upload-completeness";
@@ -52,6 +52,7 @@ export function OverviewTab({ deal }: { deal: DealDetail }) {
     ? { ...deal.quality, data_quality: deal.scores.data_quality }
     : deal.quality ?? deal.scores?.data_quality;
   const gate = deal.scores?.data_quality ?? (hasConfidenceExplanations(deal.quality) ? deal.quality : undefined);
+  const openReviewItemCount = showAnalyst ? buildReviewItems(deal).length : undefined;
 
   return (
     <div className="space-y-6">
@@ -61,6 +62,7 @@ export function OverviewTab({ deal }: { deal: DealDetail }) {
         headlineIrr={headlineIrr}
         headlineCashOnCash={headlineCashOnCash}
         headlineMultiple={headlineMultiple}
+        openReviewItemCount={openReviewItemCount}
         viewerMode={!showAnalyst}
       />
 
@@ -156,6 +158,7 @@ function ExecutiveReview({
   headlineIrr,
   headlineCashOnCash,
   headlineMultiple,
+  openReviewItemCount,
   viewerMode = false,
 }: {
   deal: DealDetail;
@@ -163,6 +166,7 @@ function ExecutiveReview({
   headlineIrr: number | null;
   headlineCashOnCash: number | null;
   headlineMultiple: number | null;
+  openReviewItemCount?: number;
   viewerMode?: boolean;
 }) {
   const metrics = deal.metrics ?? {};
@@ -170,7 +174,7 @@ function ExecutiveReview({
   const ds = (metrics.deal_structure ?? {}) as Record<string, unknown>;
   const canonical = metrics._canonical_returns;
   const score = deal.overall_score ?? deal.scores?.provisional_overall ?? null;
-  const readiness = readinessCopy(gate, viewerMode);
+  const readiness = readinessCopy(gate, viewerMode, openReviewItemCount);
   const decision = decisionCopy(score);
   const strategy = strategyText(canonical?.primary_strategy ?? tr.primary_strategy ?? ds.primary_strategy);
   const docs = deal.documents ?? [];
@@ -384,7 +388,7 @@ function SnapshotGroup({
   );
 }
 
-function readinessCopy(gate?: DataQualityGate, viewerMode = false) {
+function readinessCopy(gate?: DataQualityGate, viewerMode = false, openReviewItemCount?: number) {
   const stage = String(gate?.stage ?? "").toLowerCase();
   const confidence = typeof gate?.confidence_score === "number" ? Math.round(gate.confidence_score) : null;
   const critical = gate?.critical_summary;
@@ -394,7 +398,7 @@ function readinessCopy(gate?: DataQualityGate, viewerMode = false) {
     (critical?.bad ?? 0) +
     (critical?.review_only ?? 0);
   const mathFailures = gate?.math_summary?.fail ?? gate?.math_summary?.blocking?.length ?? 0;
-  const openItems = openCritical + mathFailures;
+  const openItems = typeof openReviewItemCount === "number" ? openReviewItemCount : openCritical + mathFailures;
 
   if (stage === "verified" && openItems === 0) {
     return {
@@ -440,7 +444,7 @@ function readinessCopy(gate?: DataQualityGate, viewerMode = false) {
     headline: viewerMode
       ? "Current investment summary."
       : openItems > 0
-        ? `${openItems} item${openItems === 1 ? "" : "s"} need review before the score is trusted.`
+        ? `${openItems} item${openItems === 1 ? " needs" : "s need"} review before the score is trusted.`
         : "Confirm the review queue before relying on the score.",
     detail: viewerMode
       ? "The important numbers and score drivers are shown below; admin-only correction tools are hidden from this view."
