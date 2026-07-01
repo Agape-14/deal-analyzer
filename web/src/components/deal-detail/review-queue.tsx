@@ -1,23 +1,33 @@
 "use client";
 
 import * as React from "react";
-import { useRouter } from "next/navigation";
-import { AlertTriangle, Calculator, CheckCircle2, ExternalLink, FileText, Loader2, Search, X } from "lucide-react";
+import {
+  AlertTriangle,
+  Calculator,
+  CheckCircle2,
+  FileText,
+  HelpCircle,
+  Loader2,
+  Search,
+} from "lucide-react";
 import { toast } from "sonner";
-import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
+import { Card } from "@/components/ui/card";
 import { ReviewQueueEmptyState, ReviewQueueHeader, ReviewQueueSteps } from "@/components/deal-detail/review-queue-shell";
 import { api } from "@/lib/api";
 import { cn, fmtMoney, fmtMultiple, fmtPct } from "@/lib/utils";
-import type { DealDetail, FieldProvenance, ValidationFlag } from "@/lib/types";
+import type { DataQualityGate, DealDetail, FieldProvenance, ValidationFlag } from "@/lib/types";
 
-type ReviewArea = "Returns" | "Capital Stack" | "Debt" | "Construction" | "Sponsor" | "Market" | "Math" | "Source";
+type ReviewArea = "Returns" | "Capital Stack" | "Debt" | "Construction" | "Sponsor" | "Market" | "Source" | "Math";
 type Severity = "red" | "yellow";
 type Metrics = NonNullable<DealDetail["metrics"]>;
+type ReviewGate = Pick<DataQualityGate, "critical_fields" | "math_summary">;
+type FieldFormat = "pct" | "multiple" | "money" | "integer" | "text";
 
 type ReviewInput = {
   path: string;
   label: string;
+  format: FieldFormat;
   value: unknown;
   provenance?: FieldProvenance;
 };
@@ -34,150 +44,98 @@ type ReviewItem = {
   value?: unknown;
   source?: string;
   inputs?: ReviewInput[];
-  actionHref?: string;
   confirmLabel?: string;
 };
 
-type MathCheck = { check?: string; difference?: string; formula?: string };
+type MathCheck = { check?: string; difference?: string; formula?: string; message?: string };
 
 const REVIEW_LIMIT = 3;
+const BAD_SOURCE_STATUSES = new Set(["wrong", "missing", "unverifiable", "stale", "math_failed"]);
+const REVIEW_THRESHOLD = 70;
 
-const REVIEW_FIELDS = [
-  { path: "target_returns.target_irr", label: "Target IRR", format: "pct" },
-  { path: "target_returns.net_irr", label: "Net IRR", format: "pct" },
-  { path: "target_returns.target_equity_multiple", label: "Target equity multiple", format: "multiple" },
-  { path: "target_returns.net_equity_multiple", label: "Net equity multiple", format: "multiple" },
-  { path: "target_returns.target_cash_on_cash", label: "Cash-on-cash", format: "pct" },
-  { path: "target_returns.distribution_yield", label: "Distribution yield", format: "pct" },
-  { path: "deal_structure.minimum_investment", label: "Minimum investment", format: "money" },
-  { path: "deal_structure.total_project_cost", label: "Total project cost", format: "money" },
-  { path: "deal_structure.total_equity_required", label: "Equity required", format: "money" },
-  { path: "deal_structure.preferred_equity_amount", label: "Pref equity", format: "money" },
-  { path: "deal_structure.debt_amount", label: "Debt amount", format: "money" },
-  { path: "deal_structure.interest_rate", label: "Interest rate", format: "pct" },
-  { path: "deal_structure.ltv", label: "LTV", format: "pct" },
-  { path: "deal_structure.preferred_return", label: "Preferred return", format: "pct" },
-  { path: "deal_structure.gp_equity_coinvest_pct", label: "GP co-invest", format: "pct" },
-  { path: "deal_structure.gp_cash_at_risk", label: "GP cash at risk", format: "money" },
-  { path: "financial_projections.stabilized_noi", label: "Stabilized NOI", format: "money" },
-  { path: "financial_projections.entry_cap_rate", label: "Entry cap rate", format: "pct" },
-  { path: "financial_projections.exit_cap_rate", label: "Exit cap rate", format: "pct" },
-  { path: "financial_projections.occupancy_assumption", label: "Occupancy", format: "pct" },
-  { path: "financial_projections.rent_growth_assumption", label: "Rent growth", format: "pct" },
-  { path: "construction_costs.hard_costs", label: "Hard costs", format: "money" },
-  { path: "construction_costs.hard_costs_total", label: "Hard costs total", format: "money" },
-  { path: "construction_costs.soft_costs", label: "Soft costs", format: "money" },
-  { path: "construction_costs.soft_costs_total", label: "Soft costs total", format: "money" },
-  { path: "construction_costs.land_cost", label: "Land", format: "money" },
-  { path: "construction_costs.land_cost_total", label: "Land total", format: "money" },
-  { path: "construction_costs.contingency", label: "Contingency", format: "money" },
-  { path: "construction_costs.contingency_total", label: "Contingency total", format: "money" },
-  { path: "underwriting_checks.dscr", label: "DSCR", format: "multiple" },
-  { path: "underwriting_checks.yield_on_cost", label: "Yield on cost", format: "pct" },
-  { path: "sponsor_evaluation.alignment_score", label: "Alignment score", format: "integer" },
-  { path: "sponsor_evaluation.sponsor_skin_in_game", label: "Sponsor skin in game", format: "text" },
-] as const;
-
-const FALLBACK_INPUTS: Partial<Record<ReviewArea, Array<{ path: string; label: string }>>> = {
-  Returns: [
-    { path: "target_returns.target_irr", label: "Target IRR" },
-    { path: "target_returns.net_irr", label: "Net IRR" },
-    { path: "target_returns.target_cash_on_cash", label: "Cash-on-cash" },
-    { path: "target_returns.distribution_yield", label: "Distribution yield" },
-    { path: "target_returns.target_equity_multiple", label: "Equity multiple" },
-  ],
-  "Capital Stack": [
-    { path: "deal_structure.total_project_cost", label: "Total project cost" },
-    { path: "deal_structure.total_equity_required", label: "Equity required" },
-    { path: "deal_structure.preferred_equity_amount", label: "Pref equity" },
-    { path: "deal_structure.debt_amount", label: "Debt" },
-    { path: "deal_structure.preferred_return", label: "Preferred return" },
-  ],
-  Debt: [
-    { path: "underwriting_checks.dscr", label: "DSCR" },
-    { path: "deal_structure.ltv", label: "LTV" },
-    { path: "deal_structure.debt_amount", label: "Debt" },
-    { path: "deal_structure.interest_rate", label: "Interest rate" },
-    { path: "financial_projections.stabilized_noi", label: "Stabilized NOI" },
-  ],
-  Construction: [
-    { path: "construction_costs.hard_costs_total", label: "Hard costs total" },
-    { path: "construction_costs.soft_costs_total", label: "Soft costs total" },
-    { path: "construction_costs.land_cost_total", label: "Land total" },
-    { path: "construction_costs.contingency_total", label: "Contingency total" },
-    { path: "deal_structure.total_project_cost", label: "Total project cost" },
-  ],
-  Sponsor: [
-    { path: "sponsor_evaluation.alignment_score", label: "Alignment score" },
-    { path: "sponsor_evaluation.sponsor_skin_in_game", label: "Sponsor skin in game" },
-    { path: "deal_structure.gp_cash_at_risk", label: "GP cash at risk" },
-    { path: "deal_structure.gp_equity_coinvest_pct", label: "GP co-invest" },
-  ],
-  Market: [
-    { path: "financial_projections.rent_growth_assumption", label: "Rent growth" },
-    { path: "financial_projections.occupancy_assumption", label: "Occupancy" },
-  ],
+const FIELD_META: Record<string, { label: string; format: FieldFormat }> = {
+  "target_returns.target_irr": { label: "Target IRR", format: "pct" },
+  "target_returns.net_irr": { label: "Net IRR", format: "pct" },
+  "target_returns.target_equity_multiple": { label: "Equity multiple", format: "multiple" },
+  "target_returns.net_equity_multiple": { label: "Net equity multiple", format: "multiple" },
+  "target_returns.target_cash_on_cash": { label: "Cash-on-cash", format: "pct" },
+  "target_returns.distribution_yield": { label: "Distribution yield", format: "pct" },
+  "deal_structure.minimum_investment": { label: "Minimum investment", format: "money" },
+  "deal_structure.total_project_cost": { label: "Total project cost", format: "money" },
+  "deal_structure.total_equity_required": { label: "Equity required", format: "money" },
+  "deal_structure.preferred_equity_amount": { label: "Pref equity", format: "money" },
+  "deal_structure.debt_amount": { label: "Debt", format: "money" },
+  "deal_structure.interest_rate": { label: "Interest rate", format: "pct" },
+  "deal_structure.ltv": { label: "LTV", format: "pct" },
+  "deal_structure.hold_period_years": { label: "Hold period", format: "integer" },
+  "deal_structure.preferred_return": { label: "Preferred return", format: "pct" },
+  "deal_structure.gp_equity_coinvest_pct": { label: "GP co-invest", format: "pct" },
+  "deal_structure.gp_cash_at_risk": { label: "GP cash at risk", format: "money" },
+  "financial_projections.stabilized_noi": { label: "Stabilized NOI", format: "money" },
+  "financial_projections.entry_cap_rate": { label: "Entry cap rate", format: "pct" },
+  "financial_projections.exit_cap_rate": { label: "Exit cap rate", format: "pct" },
+  "financial_projections.occupancy_assumption": { label: "Occupancy", format: "pct" },
+  "financial_projections.rent_growth_assumption": { label: "Rent growth", format: "pct" },
+  "construction_costs.hard_costs": { label: "Hard costs", format: "money" },
+  "construction_costs.hard_costs_total": { label: "Hard costs total", format: "money" },
+  "construction_costs.soft_costs": { label: "Soft costs", format: "money" },
+  "construction_costs.soft_costs_total": { label: "Soft costs total", format: "money" },
+  "construction_costs.land_cost": { label: "Land", format: "money" },
+  "construction_costs.land_cost_total": { label: "Land total", format: "money" },
+  "construction_costs.contingency": { label: "Contingency", format: "money" },
+  "construction_costs.contingency_total": { label: "Contingency total", format: "money" },
+  "underwriting_checks.dscr": { label: "DSCR", format: "multiple" },
+  "underwriting_checks.yield_on_cost": { label: "Yield on cost", format: "pct" },
+  "sponsor_evaluation.alignment_score": { label: "Alignment score", format: "integer" },
+  "sponsor_evaluation.sponsor_skin_in_game": { label: "Sponsor skin in game", format: "text" },
 };
 
-const MATH_INPUTS: Array<{ test: (name: string) => boolean; area: ReviewArea; primaryPath: string; inputs: Array<{ path: string; label: string }> }> = [
+const MATH_CONFIGS: Array<{ test: (name: string) => boolean; area: ReviewArea; primary: string; inputs: string[] }> = [
   {
     test: (name) => name.includes("dscr") || name.includes("debt service"),
     area: "Debt",
-    primaryPath: "underwriting_checks.dscr",
-    inputs: [
-      { path: "underwriting_checks.dscr", label: "Reported DSCR" },
-      { path: "financial_projections.stabilized_noi", label: "NOI" },
-      { path: "deal_structure.debt_amount", label: "Debt" },
-      { path: "deal_structure.interest_rate", label: "Rate" },
-    ],
+    primary: "underwriting_checks.dscr",
+    inputs: ["underwriting_checks.dscr", "financial_projections.stabilized_noi", "deal_structure.debt_amount", "deal_structure.interest_rate"],
   },
   {
     test: (name) => name.includes("ltv"),
     area: "Debt",
-    primaryPath: "deal_structure.ltv",
-    inputs: [
-      { path: "deal_structure.ltv", label: "Reported LTV" },
-      { path: "deal_structure.debt_amount", label: "Debt" },
-      { path: "deal_structure.total_project_cost", label: "Total cost" },
-    ],
+    primary: "deal_structure.ltv",
+    inputs: ["deal_structure.ltv", "deal_structure.debt_amount", "deal_structure.total_project_cost"],
   },
   {
     test: (name) => name.includes("total project cost") && name.includes("equity"),
     area: "Capital Stack",
-    primaryPath: "deal_structure.total_project_cost",
-    inputs: [
-      { path: "deal_structure.total_project_cost", label: "Total project cost" },
-      { path: "deal_structure.total_equity_required", label: "Equity required" },
-      { path: "deal_structure.preferred_equity_amount", label: "Pref equity" },
-      { path: "deal_structure.debt_amount", label: "Debt" },
-    ],
+    primary: "deal_structure.total_project_cost",
+    inputs: ["deal_structure.total_project_cost", "deal_structure.total_equity_required", "deal_structure.debt_amount"],
   },
   {
     test: (name) => name.includes("hard") && name.includes("soft") && name.includes("land"),
     area: "Construction",
-    primaryPath: "deal_structure.total_project_cost",
+    primary: "deal_structure.total_project_cost",
     inputs: [
-      { path: "construction_costs.hard_costs", label: "Hard costs" },
-      { path: "construction_costs.hard_costs_total", label: "Hard costs total" },
-      { path: "construction_costs.soft_costs", label: "Soft costs" },
-      { path: "construction_costs.soft_costs_total", label: "Soft costs total" },
-      { path: "construction_costs.land_cost", label: "Land" },
-      { path: "construction_costs.land_cost_total", label: "Land total" },
-      { path: "construction_costs.contingency", label: "Contingency" },
-      { path: "construction_costs.contingency_total", label: "Contingency total" },
-      { path: "deal_structure.total_project_cost", label: "Total cost" },
+      "construction_costs.hard_costs",
+      "construction_costs.hard_costs_total",
+      "construction_costs.soft_costs",
+      "construction_costs.soft_costs_total",
+      "construction_costs.land_cost",
+      "construction_costs.land_cost_total",
+      "construction_costs.contingency",
+      "construction_costs.contingency_total",
+      "deal_structure.total_project_cost",
     ],
   },
   {
     test: (name) => name.includes("irr"),
     area: "Returns",
-    primaryPath: "target_returns.target_irr",
-    inputs: [
-      { path: "target_returns.target_irr", label: "Target IRR" },
-      { path: "target_returns.net_irr", label: "Net IRR" },
-      { path: "target_returns.target_cash_on_cash", label: "Cash-on-cash" },
-      { path: "target_returns.distribution_yield", label: "Distribution yield" },
-    ],
+    primary: "target_returns.target_irr",
+    inputs: ["target_returns.target_irr", "target_returns.net_irr", "target_returns.target_cash_on_cash", "target_returns.distribution_yield"],
+  },
+  {
+    test: (name) => name.includes("multiple"),
+    area: "Returns",
+    primary: "target_returns.target_equity_multiple",
+    inputs: ["target_returns.target_equity_multiple", "target_returns.net_equity_multiple"],
   },
 ];
 
@@ -187,29 +145,25 @@ export function ReviewQueue({ deal }: { deal: DealDetail }) {
   const hidden = items.slice(REVIEW_LIMIT);
   const groups = groupItems(hidden);
 
-  if (items.length === 0) {
-    return <ReviewQueueEmptyState />;
-  }
+  if (items.length === 0) return <ReviewQueueEmptyState />;
 
   return (
     <Card className="border-border/80 bg-card p-5 shadow-sm md:p-6">
       <ReviewQueueHeader visibleCount={visible.length} hiddenCount={hidden.length} />
       <ReviewQueueSteps />
-
       <div className="mt-5 space-y-3">
         {visible.map((item, index) => (
-          <ReviewRow key={item.key} item={item} index={index} dealId={deal.id} />
+          <ReviewRow key={item.key} dealId={deal.id} item={item} index={index} />
         ))}
       </div>
-
-      {groups.length > 0 ? (
+      {groups.length ? (
         <div className="mt-5 border-t border-border/60 pt-4">
           <div className="mb-2 text-[10px] uppercase tracking-[0.14em] text-muted-foreground">More issues by area</div>
           <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
             {groups.map((group) => (
-              <a key={group.area} href="#technical-details" className="flex items-center justify-between rounded-lg border border-border/70 bg-muted/20 px-3 py-2 text-xs transition-colors hover:bg-muted/40">
-                <span className="font-medium text-foreground">{group.area}</span>
-                <span className={cn("rounded-full px-2 py-0.5 font-semibold ring-1", group.red > 0 ? "bg-destructive/10 text-destructive ring-destructive/30" : "bg-warning/10 text-warning ring-warning/30")}>{group.count}</span>
+              <a key={group.area} href="#technical-details" className="flex items-center justify-between rounded-lg border border-border/70 bg-background px-3 py-2 text-xs transition-colors hover:bg-muted/60">
+                <span className="font-semibold text-foreground">{group.area}</span>
+                <span className={cn("rounded-full px-2 py-0.5 font-bold ring-1", group.red ? "bg-destructive/10 text-destructive ring-destructive/30" : "bg-warning/10 text-warning ring-warning/30")}>{group.count}</span>
               </a>
             ))}
           </div>
@@ -219,224 +173,114 @@ export function ReviewQueue({ deal }: { deal: DealDetail }) {
   );
 }
 
-function ReviewRow({ item, index, dealId }: { item: ReviewItem; index: number; dealId: number }) {
-  const Icon = item.kind === "math" ? Calculator : item.kind === "source" ? FileText : AlertTriangle;
+function ReviewRow({ dealId, item, index }: { dealId: number; item: ReviewItem; index: number }) {
   const [editing, setEditing] = React.useState(false);
-  const [sourceOpen, setSourceOpen] = React.useState(false);
   const hasInputs = Boolean(item.inputs?.length);
-  const hasSource = Boolean(item.actionHref);
+  const Icon = item.kind === "math" ? Calculator : item.kind === "source" ? FileText : AlertTriangle;
 
   return (
     <div className="overflow-hidden rounded-xl border border-border/80 bg-background">
       <div className="grid gap-4 p-4 md:grid-cols-[auto_1fr_auto] md:items-start">
-        <div className={cn("flex h-9 w-9 items-center justify-center rounded-lg text-xs font-extrabold ring-1 md:mt-0.5", item.severity === "red" ? "bg-destructive/15 text-destructive ring-destructive/30" : "bg-warning/15 text-warning ring-warning/30")}>{index + 1}</div>
+        <div className={cn("flex h-9 w-9 items-center justify-center rounded-lg text-xs font-extrabold ring-1", item.severity === "red" ? "bg-destructive/15 text-destructive ring-destructive/30" : "bg-warning/15 text-warning ring-warning/30")}>{index + 1}</div>
         <div className="min-w-0">
           <div className="flex flex-wrap items-center gap-2">
             <Icon className={cn("h-4 w-4", item.severity === "red" ? "text-destructive" : "text-warning")} />
-            <div className="text-base font-extrabold text-foreground">{item.title}</div>
+            <h4 className="text-base font-extrabold tracking-tight text-foreground">{item.title}</h4>
             <span className="rounded-md bg-muted px-1.5 py-0.5 text-[10px] font-semibold uppercase text-muted-foreground ring-1 ring-border/70">{item.area}</span>
           </div>
           <p className="mt-1 text-xs leading-relaxed text-muted-foreground">{item.detail}</p>
-          <div className="mt-3 rounded-lg border border-border/70 bg-muted/20 px-3 py-2 text-[11px] leading-relaxed text-muted-foreground">
+          <p className="mt-2 rounded-lg border border-border/70 bg-muted/20 px-3 py-2 text-[11px] leading-relaxed text-muted-foreground">
             <span className="font-semibold text-foreground">Why this matters: </span>
             {whyThisMatters(item)}
-          </div>
+          </p>
           {(item.value !== undefined || item.source) && (
             <div className="mt-2 flex flex-wrap gap-2 text-[11px] text-muted-foreground">
-              {item.value !== undefined ? <span>Current: <span className="text-foreground">{formatReviewValue(item.value, item.path)}</span></span> : null}
-              {item.source ? <span>Source: <span className="text-foreground">{item.source}</span></span> : null}
+              {item.value !== undefined ? <span>Current: <span className="font-bold text-foreground">{formatReviewValue(item.value, item.path)}</span></span> : null}
+              {item.source ? <span>Source: <span className="font-medium text-foreground">{item.source}</span></span> : null}
             </div>
           )}
           {hasInputs && !editing ? <ReviewInputSummary inputs={item.inputs ?? []} /> : null}
         </div>
-        <ReviewActions
-          item={item}
-          dealId={dealId}
-          editing={editing}
-          sourceOpen={sourceOpen}
-          onEdit={hasInputs ? () => setEditing((value) => !value) : undefined}
-          onSourceToggle={hasSource ? () => setSourceOpen((value) => !value) : undefined}
-        />
+        <div className="flex flex-wrap items-center gap-2 md:min-w-[23rem] md:justify-end md:pt-6">
+          {hasInputs ? (
+            <Button size="sm" variant={editing ? "secondary" : "outline"} onClick={() => setEditing((value) => !value)}>
+              {editing ? "Hide values" : "Edit values"}
+            </Button>
+          ) : null}
+          <ResolveButton dealId={dealId} item={item} action="confirmed" label={item.confirmLabel ?? "Confirm"} />
+          <ResolveButton dealId={dealId} item={item} action="unsure" label="Mark unsure" variant="outline" />
+          {item.path ? (
+            <Button size="sm" variant="outline" asChild>
+              <a href={sourceHref(item.path)}><Search className="h-3.5 w-3.5" />Inspect source</a>
+            </Button>
+          ) : null}
+        </div>
       </div>
-      {sourceOpen && hasSource ? (
-        <SourceReviewPanel
-          item={item}
-          dealId={dealId}
-          onClose={() => setSourceOpen(false)}
-          onEdit={hasInputs ? () => setEditing(true) : undefined}
-        />
-      ) : null}
       {editing && hasInputs ? <ReviewInputEditor dealId={dealId} item={item} onDone={() => setEditing(false)} /> : null}
     </div>
   );
 }
 
-function ReviewActions({
-  item,
+function ResolveButton({
   dealId,
-  editing,
-  sourceOpen,
-  onEdit,
-  onSourceToggle,
+  item,
+  action,
+  label,
+  variant = "default",
 }: {
-  item: ReviewItem;
   dealId: number;
-  editing?: boolean;
-  sourceOpen?: boolean;
-  onEdit?: () => void;
-  onSourceToggle?: () => void;
+  item: ReviewItem;
+  action: "confirmed" | "unsure";
+  label: string;
+  variant?: React.ComponentProps<typeof Button>["variant"];
 }) {
-  const router = useRouter();
   const [busy, setBusy] = React.useState(false);
 
-  async function confirmReviewItem() {
+  async function resolve() {
     setBusy(true);
     try {
-      await api.post(`/api/deals/${dealId}/reviews/resolve`, { key: item.key, action: item.confirmLabel ?? "confirmed" });
-      toast.success("Review item cleared", { description: "This item was confirmed and removed from Needs review." });
-      router.refresh();
-    } catch (e) {
-      toast.error("Could not confirm review item", { description: errorDetail(e) });
+      await api.post(`/api/deals/${dealId}/reviews/resolve`, {
+        key: item.key,
+        action,
+        note: action === "unsure" ? "Marked unsure from the admin review queue. Do not treat this item as verified." : "Confirmed from the admin review queue.",
+      });
+      toast.success(action === "unsure" ? "Marked unsure" : "Review item cleared", {
+        description: action === "unsure" ? "The item is removed from the checklist and kept in the audit trail as uncertain." : "The item was confirmed and removed from Needs review.",
+      });
+      window.location.reload();
+    } catch (error) {
+      toast.error("Could not update review item", { description: errorDetail(error) });
     } finally {
       setBusy(false);
     }
   }
 
   return (
-    <div className="flex flex-wrap items-center gap-2 md:min-w-[18rem] md:justify-end md:pt-7">
-      {onEdit ? (
-        <Button size="sm" variant={editing ? "secondary" : "outline"} onClick={onEdit} disabled={busy}>
-          {editing ? "Hide values" : "Edit values"}
-        </Button>
-      ) : null}
-      <Button size="sm" onClick={confirmReviewItem} disabled={busy}>
-        {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <CheckCircle2 className="h-3.5 w-3.5" />}
-        {item.confirmLabel ?? "Confirm"}
-      </Button>
-      {onSourceToggle ? (
-        <Button size="sm" variant={sourceOpen ? "secondary" : "outline"} onClick={onSourceToggle} disabled={busy}>
-          <Search className="h-3.5 w-3.5" />
-          {sourceOpen ? "Close source" : "Open source"}
-        </Button>
-      ) : null}
-    </div>
-  );
-}
-
-function SourceReviewPanel({ item, dealId, onClose, onEdit }: { item: ReviewItem; dealId: number; onClose: () => void; onEdit?: () => void }) {
-  const router = useRouter();
-  const [busy, setBusy] = React.useState(false);
-  const firstSourceInput = item.inputs?.find((input) => input.provenance?.source_doc_name || input.provenance?.verification_note || input.provenance?.correction_note);
-  const provenance = firstSourceInput?.provenance;
-  const sourceName = item.source ?? sourceLabel(provenance) ?? "No source captured";
-  const evidence = provenance ? sourceSnippet(provenance) : "";
-  const location = provenance ? sourceLocation(provenance) : "";
-
-  async function confirmFromDrawer() {
-    setBusy(true);
-    try {
-      await api.post(`/api/deals/${dealId}/reviews/resolve`, { key: item.key, action: item.confirmLabel ?? "confirmed" });
-      toast.success("Review item cleared", { description: "This item was confirmed and removed from Needs review." });
-      onClose();
-      router.refresh();
-    } catch (e) {
-      toast.error("Could not confirm review item", { description: errorDetail(e) });
-    } finally {
-      setBusy(false);
-    }
-  }
-
-  return (
-    <div className="fixed inset-0 z-50">
-      <button className="absolute inset-0 bg-background/45 backdrop-blur-sm" onClick={onClose} aria-label="Close source review" />
-      <aside className="absolute right-0 top-0 flex h-full w-full max-w-xl flex-col border-l border-border bg-background shadow-2xl">
-        <div className="border-b border-border bg-card px-5 py-4">
-          <div className="flex items-start justify-between gap-3">
-            <div>
-              <div className="text-[10px] font-extrabold uppercase tracking-[0.14em] text-primary">Source Review</div>
-              <h3 className="mt-1 text-lg font-bold text-foreground">{item.title}</h3>
-              <p className="mt-1 text-xs leading-relaxed text-muted-foreground">Inspect the cited evidence, edit the value if needed, then confirm to clear this checklist item.</p>
-            </div>
-            <Button size="icon" variant="ghost" onClick={onClose} aria-label="Close source review">
-              <X className="h-4 w-4" />
-            </Button>
-          </div>
-        </div>
-
-        <div className="flex-1 space-y-4 overflow-y-auto p-5">
-          <div className="rounded-xl border border-border bg-card p-4">
-            <div className="flex items-center gap-2 text-xs font-semibold text-foreground">
-              <FileText className="h-3.5 w-3.5 text-primary" />
-              Cited source
-            </div>
-            <div className="mt-2 text-sm font-semibold text-foreground">{sourceName}</div>
-            {location ? <div className="mt-0.5 text-xs text-muted-foreground">{location}</div> : null}
-            {item.value !== undefined ? (
-              <div className="mt-3 rounded-lg border border-border/70 bg-muted/20 px-3 py-2 text-xs text-muted-foreground">
-                Current value: <span className="font-semibold text-foreground">{formatReviewValue(item.value, item.path)}</span>
-              </div>
-            ) : null}
-          </div>
-
-          <div className="rounded-xl border border-primary/25 bg-primary/5 p-4">
-            <div className="text-xs font-semibold text-foreground">Evidence to check</div>
-            <div className="mt-2 text-sm leading-relaxed text-foreground">
-              {evidence || "No exact excerpt was captured. Open the citation and use the source location above to inspect the document."}
-            </div>
-          </div>
-
-          <div className="rounded-xl border border-border bg-card p-4 text-xs leading-relaxed text-muted-foreground">
-            <span className="font-semibold text-foreground">Why this matters: </span>
-            {whyThisMatters(item)}
-          </div>
-        </div>
-
-        <div className="border-t border-border bg-card p-4">
-          <div className="grid gap-2 sm:grid-cols-3">
-            {onEdit ? (
-              <Button variant="secondary" onClick={onEdit}>
-                Edit values
-              </Button>
-            ) : null}
-            {item.actionHref ? (
-              <Button variant="outline" asChild>
-                <a href={item.actionHref}>
-                  <ExternalLink className="h-3.5 w-3.5" />
-                  Highlight citation
-                </a>
-              </Button>
-            ) : null}
-            <Button onClick={confirmFromDrawer} disabled={busy}>
-              {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <CheckCircle2 className="h-3.5 w-3.5" />}
-              Confirm
-            </Button>
-          </div>
-        </div>
-      </aside>
-    </div>
+    <Button size="sm" variant={variant} onClick={resolve} disabled={busy}>
+      {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : action === "unsure" ? <HelpCircle className="h-3.5 w-3.5" /> : <CheckCircle2 className="h-3.5 w-3.5" />}
+      {label}
+    </Button>
   );
 }
 
 function ReviewInputSummary({ inputs }: { inputs: ReviewInput[] }) {
-  const visible = inputs.slice(0, 8);
   return (
     <div className="mt-3 rounded-lg border border-border/70 bg-muted/20 p-3">
-      <div className="mb-1.5 text-[10px] font-extrabold uppercase tracking-[0.14em] text-muted-foreground">Values to check</div>
+      <div className="mb-1.5 text-[10px] font-extrabold uppercase tracking-[0.14em] text-muted-foreground">Values this row depends on</div>
       <div className="flex flex-wrap gap-1.5">
-        {visible.map((input) => (
-          <span key={input.path} className="rounded-md border border-border bg-background px-2 py-1 text-[11px] font-medium text-muted-foreground">
+        {inputs.slice(0, 8).map((input) => (
+          <span key={input.path} className="rounded-md border border-border bg-background px-2 py-1 text-[11px] text-muted-foreground">
             {input.label}: <span className="font-bold text-foreground">{formatReviewValue(input.value, input.path)}</span>
           </span>
         ))}
-        {inputs.length > visible.length ? <span className="rounded-md border border-border bg-background px-2 py-1 text-[11px] text-muted-foreground">+{inputs.length - visible.length} more</span> : null}
+        {inputs.length > 8 ? <span className="rounded-md border border-border bg-background px-2 py-1 text-[11px] text-muted-foreground">+{inputs.length - 8} more</span> : null}
       </div>
     </div>
   );
 }
 
 function ReviewInputEditor({ dealId, item, onDone }: { dealId: number; item: ReviewItem; onDone?: () => void }) {
-  const router = useRouter();
-  const inputs = (item.inputs ?? []).filter((input) => isEditableReviewInput(input));
+  const inputs = (item.inputs ?? []).filter((input) => isEditableValue(input.value));
   const [drafts, setDrafts] = React.useState<Record<string, string>>(() => Object.fromEntries(inputs.map((input) => [input.path, scalarToInput(input.value)])));
   const [busy, setBusy] = React.useState(false);
 
@@ -445,41 +289,38 @@ function ReviewInputEditor({ dealId, item, onDone }: { dealId: number; item: Rev
   }, [item.key]);
 
   async function saveAll() {
-    const edits = inputs
-      .map((input) => ({ path: input.path, value: parseDraftValue(drafts[input.path] ?? "", input.value), lock: true }))
-      .filter((edit) => edit.value !== null);
-
-    if (edits.length === 0) {
-      toast.error("Nothing to save", { description: "Enter or confirm at least one value." });
+    const edits = inputs.map((input) => ({ path: input.path, value: parseDraftValue(drafts[input.path] ?? "", input.value), lock: true }));
+    if (!edits.length) {
+      toast.error("Nothing to save", { description: "This item does not have editable values." });
       return;
     }
 
     setBusy(true);
     try {
-      await api.post(`/api/deals/${dealId}/fields/batch-edit`, { edits });
-      await api.post(`/api/deals/${dealId}/reviews/resolve`, {
-        key: item.key,
-        action: "inputs_saved",
-        note: `${edits.length} field${edits.length === 1 ? "" : "s"} reviewed from the Needs review queue.`,
+      await api.post(`/api/deals/${dealId}/fields/batch-edit`, {
+        edits,
+        review_key: item.key,
+        review_action: "inputs_saved",
+        review_note: `${edits.length} field${edits.length === 1 ? "" : "s"} reviewed from the Needs review queue.`,
       });
       toast.success("Inputs saved and item cleared", { description: `${edits.length} field${edits.length === 1 ? "" : "s"} updated.` });
       onDone?.();
-      router.refresh();
-    } catch (e) {
-      toast.error("Could not save inputs", { description: errorDetail(e) });
+      window.location.reload();
+    } catch (error) {
+      toast.error("Could not save inputs", { description: errorDetail(error) });
     } finally {
       setBusy(false);
     }
   }
 
-  if (inputs.length === 0) return null;
+  if (!inputs.length) return null;
 
   return (
     <div className="border-t border-border/70 bg-primary/5 p-4">
-      <div className="mb-2 flex items-center justify-between gap-3">
+      <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
         <div>
           <div className="text-xs font-extrabold text-foreground">Edit or confirm values</div>
-          <p className="mt-0.5 text-[11px] text-muted-foreground">Update wrong values, or save unchanged values to approve and clear this item.</p>
+          <p className="mt-0.5 text-[11px] text-muted-foreground">Update wrong values, or save unchanged values to approve and clear this row.</p>
         </div>
         <Button size="sm" onClick={saveAll} disabled={busy}>
           {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <CheckCircle2 className="h-3.5 w-3.5" />}
@@ -491,11 +332,11 @@ function ReviewInputEditor({ dealId, item, onDone }: { dealId: number; item: Rev
           <div key={input.path} className="rounded-lg border border-border/70 bg-background/80 p-2.5">
             <div className="mb-1 flex items-center justify-between gap-2">
               <div className="text-[11px] font-bold text-muted-foreground">{input.label}</div>
-              <a href={sourceHref(input.path)} className="text-[11px] text-primary hover:underline">source</a>
+              <a href={sourceHref(input.path)} className="text-[11px] font-semibold text-primary hover:underline">source</a>
             </div>
             <input
               value={drafts[input.path] ?? ""}
-              onChange={(e) => setDrafts((prev) => ({ ...prev, [input.path]: e.target.value }))}
+              onChange={(event) => setDrafts((prev) => ({ ...prev, [input.path]: event.target.value }))}
               placeholder="missing or 65.95M"
               className="h-8 w-full rounded-md border border-border bg-background px-2 text-xs outline-none focus:ring-2 focus:ring-ring"
             />
@@ -507,28 +348,28 @@ function ReviewInputEditor({ dealId, item, onDone }: { dealId: number; item: Rev
   );
 }
 
-function buildReviewItems(deal: DealDetail): ReviewItem[] {
+export function buildReviewItems(deal: DealDetail): ReviewItem[] {
   const metrics = (deal.metrics ?? {}) as Metrics;
-  const gate = (deal.scores?.data_quality ?? metrics._data_quality) as { math_summary?: { blocking?: MathCheck[] } } | undefined;
-  const provenance = (metrics._provenance ?? {}) as Record<string, FieldProvenance>;
-  const flags = (Array.isArray(metrics.validation_flags) ? metrics.validation_flags : []) as ValidationFlag[];
-  const items: ReviewItem[] = [];
-
-  items.push(...mathItems(gate, metrics, provenance));
-  items.push(...flagItems(flags, metrics, provenance));
-  items.push(...sourceItems(metrics, provenance));
-
+  const gate = (deal.scores?.data_quality ?? metrics._data_quality) as ReviewGate | undefined;
+  const provenance = metrics._provenance ?? {};
+  const flags = Array.isArray(metrics.validation_flags) ? metrics.validation_flags : [];
+  const items = [
+    ...mathItems(gate, metrics, provenance),
+    ...flagItems(flags, metrics, provenance),
+    ...criticalFieldItems(gate, metrics, provenance),
+    ...sourceItems(metrics, provenance),
+  ];
   return dedupeItems(items)
     .filter((item) => !isReviewResolved(metrics, item.key))
-    .sort((a, b) => b.priority - a.priority)
-    .slice(0, 12);
+    .sort((a, b) => b.priority - a.priority);
 }
 
-function mathItems(gate: { math_summary?: { blocking?: MathCheck[] } } | undefined, metrics: Metrics, provenance: Record<string, FieldProvenance>): ReviewItem[] {
-  const checks = (gate?.math_summary?.blocking ?? []).filter((check) => !mathCheckPassesNow(check, metrics));
+function mathItems(gate: ReviewGate | undefined, metrics: Metrics, provenance: Record<string, FieldProvenance>): ReviewItem[] {
+  const checks = blockingMathChecks(gate, metrics).filter((check) => !mathCheckLooksResolved(check, metrics));
   return checks.map((check, index) => {
-    const config = findMathConfig(check.check ?? "");
-    const inputs = config?.inputs.map((input) => ({ ...input, value: getPath(metrics, input.path), provenance: provenance[input.path] }));
+    const config = mathConfig(check.check ?? "");
+    const path = config?.primary;
+    const inputs = (config?.inputs ?? []).map((inputPath) => reviewInput(inputPath, metrics, provenance)).filter(Boolean) as ReviewInput[];
     return {
       key: `math:${check.check ?? index}`,
       priority: 100 - index,
@@ -536,137 +377,117 @@ function mathItems(gate: { math_summary?: { blocking?: MathCheck[] } } | undefin
       area: config?.area ?? "Math",
       severity: "red",
       title: check.check || "Math check failed",
-      detail: [check.difference, check.formula].filter(Boolean).join(" - ") || "A saved calculation does not reconcile.",
-      path: config?.primaryPath,
-      value: config?.primaryPath ? getPath(metrics, config.primaryPath) : undefined,
-      source: config?.primaryPath ? sourceLabel(provenance[config.primaryPath]) : undefined,
+      detail: [check.difference, check.formula, check.message].filter(Boolean).join(" - ") || "A saved calculation does not reconcile.",
+      path,
+      value: path ? getPath(metrics, path) : undefined,
+      source: path ? sourceLabel(provenance[path]) : undefined,
       inputs,
-      actionHref: config?.primaryPath ? sourceHref(config.primaryPath) : "#technical-details",
     };
   });
 }
 
 function flagItems(flags: ValidationFlag[], metrics: Metrics, provenance: Record<string, FieldProvenance>): ReviewItem[] {
   return flags
-    .filter((flag) => ["red", "yellow"].includes(String(flag.severity).toLowerCase()))
+    .filter((flag) => ["red", "yellow"].includes(String(flag.severity)))
     .map((flag, index) => {
-      const path = extractBestPath(flag.message);
+      const path = bestPathFromMessage(flag.message);
       const area = areaForFlag(flag, path);
-      const inputs = reviewInputsForMessage(flag.message, path, metrics, provenance) ?? fallbackInputs(area, metrics, provenance);
-      const sourcePath = path ?? firstSourcedInputPath(inputs, provenance);
-      const qualitative = !path;
+      const inputs = inputsForMessage(flag.message, path, area, metrics, provenance);
       return {
         key: `flag:${flag.category}:${path ?? flag.message}`,
-        priority: flag.severity === "red" ? 80 - index : 45 - index,
+        priority: flag.severity === "red" ? 82 - index : 45 - index,
         kind: "flag",
         area,
         severity: flag.severity === "red" ? "red" : "yellow",
-        title: path ? `${humanizePath(path)} needs review` : `${flag.category} needs review`,
-        detail: simplifyMessage(flag.message),
+        title: `${titleCase(flag.category || area)} needs review`,
+        detail: flag.message,
         path,
         value: path ? getPath(metrics, path) : undefined,
         source: path ? sourceLabel(provenance[path]) : undefined,
         inputs,
-        actionHref: sourcePath ? sourceHref(sourcePath) : undefined,
-        confirmLabel: qualitative ? "Confirm note" : "Confirm",
-      };
+        confirmLabel: "Accept note",
+      } satisfies ReviewItem;
+    });
+}
+
+function criticalFieldItems(gate: ReviewGate | undefined, metrics: Metrics, provenance: Record<string, FieldProvenance>): ReviewItem[] {
+  const fields = Array.isArray(gate?.critical_fields) ? gate.critical_fields : [];
+  return fields
+    .filter((field) => !field.verified && field.severity !== "ok")
+    .map((field, index) => {
+      const path = field.actual_path || field.path;
+      const input = reviewInput(path, metrics, provenance);
+      return {
+        key: `field:${path}`,
+        priority: field.severity === "blocker" ? 78 - index : 48 - index,
+        kind: "source",
+        area: areaForPath(path),
+        severity: field.severity === "blocker" ? "red" : "yellow",
+        title: `${field.label || humanizePath(path)} needs review`,
+        detail: field.reason || `${field.label || humanizePath(path)} needs a human check.`,
+        path,
+        value: getPath(metrics, path),
+        source: sourceLabel(provenance[path]),
+        inputs: input ? [input] : undefined,
+      } satisfies ReviewItem;
     });
 }
 
 function sourceItems(metrics: Metrics, provenance: Record<string, FieldProvenance>): ReviewItem[] {
-  const out: ReviewItem[] = [];
-  for (const field of REVIEW_FIELDS) {
-    const prov = provenance[field.path];
-    const value = getPath(metrics, field.path);
-    if (!prov || prov.locked) continue;
-    const status = String(prov.status ?? "").toLowerCase();
-    const confidence = typeof prov.confidence === "number" ? prov.confidence : null;
-    const conflictCount = Array.isArray(prov.conflict) ? prov.conflict.length : 0;
-    const needsReview = conflictCount > 1 || ["wrong", "missing", "unverifiable", "stale"].includes(status) || (confidence !== null && confidence < 85);
-    if (!needsReview) continue;
-    out.push({
-      key: `source:${field.path}`,
-      priority: conflictCount > 1 || status === "wrong" ? 75 : confidence !== null ? 40 - confidence / 10 : 35,
+  return Object.entries(provenance).flatMap(([path, source], index) => {
+    const status = String(source.status ?? "").toLowerCase();
+    const conflicts = Array.isArray(source.conflict) ? source.conflict.length : 0;
+    const lowConfidence = typeof source.confidence === "number" && source.confidence < REVIEW_THRESHOLD;
+    if (!BAD_SOURCE_STATUSES.has(status) && conflicts <= 1 && !lowConfidence) return [];
+    const input = reviewInput(path, metrics, provenance);
+    return [{
+      key: `source:${path}`,
+      priority: BAD_SOURCE_STATUSES.has(status) || conflicts > 1 ? 70 - index : 34 - index,
       kind: "source",
-      area: areaForPath(field.path),
-      severity: conflictCount > 1 || status === "wrong" || status === "missing" ? "red" : "yellow",
-      title: `${field.label} needs review`,
-      detail: sourceDetail(prov),
-      path: field.path,
-      value,
-      source: sourceLabel(prov),
-      inputs: [{ path: field.path, label: field.label, value, provenance: prov }],
-      actionHref: sourceHref(field.path),
-    });
-  }
-  return out;
+      area: areaForPath(path),
+      severity: BAD_SOURCE_STATUSES.has(status) || conflicts > 1 ? "red" : "yellow",
+      title: `${humanizePath(path)} needs review`,
+      detail: sourceDetail(source),
+      path,
+      value: getPath(metrics, path),
+      source: sourceLabel(source),
+      inputs: input ? [input] : undefined,
+    } satisfies ReviewItem];
+  });
 }
 
-function reviewInputsForMessage(message: string, primaryPath: string | undefined, metrics: Metrics, provenance: Record<string, FieldProvenance>): ReviewInput[] | undefined {
+function blockingMathChecks(gate: ReviewGate | undefined, metrics: Metrics): MathCheck[] {
+  const fromGate = gate?.math_summary?.blocking;
+  if (Array.isArray(fromGate)) return fromGate as MathCheck[];
+  const fromMetrics = metrics._math_checks?.summary?.blocking;
+  return Array.isArray(fromMetrics) ? (fromMetrics as MathCheck[]) : [];
+}
+
+function reviewInput(path: string, metrics: Metrics, provenance: Record<string, FieldProvenance>): ReviewInput | null {
+  const meta = FIELD_META[path] ?? { label: humanizePath(path), format: guessFormat(path) };
+  return { path, label: meta.label, format: meta.format, value: getPath(metrics, path), provenance: provenance[path] };
+}
+
+function inputsForMessage(message: string, path: string | undefined, area: ReviewArea, metrics: Metrics, provenance: Record<string, FieldProvenance>): ReviewInput[] | undefined {
   const paths = new Set<string>();
-  if (primaryPath) paths.add(primaryPath);
-  for (const path of message.match(/[a-z_]+\.[a-z_]+/g) ?? []) {
-    if (REVIEW_FIELDS.some((field) => field.path === path)) paths.add(path);
+  if (path) paths.add(path);
+  for (const match of message.match(/[a-z_]+\.[a-z_]+/g) ?? []) {
+    if (FIELD_META[match]) paths.add(match);
   }
-  const inputs = Array.from(paths).map((path) => ({ path, label: humanizePath(path), value: getPath(metrics, path), provenance: provenance[path] }));
-  return inputs.length > 0 ? inputs : undefined;
-}
-
-function fallbackInputs(area: ReviewArea, metrics: Metrics, provenance: Record<string, FieldProvenance>): ReviewInput[] | undefined {
-  const definitions = FALLBACK_INPUTS[area];
-  if (!definitions?.length) return undefined;
-  const inputs = definitions.map((input) => ({ ...input, value: getPath(metrics, input.path), provenance: provenance[input.path] }));
-  return inputs.length > 0 ? inputs : undefined;
-}
-
-function mathCheckPassesNow(check: MathCheck, metrics: Metrics): boolean {
-  const name = normalizeMathName(check.check ?? "");
-  if (differenceLooksResolved(check.difference)) return true;
-  if (name.includes("dscr") || name.includes("debt service")) {
-    const reported = numberValue(getPath(metrics, "underwriting_checks.dscr"));
-    const noi = numberValue(getPath(metrics, "financial_projections.stabilized_noi"));
-    const debt = numberValue(getPath(metrics, "deal_structure.debt_amount"));
-    const rate = numberValue(getPath(metrics, "deal_structure.interest_rate"));
-    if (reported === null || noi === null || debt === null || rate === null || rate <= 0) return false;
-    return Math.abs(noi / (debt * (rate / 100)) - reported) < 0.05;
+  if (paths.size === 0) {
+    for (const fallback of fallbackPaths(area)) paths.add(fallback);
   }
-  if (name.includes("ltv")) return valuesWithinFormula(metrics, "deal_structure.ltv", "deal_structure.debt_amount", "deal_structure.total_project_cost", 0.5, 100);
-  if (name.includes("irr")) return valuesWithin(metrics, "target_returns.target_irr", "target_returns.net_irr", 0.25);
-  if (name.includes("multiple")) return valuesWithin(metrics, "target_returns.target_equity_multiple", "target_returns.net_equity_multiple", 0.02);
-  return false;
+  const inputs = Array.from(paths).map((itemPath) => reviewInput(itemPath, metrics, provenance)).filter(Boolean) as ReviewInput[];
+  return inputs.length ? inputs : undefined;
 }
 
-function valuesWithin(metrics: Metrics, leftPath: string, rightPath: string, tolerance: number): boolean {
-  const left = numberValue(getPath(metrics, leftPath));
-  const right = numberValue(getPath(metrics, rightPath));
-  return left !== null && right !== null && Math.abs(left - right) <= tolerance;
-}
-
-function valuesWithinFormula(metrics: Metrics, reportedPath: string, numeratorPath: string, denominatorPath: string, tolerance: number, multiplier = 1): boolean {
-  const reported = numberValue(getPath(metrics, reportedPath));
-  const numerator = numberValue(getPath(metrics, numeratorPath));
-  const denominator = numberValue(getPath(metrics, denominatorPath));
-  return reported !== null && numerator !== null && denominator !== null && denominator > 0 && Math.abs((numerator / denominator) * multiplier - reported) <= tolerance;
-}
-
-function differenceLooksResolved(difference?: string): boolean {
-  const text = String(difference ?? "").toLowerCase();
-  const percent = text.match(/([0-9]+(?:\.[0-9]+)?)%\s+off/);
-  if (!percent) return false;
-  const n = Number(percent[1]);
-  return Number.isFinite(n) && n <= 0.05;
-}
-
-function isReviewResolved(metrics: Metrics, key: string): boolean {
-  const resolved = metrics._review_resolutions;
-  if (!resolved || typeof resolved !== "object") return false;
-  const map = resolved as Record<string, unknown>;
-  return isResolvedEntry(map[key]) || isResolvedEntry(map[reviewResolutionKey(key)]);
-}
-
-function isResolvedEntry(value: unknown): boolean {
-  if (value === true) return true;
-  return Boolean(value && typeof value === "object" && (value as Record<string, unknown>).resolved === true);
+function fallbackPaths(area: ReviewArea): string[] {
+  if (area === "Returns") return ["target_returns.target_irr", "target_returns.net_irr", "target_returns.target_equity_multiple", "target_returns.net_equity_multiple"];
+  if (area === "Debt") return ["underwriting_checks.dscr", "deal_structure.ltv", "deal_structure.debt_amount", "deal_structure.interest_rate"];
+  if (area === "Construction") return ["construction_costs.hard_costs", "construction_costs.soft_costs", "construction_costs.land_cost", "construction_costs.contingency", "deal_structure.total_project_cost"];
+  if (area === "Sponsor") return ["sponsor_evaluation.alignment_score", "sponsor_evaluation.sponsor_skin_in_game"];
+  if (area === "Market") return ["financial_projections.entry_cap_rate", "financial_projections.exit_cap_rate", "financial_projections.occupancy_assumption"];
+  return ["deal_structure.total_project_cost", "deal_structure.total_equity_required", "deal_structure.debt_amount"];
 }
 
 function dedupeItems(items: ReviewItem[]): ReviewItem[] {
@@ -680,25 +501,91 @@ function dedupeItems(items: ReviewItem[]): ReviewItem[] {
 }
 
 function groupItems(items: ReviewItem[]) {
-  const by = new Map<ReviewArea, { area: ReviewArea; count: number; red: number }>();
+  const byArea = new Map<ReviewArea, { area: ReviewArea; count: number; red: number }>();
   for (const item of items) {
-    const group = by.get(item.area) ?? { area: item.area, count: 0, red: 0 };
+    const group = byArea.get(item.area) ?? { area: item.area, count: 0, red: 0 };
     group.count += 1;
     if (item.severity === "red") group.red += 1;
-    by.set(item.area, group);
+    byArea.set(item.area, group);
   }
-  return Array.from(by.values()).sort((a, b) => b.red - a.red || b.count - a.count);
+  return Array.from(byArea.values()).sort((a, b) => b.red - a.red || b.count - a.count);
+}
+
+function isReviewResolved(metrics: Metrics, key: string): boolean {
+  const resolutions = metrics._review_resolutions;
+  if (!resolutions || typeof resolutions !== "object") return false;
+  const map = resolutions as Record<string, unknown>;
+  return isResolvedEntry(map[key]) || isResolvedEntry(map[reviewResolutionKey(key)]);
+}
+
+function isResolvedEntry(value: unknown): boolean {
+  return value === true || Boolean(value && typeof value === "object" && (value as Record<string, unknown>).resolved === true);
+}
+
+function mathCheckLooksResolved(check: MathCheck, metrics: Metrics): boolean {
+  const difference = String(check.difference ?? check.message ?? "");
+  const match = difference.toLowerCase().match(/([0-9]+(?:\.[0-9]+)?)%\s+off/);
+  if (match && Number(match[1]) <= 0.05) return true;
+  const name = normalize(check.check ?? "");
+  if (name.includes("dscr") || name.includes("debt service")) {
+    const reported = numberValue(getPath(metrics, "underwriting_checks.dscr"));
+    const noi = numberValue(getPath(metrics, "financial_projections.stabilized_noi"));
+    const debt = numberValue(getPath(metrics, "deal_structure.debt_amount"));
+    const rate = numberValue(getPath(metrics, "deal_structure.interest_rate"));
+    return reported != null && noi != null && debt != null && rate != null && rate > 0 && Math.abs(noi / (debt * (rate / 100)) - reported) <= 0.05;
+  }
+  if (name.includes("ltv")) return formulaWithin(metrics, "deal_structure.ltv", "deal_structure.debt_amount", "deal_structure.total_project_cost", 0.5, 100);
+  if (name.includes("irr")) return valuesWithin(metrics, "target_returns.target_irr", "target_returns.net_irr", 0.25);
+  if (name.includes("multiple")) return valuesWithin(metrics, "target_returns.target_equity_multiple", "target_returns.net_equity_multiple", 0.02);
+  if (name.includes("total project cost") && name.includes("equity")) {
+    const total = numberValue(getPath(metrics, "deal_structure.total_project_cost"));
+    const equity = numberValue(getPath(metrics, "deal_structure.total_equity_required"));
+    const debt = numberValue(getPath(metrics, "deal_structure.debt_amount"));
+    return total != null && equity != null && debt != null && Math.abs(total - (equity + debt)) <= 1;
+  }
+  if (name.includes("hard") && name.includes("soft") && name.includes("land")) {
+    const total = numberValue(getPath(metrics, "deal_structure.total_project_cost"));
+    const hard = firstNumber(metrics, ["construction_costs.hard_costs", "construction_costs.hard_costs_total"]);
+    const soft = firstNumber(metrics, ["construction_costs.soft_costs", "construction_costs.soft_costs_total"]);
+    const land = firstNumber(metrics, ["construction_costs.land_cost", "construction_costs.land_cost_total"]);
+    const contingency = firstNumber(metrics, ["construction_costs.contingency", "construction_costs.contingency_total"]) ?? 0;
+    return total != null && hard != null && soft != null && land != null && Math.abs(total - (hard + soft + land + contingency)) <= 1;
+  }
+  return false;
+}
+
+function valuesWithin(metrics: Metrics, leftPath: string, rightPath: string, tolerance: number): boolean {
+  const left = numberValue(getPath(metrics, leftPath));
+  const right = numberValue(getPath(metrics, rightPath));
+  return left != null && right != null && Math.abs(left - right) <= tolerance;
+}
+
+function formulaWithin(metrics: Metrics, reportedPath: string, numeratorPath: string, denominatorPath: string, tolerance: number, multiplier = 1): boolean {
+  const reported = numberValue(getPath(metrics, reportedPath));
+  const numerator = numberValue(getPath(metrics, numeratorPath));
+  const denominator = numberValue(getPath(metrics, denominatorPath));
+  return reported != null && numerator != null && denominator != null && denominator > 0 && Math.abs((numerator / denominator) * multiplier - reported) <= tolerance;
+}
+
+function mathConfig(name: string) {
+  const normalized = normalize(name);
+  return MATH_CONFIGS.find((config) => config.test(normalized));
+}
+
+function bestPathFromMessage(message: string): string | undefined {
+  const matches = message.match(/[a-z_]+\.[a-z_]+/g) ?? [];
+  return matches.find((path) => path.includes("target_")) ?? matches.find((path) => path.includes("net_")) ?? matches.find((path) => FIELD_META[path]) ?? matches[0];
 }
 
 function areaForFlag(flag: ValidationFlag, path?: string): ReviewArea {
-  const cat = String(flag.category ?? "").toLowerCase();
-  if (cat.includes("return") || path?.startsWith("target_returns")) return "Returns";
-  if (cat.includes("leverage") || cat.includes("debt") || path?.includes("debt") || path?.includes("ltv")) return "Debt";
-  if (cat.includes("sponsor") || cat.includes("alignment")) return "Sponsor";
-  if (cat.includes("market")) return "Market";
-  if (cat.includes("source")) return "Source";
-  if (cat.includes("benchmark") || cat.includes("underwriting")) return "Capital Stack";
-  return path ? areaForPath(path) : "Source";
+  const category = String(flag.category ?? "").toLowerCase();
+  if (category.includes("return") || path?.startsWith("target_returns")) return "Returns";
+  if (category.includes("debt") || category.includes("leverage") || path?.includes("debt") || path?.includes("ltv")) return "Debt";
+  if (category.includes("sponsor") || category.includes("alignment")) return "Sponsor";
+  if (category.includes("market")) return "Market";
+  if (category.includes("source")) return "Source";
+  if (category.includes("construction") || path?.startsWith("construction_costs")) return "Construction";
+  return path ? areaForPath(path) : "Capital Stack";
 }
 
 function areaForPath(path: string): ReviewArea {
@@ -706,173 +593,118 @@ function areaForPath(path: string): ReviewArea {
   if (path.includes("debt") || path.includes("ltv") || path.includes("dscr")) return "Debt";
   if (path.startsWith("construction_costs")) return "Construction";
   if (path.startsWith("sponsor_evaluation")) return "Sponsor";
-  if (path.startsWith("market_location")) return "Market";
+  if (path.startsWith("market_location") || path.startsWith("financial_projections")) return "Market";
   return "Capital Stack";
 }
 
-function findMathConfig(checkName: string) {
-  const name = normalizeMathName(checkName);
-  return MATH_INPUTS.find((config) => config.test(name));
-}
-
-function normalizeMathName(name: string): string {
-  return name.toLowerCase().replace(/\s+/g, " ").trim();
-}
-
-function firstSourcedInputPath(inputs: ReviewInput[] | undefined, provenance: Record<string, FieldProvenance>): string | undefined {
-  return inputs?.find((input) => provenance[input.path]?.source_doc_name)?.path ?? inputs?.find((input) => input.value !== null && input.value !== undefined && input.value !== "")?.path;
-}
-
-function sourceDetail(provenance: FieldProvenance): string {
-  if (Array.isArray(provenance.conflict) && provenance.conflict.length > 1) return "Documents disagree. Choose the correct value or confirm the current one.";
-  if (provenance.status === "wrong") return "This value was challenged during verification. Edit it or confirm it.";
-  if (provenance.status === "missing") return "This field was not found in the documents. Add it or confirm that it is not needed.";
-  if (provenance.status === "unverifiable") return "The app could not tie this value back to a source document. Open the source or confirm it manually.";
-  if (typeof provenance.confidence === "number") return `Only ${provenance.confidence}% confidence. Confirm it or update the value.`;
-  return "This value needs human review before it can be trusted.";
+function sourceDetail(source: FieldProvenance): string {
+  const conflicts = Array.isArray(source.conflict) ? source.conflict.length : 0;
+  if (conflicts > 1) return "Documents disagree. Pick the correct value, confirm the current value, or mark it unsure.";
+  if (source.status === "missing") return "This field was not found in the documents. Add it, confirm it is not available, or mark it unsure.";
+  if (source.status === "wrong") return "Verification challenged this value. Edit it or confirm the current value.";
+  if (source.status === "unverifiable") return "The app could not tie this value back to a clear source document.";
+  if (typeof source.confidence === "number") return `Only ${source.confidence}% confidence. Confirm it, edit it, or mark it unsure.`;
+  return "This value needs human review before the score is trusted.";
 }
 
 function whyThisMatters(item: ReviewItem): string {
-  if (item.kind === "math") {
-    if (item.area === "Returns") return "Return assumptions drive the score, comparison views, and investment summary.";
-    if (item.area === "Debt") return "Debt assumptions affect leverage, DSCR, and whether the deal can support the capital stack.";
-    if (item.area === "Construction") return "Cost math changes total project cost, equity need, contingency, and per-unit economics.";
-    if (item.area === "Capital Stack") return "Capital stack math changes project cost, equity required, debt sizing, and investor exposure.";
-    return "A failed calculation can make the score and comparison unreliable.";
-  }
-  if (item.kind === "source") {
-    return "The score should only rely on values tied to a clear source or confirmed by the user.";
-  }
-
-  switch (item.area) {
-    case "Returns":
-      return "This affects headline return metrics and how the deal compares against alternatives.";
-    case "Capital Stack":
-      return "This changes project cost, equity need, leverage, and sponsor alignment.";
-    case "Debt":
-      return "This affects leverage, DSCR, interest burden, and downside risk.";
-    case "Construction":
-      return "This affects total project cost, contingency, and the capital required to execute.";
-    case "Sponsor":
-      return "This affects alignment, execution trust, and whether the sponsor economics are reliable.";
-    case "Market":
-      return "This affects rent growth, vacancy, and operating assumptions behind the score.";
-    case "Source":
-      return "This needs a reliable citation before the number should be trusted.";
-    default:
-      return "This item needs confirmation before the score should be trusted.";
-  }
+  if (item.kind === "math") return "A failed calculation can make the score and comparison unreliable.";
+  if (item.kind === "source") return "The score should only rely on values tied to a source, confirmed by admin, or marked unsure.";
+  if (item.area === "Returns") return "Return assumptions drive the headline score and investor comparison.";
+  if (item.area === "Debt") return "Debt assumptions affect leverage, DSCR, and downside risk.";
+  if (item.area === "Sponsor") return "Sponsor alignment affects execution trust and risk scoring.";
+  return "This item should be cleared before the score is treated as final.";
 }
 
-function sourceLabel(provenance?: FieldProvenance): string | undefined {
-  if (!provenance?.source_doc_name) return undefined;
-  return `${provenance.source_doc_name}${provenance.source_page ? ` p.${provenance.source_page}` : ""}`;
-}
-
-function sourceLocation(provenance: FieldProvenance): string {
-  const parts: string[] = [];
-  if (provenance.source_page) parts.push(`Page ${provenance.source_page}`);
-  if (provenance.source_sheet) parts.push(`Sheet ${provenance.source_sheet}`);
-  if (provenance.source_cell || provenance.source_range) parts.push(`Cell ${provenance.source_cell || provenance.source_range}`);
-  return parts.join(" / ");
-}
-
-function sourceSnippet(provenance: FieldProvenance): string {
-  const raw =
-    provenance.correction_source ||
-    provenance.correction_note ||
-    provenance.verification_source ||
-    provenance.verification_note ||
-    "";
-  return String(raw).replace(/\s+/g, " ").trim();
-}
-
-function sourceHref(path: string): string {
-  return `#${sourceCitationId(path)}`;
-}
-
-function sourceCitationId(path: string): string {
-  return `source-citation-${path.replace(/[^a-zA-Z0-9_-]+/g, "-")}`;
-}
-
-function extractBestPath(message: string): string | undefined {
-  const matches = message.match(/[a-z_]+\.[a-z_]+/g) ?? [];
-  return matches.find((path) => path.includes("target_")) ?? matches.find((path) => path.includes("net_")) ?? matches[0];
-}
-
-function simplifyMessage(message: string): string {
-  return message.length <= 190 ? message : `${message.slice(0, 187)}...`;
+function sourceLabel(source?: FieldProvenance): string | undefined {
+  if (!source?.source_doc_name) return undefined;
+  return `${source.source_doc_name}${source.source_page ? ` p.${source.source_page}` : ""}`;
 }
 
 function getPath(data: unknown, path?: string): unknown {
   if (!path) return undefined;
-  let cur = data;
+  let current = data;
   for (const part of path.split(".")) {
-    if (!cur || typeof cur !== "object") return undefined;
-    cur = (cur as Record<string, unknown>)[part];
+    if (!current || typeof current !== "object") return undefined;
+    current = (current as Record<string, unknown>)[part];
   }
-  return cur;
+  return current;
 }
 
 function numberValue(value: unknown): number | null {
   if (typeof value === "number" && Number.isFinite(value)) return value;
-  if (typeof value === "string" && value.trim() !== "") {
-    const parsed = Number(value.replace(/[$,%x]/gi, "").replace(/,/g, ""));
-    return Number.isFinite(parsed) ? parsed : null;
+  if (typeof value !== "string" || !value.trim()) return null;
+  const parsed = Number(value.replace(/[$,%x]/gi, "").replace(/,/g, ""));
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function firstNumber(metrics: Metrics, paths: string[]): number | null {
+  for (const path of paths) {
+    const value = numberValue(getPath(metrics, path));
+    if (value != null) return value;
   }
   return null;
 }
 
-function isEditableReviewInput(input: ReviewInput): boolean {
-  return input.value == null || ["string", "number", "boolean"].includes(typeof input.value);
-}
-
-function formatReviewValue(value: unknown, path?: string): string {
-  if (value == null || value === "") return "missing";
-  const n = typeof value === "number" ? value : typeof value === "string" && !Number.isNaN(Number(value)) ? Number(value) : null;
-  if (n == null) return String(value);
-  const field = REVIEW_FIELDS.find((f) => f.path === path);
-  switch (field?.format) {
-    case "pct":
-      return fmtPct(n, 1);
-    case "money":
-      return fmtMoney(n);
-    case "multiple":
-      return fmtMultiple(n);
-    case "integer":
-      return Math.round(n).toLocaleString();
-    default:
-      return String(value);
-  }
+function isEditableValue(value: unknown): boolean {
+  return value == null || ["string", "number", "boolean"].includes(typeof value);
 }
 
 function scalarToInput(value: unknown): string {
   if (value == null) return "";
-  if (["string", "number", "boolean"].includes(typeof value)) return String(value);
-  return "";
+  return ["string", "number", "boolean"].includes(typeof value) ? String(value) : "";
 }
 
 function parseDraftValue(value: string, original: unknown): string | number | boolean | null {
   const raw = value.trim();
-  if (raw === "") return null;
-  const compact = raw.replace(/[$,%x]/gi, "").replace(/,/g, "").trim();
+  if (!raw) return null;
+  const compact = raw.replace(/[$,%x]/gi, "").replace(/,/g, "");
   if (typeof original === "boolean") return ["true", "1", "yes"].includes(compact.toLowerCase());
   const numeric = compact.match(/^(-?\d+(?:\.\d+)?)(k|mm|m|b)?$/i);
-  if (numeric) {
-    const [, amount, suffix = ""] = numeric;
-    const multipliers: Record<string, number> = { k: 1_000, m: 1_000_000, mm: 1_000_000, b: 1_000_000_000 };
-    return Number(amount) * (multipliers[suffix.toLowerCase()] ?? 1);
-  }
-  return raw;
+  if (!numeric) return raw;
+  const multipliers: Record<string, number> = { k: 1000, m: 1000000, mm: 1000000, b: 1000000000 };
+  return Number(numeric[1]) * (multipliers[(numeric[2] ?? "").toLowerCase()] ?? 1);
 }
 
-function reviewResolutionKey(key: string): string {
-  return encodeURIComponent(key).replace(/\./g, "%2E");
+function formatReviewValue(value: unknown, path?: string): string {
+  if (value == null || value === "") return "missing";
+  const numeric = numberValue(value);
+  if (numeric == null) return String(value);
+  const format = (path && FIELD_META[path]?.format) ?? guessFormat(path ?? "");
+  if (format === "pct") return fmtPct(numeric, 1);
+  if (format === "money") return fmtMoney(numeric);
+  if (format === "multiple") return fmtMultiple(numeric);
+  if (format === "integer") return Math.round(numeric).toLocaleString();
+  return String(value);
+}
+
+function guessFormat(path: string): FieldFormat {
+  if (path.includes("irr") || path.includes("rate") || path.includes("ltv") || path.includes("pct") || path.includes("yield") || path.includes("occupancy") || path.includes("return")) return "pct";
+  if (path.includes("multiple") || path.includes("dscr")) return "multiple";
+  if (path.includes("cost") || path.includes("amount") || path.includes("noi") || path.includes("equity") || path.includes("debt") || path.includes("rent") || path.includes("investment")) return "money";
+  if (path.includes("count") || path.includes("years") || path.includes("score")) return "integer";
+  return "text";
 }
 
 function humanizePath(path: string): string {
   const field = path.split(".").at(-1) ?? path;
-  return REVIEW_FIELDS.find((item) => item.path === path)?.label ?? field.replace(/_/g, " ").replace(/\b\w/g, (m) => m.toUpperCase());
+  return FIELD_META[path]?.label ?? titleCase(field.replace(/_/g, " "));
+}
+
+function titleCase(value: string): string {
+  return value.replace(/\b\w/g, (letter) => letter.toUpperCase());
+}
+
+function normalize(value: string): string {
+  return value.toLowerCase().replace(/\s+/g, " ").trim();
+}
+
+function sourceHref(path?: string): string {
+  return path ? `#source-citation-${path.replace(/[^a-zA-Z0-9_-]+/g, "-")}` : "#technical-details";
+}
+
+function reviewResolutionKey(key: string): string {
+  return encodeURIComponent(key).replace(/\./g, "%2E");
 }
 
 function errorDetail(error: unknown): string {
