@@ -105,11 +105,8 @@ HERE ARE THE EXTRACTED METRICS TO VERIFY:
 
 
 VERIFY_SECTION_GROUPS: list[list[str]] = [
-    ["deal_structure"],
-    ["target_returns"],
-    ["project_details", "market_location"],
-    ["construction_costs"],
-    ["financial_projections", "underwriting_checks"],
+    ["deal_structure", "target_returns"],
+    ["project_details", "market_location", "construction_costs", "financial_projections", "underwriting_checks"],
     ["sponsor_evaluation", "risk_assessment"],
 ]
 
@@ -121,8 +118,8 @@ def _env_int(name: str, default: int) -> int:
         return default
 
 
-VERIFY_MAX_IMAGE_PAGES_PER_CALL = _env_int("VERIFY_MAX_IMAGE_PAGES_PER_CALL", 8)
-VERIFY_MAX_CONTEXT_CHARS = _env_int("VERIFY_MAX_CONTEXT_CHARS", 80000)
+VERIFY_MAX_IMAGE_PAGES_PER_CALL = _env_int("VERIFY_MAX_IMAGE_PAGES_PER_CALL", 5)
+VERIFY_MAX_CONTEXT_CHARS = _env_int("VERIFY_MAX_CONTEXT_CHARS", 65000)
 VERIFY_FULL_TEXT_THRESHOLD_CHARS = _env_int("VERIFY_FULL_TEXT_THRESHOLD_CHARS", 50000)
 VERIFY_MAX_OUTPUT_TOKENS = _env_int("VERIFY_MAX_OUTPUT_TOKENS", 16000)
 VERIFY_CONCURRENCY = max(1, _env_int("VERIFY_CONCURRENCY", 2))
@@ -402,7 +399,11 @@ async def verify_deal_metrics(deal, db) -> dict:
             and cache.get("metrics_fingerprint") == metrics_fp
             and isinstance(cached_verification, dict)
         ):
-            return cached_verification
+            reused = json.loads(json.dumps(cached_verification, default=str))
+            summary = reused.setdefault("summary", {})
+            if isinstance(summary, dict):
+                summary["cache_hit"] = True
+            return reused
 
     combined: dict = {"audit_results": [], "missing_data": [], "calculation_checks": [], "summary": {}}
     confidences: list[float] = []
