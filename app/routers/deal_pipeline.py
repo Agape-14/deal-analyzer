@@ -525,6 +525,10 @@ async def _run_verify_background(deal_id: int, auto_correct: bool):
                 return
 
             verification = await verify_deal_metrics(deal, db)
+            verification_cache_hit = bool(
+                isinstance(verification.get("summary"), dict)
+                and verification["summary"].get("cache_hit")
+            )
             metrics = _ensure_metrics_dict(deal.metrics, "Stored deal metrics")
             changes: list[str] = []
             if auto_correct:
@@ -544,7 +548,9 @@ async def _run_verify_background(deal_id: int, auto_correct: bool):
             metrics["_pipeline"] = _pipeline_status(
                 "verify_complete",
                 "verify",
-                "Sources checked. Values are ready for scoring.",
+                "Sources checked using the unchanged document cache. Values are ready for scoring."
+                if verification_cache_hit
+                else "Sources checked. Values are ready for scoring.",
                 started_at=(deal.metrics or {}).get("_pipeline", {}).get("started_at")
                 if isinstance((deal.metrics or {}).get("_pipeline"), dict)
                 else None,
@@ -554,10 +560,14 @@ async def _run_verify_background(deal_id: int, auto_correct: bool):
             await notif_svc.emit(
                 db,
                 kind="success",
-                title=f"Verification complete - {deal.project_name}",
-                body=f"{len(changes)} correction{'s' if len(changes) != 1 else ''} applied",
+                title=f"Verification {'reused' if verification_cache_hit else 'complete'} - {deal.project_name}",
+                body=(
+                    "No new AI verification was needed because documents and values were unchanged"
+                    if verification_cache_hit
+                    else f"{len(changes)} correction{'s' if len(changes) != 1 else ''} applied"
+                ),
                 href=f"/deals/{deal.id}?tab=overview",
-                payload={"deal_id": deal.id, "corrections": len(changes)},
+                payload={"deal_id": deal.id, "corrections": len(changes), "cache_hit": verification_cache_hit},
             )
             await db.commit()
         except Exception as e:
