@@ -72,6 +72,9 @@ export function AiUsagePanel({ dealId }: { dealId: number }) {
 
   const latest = data.events.slice(0, 4);
   const hasUsage = data.totals.calls > 0;
+  const verifyCost = data.by_operation.verify?.estimated_cost_usd ?? 0;
+  const extractCost = data.by_operation.extract?.estimated_cost_usd ?? 0;
+  const dominantOperation = verifyCost > extractCost && verifyCost > 0 ? "verify" : extractCost > 0 ? "extract" : null;
 
   return (
     <div className="rounded-lg border border-border/80 bg-background p-4">
@@ -106,6 +109,15 @@ export function AiUsagePanel({ dealId }: { dealId: number }) {
               ))}
             </div>
           )}
+
+          {dominantOperation ? (
+            <div className="mt-4 rounded-lg border border-primary/20 bg-primary/5 p-3 text-xs leading-relaxed text-muted-foreground">
+              <span className="font-semibold text-foreground">Cost note: </span>
+              {dominantOperation === "verify"
+                ? "Most spend is source verification. Re-running unchanged documents should reuse cached source checks; upload or edit only when documents or values truly changed."
+                : "Most spend is document reading. Unchanged uploaded files should reuse the prior extraction instead of paying to read them again."}
+            </div>
+          ) : null}
 
           {latest.length > 0 && (
             <div className="mt-4 overflow-hidden rounded-lg border border-border/70">
