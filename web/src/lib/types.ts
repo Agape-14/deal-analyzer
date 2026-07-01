@@ -183,6 +183,16 @@ export interface DataQualityGate {
   can_score: boolean;
   confidence_score: number;
   verified_at?: string | null;
+  critical_fields?: Array<{
+    path: string;
+    actual_path?: string;
+    label: string;
+    present: boolean;
+    status: string;
+    verified: boolean;
+    severity: "ok" | "review" | "blocker" | string;
+    reason?: string | null;
+  }>;
   critical_summary?: {
     total: number;
     missing: number;
