@@ -2,9 +2,7 @@
 
 import * as React from "react";
 import type { ReactNode } from "react";
-import { ExternalLink, X } from "lucide-react";
 import { Card } from "@/components/ui/card";
-import { Button } from "@/components/ui/button";
 import { ScoreBreakdown } from "@/components/deal-detail/score-breakdown";
 import { ValidationFlagsPanel } from "@/components/deal-detail/validation-flags";
 import { MetricsSection } from "@/components/deal-detail/metrics-section";
@@ -12,6 +10,7 @@ import { AuditTrail } from "@/components/deal-detail/audit-trail";
 import { QualityPanel } from "@/components/deal-detail/quality-panel";
 import { ReviewQueue, buildReviewItems } from "@/components/deal-detail/review-queue";
 import { PipelineTimeline } from "@/components/deal-detail/pipeline-timeline";
+import { SourceDetailsDrawer } from "@/components/deal-detail/source-details-drawer";
 import { SourceCitations } from "@/components/deal-detail/source-citations";
 import { UploadCompleteness } from "@/components/deal-detail/upload-completeness";
 import { useCurrentUser } from "@/lib/auth-client";
@@ -562,123 +561,18 @@ function Stat({
         </div>
       )}
       {open ? (
-        <MetricSourceDrawer
+        <SourceDetailsDrawer
+          open={open}
+          onOpenChange={setOpen}
           label={label}
           value={`${value}${sub ?? ""}`}
           path={path}
           provenance={provenance}
           showAdminAction={Boolean(showAdminAction)}
-          onClose={() => setOpen(false)}
         />
       ) : null}
     </div>
   );
-}
-
-function MetricSourceDrawer({
-  label,
-  value,
-  path,
-  provenance,
-  showAdminAction,
-  onClose,
-}: {
-  label: string;
-  value: string;
-  path?: string | null;
-  provenance?: FieldProvenance;
-  showAdminAction: boolean;
-  onClose: () => void;
-}) {
-  const source = metricSourceName(provenance);
-  const location = metricSourceLocation(provenance);
-  const note = provenance?.verification_note || provenance?.correction_note || provenance?.formula || "";
-  const confidence = typeof provenance?.confidence === "number" ? `${Math.round(provenance.confidence)}% confidence` : "Confidence not captured";
-  const status = provenance?.status ? String(provenance.status) : "status pending";
-
-  return (
-    <div className="fixed inset-0 z-50">
-      <button className="absolute inset-0 bg-background/45 backdrop-blur-sm" onClick={onClose} aria-label="Close source details" />
-      <aside className="absolute right-0 top-0 flex h-full w-full max-w-xl flex-col border-l border-border bg-background shadow-2xl">
-        <div className="border-b border-border bg-card px-5 py-4">
-          <div className="flex items-start justify-between gap-3">
-            <div>
-              <div className="text-[10px] font-extrabold uppercase tracking-[0.14em] text-primary">Source details</div>
-              <h3 className="mt-1 text-lg font-bold text-foreground">{label}</h3>
-              <p className="mt-1 text-xs leading-relaxed text-muted-foreground">The source behind the number shown in the deal snapshot.</p>
-            </div>
-            <Button size="icon" variant="ghost" onClick={onClose} aria-label="Close source details">
-              <X className="h-4 w-4" />
-            </Button>
-          </div>
-        </div>
-
-        <div className="flex-1 space-y-4 overflow-y-auto p-5">
-          <div className="rounded-xl border border-border bg-card p-4">
-            <div className="text-[10px] font-extrabold uppercase tracking-[0.12em] text-muted-foreground">Current value</div>
-            <div className="mt-1 text-2xl font-extrabold tabular-nums text-foreground">{value}</div>
-            {path ? <div className="mt-1 text-xs text-muted-foreground">{path}</div> : null}
-          </div>
-
-          <div className="rounded-xl border border-border bg-card p-4">
-            <div className="text-[10px] font-extrabold uppercase tracking-[0.12em] text-muted-foreground">Cited source</div>
-            <div className="mt-2 text-sm font-semibold text-foreground">{source}</div>
-            {location ? <div className="mt-1 text-xs text-muted-foreground">{location}</div> : null}
-            <div className="mt-3 flex flex-wrap gap-2 text-xs">
-              <span className="rounded-full border border-border bg-muted/40 px-2 py-1 font-semibold text-muted-foreground">{status}</span>
-              <span className="rounded-full border border-border bg-muted/40 px-2 py-1 font-semibold text-muted-foreground">{confidence}</span>
-            </div>
-          </div>
-
-          <div className="rounded-xl border border-primary/25 bg-primary/5 p-4">
-            <div className="text-xs font-semibold text-foreground">Evidence note</div>
-            <p className="mt-2 text-sm leading-relaxed text-foreground">
-              {note || "No exact note was captured. Admin users can inspect the full source citation table for the supporting document context."}
-            </p>
-          </div>
-        </div>
-
-        <div className="border-t border-border bg-card p-4">
-          <div className="grid gap-2 sm:grid-cols-2">
-            {showAdminAction ? (
-              <Button variant="secondary" asChild>
-                <a href="#admin-review-center" onClick={onClose}>
-                  Open Admin Review Center
-                </a>
-              </Button>
-            ) : null}
-            {showAdminAction ? (
-              <Button variant="outline" asChild>
-                <a href="#source-citations" onClick={onClose}>
-                  <ExternalLink className="h-3.5 w-3.5" />
-                  Open citations
-                </a>
-              </Button>
-            ) : (
-              <Button variant="outline" onClick={onClose}>
-                Close
-              </Button>
-            )}
-          </div>
-        </div>
-      </aside>
-    </div>
-  );
-}
-
-function metricSourceName(provenance?: FieldProvenance): string {
-  return provenance?.source_doc_name || provenance?.verification_source || "No source captured yet";
-}
-
-function metricSourceLocation(provenance?: FieldProvenance): string {
-  if (!provenance) return "";
-  const parts = [
-    provenance.source_page ? `p.${provenance.source_page}` : "",
-    provenance.source_sheet ? `sheet: ${provenance.source_sheet}` : "",
-    provenance.source_cell ? `cell: ${provenance.source_cell}` : "",
-    provenance.source_range ? `range: ${provenance.source_range}` : "",
-  ].filter(Boolean);
-  return parts.join(" - ");
 }
 
 function asNum(v: unknown): number | null {
