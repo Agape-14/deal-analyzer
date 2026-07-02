@@ -14,6 +14,7 @@ import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { ReviewQueueEmptyState, ReviewQueueHeader, ReviewQueueSteps } from "@/components/deal-detail/review-queue-shell";
+import { SourceDetailsDrawer } from "@/components/deal-detail/source-details-drawer";
 import { api } from "@/lib/api";
 import { cn, fmtMoney, fmtMultiple, fmtPct } from "@/lib/utils";
 import type { DataQualityGate, DealDetail, FieldProvenance, ValidationFlag } from "@/lib/types";
@@ -22,6 +23,7 @@ type ReviewArea = "Returns" | "Capital Stack" | "Debt" | "Construction" | "Spons
 type Severity = "red" | "yellow";
 type Metrics = NonNullable<DealDetail["metrics"]>;
 type ReviewGate = Pick<DataQualityGate, "critical_fields" | "math_summary">;
+type CriticalField = NonNullable<DataQualityGate["critical_fields"]>[number];
 type FieldFormat = "pct" | "multiple" | "money" | "integer" | "text";
 
 type ReviewInput = {
@@ -43,6 +45,7 @@ type ReviewItem = {
   path?: string;
   value?: unknown;
   source?: string;
+  provenance?: FieldProvenance;
   inputs?: ReviewInput[];
   confirmLabel?: string;
 };
@@ -175,6 +178,7 @@ export function ReviewQueue({ deal }: { deal: DealDetail }) {
 
 function ReviewRow({ dealId, item, index }: { dealId: number; item: ReviewItem; index: number }) {
   const [editing, setEditing] = React.useState(false);
+  const [sourceOpen, setSourceOpen] = React.useState(false);
   const hasInputs = Boolean(item.inputs?.length);
   const Icon = item.kind === "math" ? Calculator : item.kind === "source" ? FileText : AlertTriangle;
 
@@ -210,13 +214,36 @@ function ReviewRow({ dealId, item, index }: { dealId: number; item: ReviewItem; 
           <ResolveButton dealId={dealId} item={item} action="confirmed" label={item.confirmLabel ?? "Confirm"} />
           <ResolveButton dealId={dealId} item={item} action="unsure" label="Mark unsure" variant="outline" />
           {item.path ? (
-            <Button size="sm" variant="outline" asChild>
-              <a href={sourceHref(item.path)}><Search className="h-3.5 w-3.5" />Inspect source</a>
+            <Button size="sm" variant="outline" onClick={() => setSourceOpen(true)}>
+              <Search className="h-3.5 w-3.5" />
+              Inspect source
             </Button>
           ) : null}
         </div>
       </div>
       {editing && hasInputs ? <ReviewInputEditor dealId={dealId} item={item} onDone={() => setEditing(false)} /> : null}
+      {item.path ? (
+        <SourceDetailsDrawer
+          open={sourceOpen}
+          onOpenChange={setSourceOpen}
+          label={humanizePath(item.path)}
+          value={formatReviewValue(item.value, item.path)}
+          rawValue={item.value}
+          path={item.path}
+          provenance={item.provenance}
+          issueTitle={item.title}
+          issueDetail={item.detail}
+          issueWhy={whyThisMatters(item)}
+          dealId={dealId}
+          showAdminAction
+          inputs={(item.inputs ?? []).map((input) => ({
+            label: input.label,
+            value: formatReviewValue(input.value, input.path),
+            path: input.path,
+            provenance: input.provenance,
+          }))}
+        />
+      ) : null}
     </div>
   );
 }
@@ -381,6 +408,7 @@ function mathItems(gate: ReviewGate | undefined, metrics: Metrics, provenance: R
       path,
       value: path ? getPath(metrics, path) : undefined,
       source: path ? sourceLabel(provenance[path]) : undefined,
+      provenance: path ? provenance[path] : undefined,
       inputs,
     };
   });
@@ -404,6 +432,7 @@ function flagItems(flags: ValidationFlag[], metrics: Metrics, provenance: Record
         path,
         value: path ? getPath(metrics, path) : undefined,
         source: path ? sourceLabel(provenance[path]) : undefined,
+        provenance: path ? provenance[path] : undefined,
         inputs,
         confirmLabel: "Accept note",
       } satisfies ReviewItem;
@@ -428,6 +457,7 @@ function criticalFieldItems(gate: ReviewGate | undefined, metrics: Metrics, prov
         path,
         value: getPath(metrics, path),
         source: sourceLabel(provenance[path]),
+        provenance: provenance[path],
         inputs: input ? [input] : undefined,
       } satisfies ReviewItem;
     });
@@ -451,6 +481,7 @@ function sourceItems(metrics: Metrics, provenance: Record<string, FieldProvenanc
       path,
       value: getPath(metrics, path),
       source: sourceLabel(source),
+      provenance: source,
       inputs: input ? [input] : undefined,
     } satisfies ReviewItem];
   });
