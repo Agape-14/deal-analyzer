@@ -63,6 +63,7 @@ async function request<T>(
   path: string,
   init: RequestInit = {},
   revalidate: number | false = 0,
+  timeoutMs?: number,
 ): Promise<T> {
   const url = path.startsWith("/") ? `${baseUrl()}${path}` : path;
 
@@ -73,15 +74,28 @@ async function request<T>(
   const cookieHeader = await forwardedCookieHeader();
   if (cookieHeader) headers["Cookie"] = cookieHeader;
 
-  const res = await fetch(url, {
-    ...init,
-    headers,
-    credentials: "include",
-    next:
-      typeof window === "undefined"
-        ? { revalidate: revalidate === false ? false : revalidate }
-        : undefined,
-  });
+  const timeoutController = timeoutMs ? new AbortController() : null;
+  const timeout = timeoutController ? setTimeout(() => timeoutController.abort(), timeoutMs) : null;
+  let res: Response;
+  try {
+    res = await fetch(url, {
+      ...init,
+      headers,
+      credentials: "include",
+      signal: init.signal ?? timeoutController?.signal,
+      next:
+        typeof window === "undefined"
+          ? { revalidate: revalidate === false ? false : revalidate }
+          : undefined,
+    });
+  } catch (error) {
+    if (timeoutController?.signal.aborted) {
+      throw { status: 408, detail: "This data is taking too long to load. Refresh the page to try again." } satisfies ApiError;
+    }
+    throw error;
+  } finally {
+    if (timeout) clearTimeout(timeout);
+  }
 
   if (!res.ok) {
     let detail = res.statusText;
@@ -150,8 +164,8 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 export const api = {
-  get: <T>(path: string, opts?: { revalidate?: number | false }) =>
-    request<T>(path, { method: "GET" }, opts?.revalidate ?? 0),
+  get: <T>(path: string, opts?: { revalidate?: number | false; timeoutMs?: number }) =>
+    request<T>(path, { method: "GET" }, opts?.revalidate ?? 0, opts?.timeoutMs),
   post: <T>(path: string, body?: unknown) =>
     request<T>(path, { method: "POST", body: body ? JSON.stringify(body) : undefined }),
   put: <T>(path: string, body?: unknown) =>

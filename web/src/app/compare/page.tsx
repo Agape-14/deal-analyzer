@@ -10,7 +10,7 @@ export default async function ComparePage() {
   let deals: DealSummary[] = [];
   let error: string | null = null;
   try {
-    deals = await api.get<DealSummary[]>("/api/deals");
+    deals = await api.get<DealSummary[]>("/api/deals", { timeoutMs: 15_000 });
   } catch (e) {
     error = (e as { detail?: string })?.detail ?? "Failed to load deals";
   }
