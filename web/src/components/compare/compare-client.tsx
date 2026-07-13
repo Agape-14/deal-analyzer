@@ -1,7 +1,7 @@
 "use client";
 
 import * as React from "react";
-import { useRouter, useSearchParams, usePathname } from "next/navigation";
+import { useRouter, usePathname } from "next/navigation";
 import { Loader2, Plus, FileSpreadsheet, AlertCircle, GitCompareArrows } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
@@ -31,9 +31,24 @@ const VALID_MODES: CompareMode[] = ["values", "winners", "deltas", "normalized"]
 export function CompareClient({ deals }: { deals: DealSummary[] }) {
   const router = useRouter();
   const pathname = usePathname();
-  const searchParams = useSearchParams();
+  const [queryString, setQueryString] = React.useState(() =>
+    typeof window === "undefined" ? "" : window.location.search.replace(/^\?/, ""),
+  );
+  const searchParams = React.useMemo(
+    () => new URLSearchParams(queryString),
+    [queryString],
+  );
 
-  const idsParam = searchParams?.get("ids") ?? "";
+  React.useEffect(() => {
+    const syncFromHistory = () => {
+      setQueryString(window.location.search.replace(/^\?/, ""));
+    };
+
+    window.addEventListener("popstate", syncFromHistory);
+    return () => window.removeEventListener("popstate", syncFromHistory);
+  }, []);
+
+  const idsParam = searchParams.get("ids") ?? "";
   const selectedIds = React.useMemo(
     () =>
       idsParam
@@ -42,9 +57,9 @@ export function CompareClient({ deals }: { deals: DealSummary[] }) {
         .filter((x) => Number.isFinite(x) && x > 0),
     [idsParam],
   );
-  const preset = searchParams?.get("preset") ?? "exec";
-  const mode = (searchParams?.get("mode") as CompareMode) ?? "winners";
-  const baselineParam = searchParams?.get("baseline");
+  const preset = searchParams.get("preset") ?? "exec";
+  const mode = (searchParams.get("mode") as CompareMode) ?? "winners";
+  const baselineParam = searchParams.get("baseline");
   const baselineId = baselineParam ? Number(baselineParam) : null;
 
   const [customKeys, setCustomKeys] = React.useState<string[]>([]);
@@ -98,12 +113,13 @@ export function CompareClient({ deals }: { deals: DealSummary[] }) {
   }, [preset, customKeys]);
 
   function setParams(update: Record<string, string | null>) {
-    const params = new URLSearchParams(searchParams?.toString() ?? "");
+    const params = new URLSearchParams(queryString);
     for (const [k, v] of Object.entries(update)) {
       if (v === null || v === "") params.delete(k);
       else params.set(k, v);
     }
     const query = params.toString();
+    setQueryString(query);
     router.replace(`${pathname}${query ? `?${query}` : ""}`, { scroll: false });
   }
 
