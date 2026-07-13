@@ -2,6 +2,7 @@ import asyncio
 import json
 import logging
 import os
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select
@@ -34,7 +35,16 @@ from app.services.math_checker import run_math_checks
 router = APIRouter()
 log = logging.getLogger("kenyon.deal_pipeline")
 
+
+def _positive_env_int(name: str, default: int) -> int:
+    try:
+        return max(60, int(os.getenv(name, str(default))))
+    except (TypeError, ValueError):
+        return default
+
+
 EXTRACTION_CACHE_VERSION = 1
+ACTIVE_PIPELINE_TTL_SECONDS = _positive_env_int("DEAL_REVIEW_ACTIVE_TTL_SECONDS", 45 * 60)
 
 
 def _deep_conflict_scan_enabled() -> bool:
@@ -161,6 +171,37 @@ def _set_pipeline_status(metrics: dict | None, status: dict) -> dict:
     return next_metrics
 
 
+def _active_pipeline_status(metrics: dict | None, *, now: datetime | None = None) -> dict | None:
+    """Return a fresh running job so repeated clicks do not duplicate AI work."""
+    stored = _ensure_metrics_dict(metrics, "Stored deal metrics")
+    pipeline = stored.get("_pipeline")
+    if not isinstance(pipeline, dict) or str(pipeline.get("status") or "").lower() != "running":
+        return None
+
+    raw_updated_at = pipeline.get("updated_at") or pipeline.get("started_at")
+    if not raw_updated_at:
+        return None
+    try:
+        updated_at = datetime.fromisoformat(str(raw_updated_at).replace("Z", "+00:00"))
+        if updated_at.tzinfo is None:
+            updated_at = updated_at.replace(tzinfo=timezone.utc)
+    except (TypeError, ValueError):
+        return None
+
+    current = now or datetime.now(timezone.utc)
+    age_seconds = max(0.0, (current - updated_at.astimezone(timezone.utc)).total_seconds())
+    return pipeline if age_seconds <= ACTIVE_PIPELINE_TTL_SECONDS else None
+
+
+def _already_running_response(deal_id: int, pipeline: dict) -> dict:
+    return {
+        "message": "Document review is already running. This request did not start another AI job.",
+        "status": "already_running",
+        "deal_id": deal_id,
+        "pipeline": pipeline,
+    }
+
+
 def _pipeline_error_kind(error: Exception) -> str:
     text = str(error) or error.__class__.__name__
     lower = text.lower()
@@ -241,6 +282,10 @@ async def extract_deal_metrics(deal_id: int, db: AsyncSession = Depends(get_db))
     if not usable_docs and not usable_pdfs:
         raise HTTPException(status_code=400, detail="No extracted text or PDF files available")
 
+    active_pipeline = _active_pipeline_status(deal.metrics)
+    if active_pipeline:
+        return _already_running_response(deal_id, active_pipeline)
+
     deal.metrics = _set_pipeline_status(
         deal.metrics,
         _pipeline_status(
@@ -271,6 +316,10 @@ async def review_deal_documents(deal_id: int, db: AsyncSession = Depends(get_db)
     usable_pdfs = _pdf_docs(deal)
     if not usable_docs and not usable_pdfs:
         raise HTTPException(status_code=400, detail="No extracted text or PDF files available")
+
+    active_pipeline = _active_pipeline_status(deal.metrics)
+    if active_pipeline:
+        return _already_running_response(deal_id, active_pipeline)
 
     deal.metrics = _set_pipeline_status(
         deal.metrics,
@@ -505,6 +554,10 @@ async def verify_deal_endpoint(deal_id: int, auto_correct: bool = True, db: Asyn
     if not deal.metrics:
         raise HTTPException(status_code=400, detail="No metrics extracted yet. Run extraction first.")
 
+    active_pipeline = _active_pipeline_status(deal.metrics)
+    if active_pipeline:
+        return _already_running_response(deal_id, active_pipeline)
+
     deal.metrics = _set_pipeline_status(
         deal.metrics,
         _pipeline_status("running", "verify", "Source verification started. Checking extracted values against source documents."),
@@ -583,6 +636,12 @@ async def score_deal_endpoint(deal_id: int, db: AsyncSession = Depends(get_db)):
         raise HTTPException(status_code=404, detail="Deal not found")
     if not deal.metrics:
         raise HTTPException(status_code=400, detail="No metrics extracted yet. Run extraction first.")
+
+    if _active_pipeline_status(deal.metrics):
+        raise HTTPException(
+            status_code=409,
+            detail="Document review is still running. Wait for it to finish before recalculating the score.",
+        )
 
     deal.metrics = _set_pipeline_status(
         deal.metrics,
@@ -684,3 +743,4 @@ async def _persist_pipeline_failure(db: AsyncSession, deal_id: int, step: str, m
         await db.commit()
     except Exception:
         log.exception("failed to persist pipeline failure for deal %s", deal_id)
+

@@ -4,12 +4,12 @@ Data integrity primitives for deal metrics.
 This module is the single source of truth for three invariants that were
 missing from the original pipeline:
 
-  1. **Smart merge, not overwrite** — re-extracting metrics from a new
+  1. **Smart merge, not overwrite** â€” re-extracting metrics from a new
      document must never wipe out a prior value with null. If the new
      extraction returns null/None for a field that previously had a real
      value, the previous value survives.
 
-  2. **Provenance tracking** — every field with a value knows where it
+  2. **Provenance tracking** â€” every field with a value knows where it
      came from. We attach a parallel `_provenance` tree to metrics with:
        - `source`: "extraction" | "verification" | "manual" | "calculated"
        - `source_doc_id`: which Document the value was extracted from
@@ -20,9 +20,9 @@ missing from the original pipeline:
        - `verified_at`: last time /verify ran on this field
        - `status`: "extracted" | "confirmed" | "wrong" | "unverifiable"
        - `conflict`: null OR [{doc_id, doc_name, value}] when docs disagree
-       - `locked`: true/false — manual edits become locked against re-extract
+       - `locked`: true/false â€” manual edits become locked against re-extract
 
-  3. **Conflict detection** — when multiple documents disagree on the same
+  3. **Conflict detection** â€” when multiple documents disagree on the same
      field, we keep every value seen (with its source) in the provenance
      tree and emit a red flag in validation.
 
@@ -39,6 +39,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Iterable
+from urllib.parse import unquote
 
 # ----------------------------- constants --------------------------------- #
 
@@ -76,6 +77,40 @@ METRIC_SECTIONS = (
     "sponsor_evaluation",
     "market_research",
 )
+
+
+def _invalidate_review_resolutions(
+    metrics: dict[str, Any],
+    changed_paths: Iterable[str],
+    *,
+    clear_derived: bool = True,
+) -> None:
+    """Reopen review decisions whose evidence changed.
+
+    A confirmation is only valid for the value and source that the analyst
+    reviewed. Fresh extraction or a challenged verification status must not
+    leave a stale decision hiding the issue from the admin review center.
+    """
+    resolutions = metrics.get("_review_resolutions")
+    if not isinstance(resolutions, dict):
+        return
+
+    paths = {str(path).strip() for path in changed_paths if str(path).strip()}
+    retained: dict[str, Any] = {}
+    for key, value in resolutions.items():
+        decoded_key = unquote(str(key))
+        direct_match = any(
+            decoded_key in {f"source:{path}", f"field:{path}"}
+            for path in paths
+        )
+        derived_match = clear_derived and decoded_key.startswith(("math:", "flag:"))
+        if not direct_match and not derived_match:
+            retained[key] = value
+
+    if retained:
+        metrics["_review_resolutions"] = retained
+    else:
+        metrics.pop("_review_resolutions", None)
 
 
 @dataclass
@@ -150,7 +185,7 @@ def smart_merge(
     """Merge a fresh extraction into the existing metrics tree.
 
     Rules:
-      - If the incoming value is meaningful, it wins — UNLESS the field is
+      - If the incoming value is meaningful, it wins â€” UNLESS the field is
         locked (user manually edited it).
       - If the incoming value is None/empty and the existing value is
         meaningful, the existing value is preserved.
@@ -182,7 +217,7 @@ def smart_merge(
         new_section = incoming.get(section) or {}
         old_section = existing.get(section) or {}
         if not isinstance(new_section, dict):
-            # Not a metric section — copy verbatim
+            # Not a metric section â€” copy verbatim
             merged[section] = new_section
             continue
 
@@ -206,7 +241,7 @@ def smart_merge(
                 out[key] = new_v
 
                 # Preserve verification status when the value didn't
-                # change — re-extracting the same deal shouldn't wipe
+                # change â€” re-extracting the same deal shouldn't wipe
                 # out "confirmed" / "wrong" / "unverifiable" stamps
                 # that a prior /verify run put on unchanged fields.
                 # Only reset to "extracted" when the value actually
@@ -232,7 +267,7 @@ def smart_merge(
                     )
                     provenance[path] = prov.to_dict()
             else:
-                # Incoming is null/empty — preserve old
+                # Incoming is null/empty â€” preserve old
                 out[key] = old_v
                 # Keep existing provenance as-is
 
@@ -242,6 +277,9 @@ def smart_merge(
         merged["_provenance"] = provenance
     else:
         merged.pop("_provenance", None)
+
+    if changes:
+        _invalidate_review_resolutions(merged, changes)
 
     return merged, changes
 
@@ -255,7 +293,7 @@ def detect_conflicts(
 ) -> dict[str, list[dict[str, Any]]]:
     """
     Given extractions from multiple documents, return a map of
-    `section.field` → list of {doc_id, doc_name, value} for every field
+    `section.field` â†’ list of {doc_id, doc_name, value} for every field
     where two or more docs disagree.
 
     `per_doc_metrics` is a list of (doc_id, doc_name, metrics_dict).
@@ -324,7 +362,7 @@ def conflicts_to_flags(conflicts: dict[str, list[dict[str, Any]]]) -> list[dict[
                         "severity": "green",
                         "category": "Data conflict (auto-resolved)",
                         "message": (
-                            f"{path}: multiple documents disagreed — used "
+                            f"{path}: multiple documents disagreed â€” used "
                             f"value from newest doc ({winner.get('doc_name', '?')})."
                         ),
                     }
@@ -368,7 +406,7 @@ def auto_resolve_conflicts(
         if len(entries) < 2:
             continue
 
-        # Sort by upload_date descending — newest first.
+        # Sort by upload_date descending â€” newest first.
         sorted_entries = sorted(
             entries,
             key=lambda e: doc_upload_dates.get(e.get("doc_id", 0), 0) or 0,
@@ -390,7 +428,7 @@ def auto_resolve_conflicts(
 
         # Move resolved conflict data to `conflict_history` instead of
         # `conflict`. All existing UI code checks `conflict` to show
-        # red badges / Resolve buttons / conflict counters — keeping
+        # red badges / Resolve buttons / conflict counters â€” keeping
         # the data there defeated the auto-resolve because the UI
         # didn't know it was resolved. `conflict_history` preserves
         # the audit trail without triggering the conflict UI.
@@ -422,7 +460,7 @@ def stamp_verification(
       - confidence: from the verification summary
       - source_page / source_doc_name if parseable from the free-text 'source'
 
-    Does NOT mutate the metric values themselves — that's the job of
+    Does NOT mutate the metric values themselves â€” that's the job of
     `apply_corrections`. This just attaches the audit result so the UI
     can render per-field verification badges.
     """
@@ -435,6 +473,7 @@ def stamp_verification(
         confidence = summary.get("confidence_score")
 
     verified_at = now_iso()
+    challenged_paths: set[str] = set()
 
     for row in verification.get("audit_results", []) or []:
         if not isinstance(row, dict):
@@ -446,6 +485,8 @@ def stamp_verification(
         path = f"{section}.{field_name}"
         p = dict(prov.get(path) or {})
         status = str(row.get("status") or "").lower() or "extracted"
+        if status in {"wrong", "missing", "unverifiable", "math_failed"}:
+            challenged_paths.add(path)
         p["status"] = status
         p["verified_at"] = verified_at
         if confidence is not None:
@@ -485,6 +526,8 @@ def stamp_verification(
         if status in v_summary["totals"]:
             v_summary["totals"][status] += 1
     metrics["_verification"] = v_summary
+    if challenged_paths:
+        _invalidate_review_resolutions(metrics, challenged_paths)
     return metrics
 
 
@@ -680,3 +723,4 @@ def quality_summary(metrics: dict[str, Any]) -> dict[str, Any]:
         result["last_verified_at"] = verification.get("verified_at")
         result["confidence"] = verification.get("confidence")
     return result
+

@@ -18,8 +18,7 @@ export function ReviewQueueEmptyState() {
   );
 }
 
-export function ReviewQueueHeader({ visibleCount, hiddenCount }: { visibleCount: number; hiddenCount: number }) {
-  const total = visibleCount + hiddenCount;
+export function ReviewQueueHeader({ count }: { count: number }) {
   return (
     <div className="flex flex-wrap items-start justify-between gap-4 border-b border-border/70 pb-5">
       <div className="flex items-center gap-3">
@@ -29,18 +28,13 @@ export function ReviewQueueHeader({ visibleCount, hiddenCount }: { visibleCount:
         <div>
           <div className="text-[10px] font-extrabold uppercase tracking-[0.14em] text-muted-foreground">Admin Review Center</div>
           <h3 className="text-lg font-extrabold">
-            {total} item{total === 1 ? " needs" : "s need"} review
+            {count} item{count === 1 ? " needs" : "s need"} review
           </h3>
           <p className="mt-1 text-sm leading-relaxed text-muted-foreground">
             One workspace for source checks and corrections. Inspect the evidence, edit any bad value, then confirm it or mark it unsure.
           </p>
         </div>
       </div>
-      {hiddenCount > 0 ? (
-        <a href="#technical-details" className="rounded-full border border-border/70 bg-background px-3 py-1 text-xs font-semibold text-muted-foreground transition-colors hover:text-foreground">
-          {hiddenCount} more grouped below
-        </a>
-      ) : null}
     </div>
   );
 }
@@ -63,3 +57,4 @@ function ActionHint({ label, detail }: { label: string; detail: string }) {
     </div>
   );
 }
+

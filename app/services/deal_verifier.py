@@ -440,7 +440,11 @@ async def verify_deal_metrics(deal, db) -> dict:
     if confidences:
         combined["summary"]["confidence_score"] = round(sum(confidences) / len(confidences), 1)
     if errors:
-        combined["summary"]["partial_errors"] = errors
+        detail = " | ".join(errors)
+        raise RuntimeError(
+            "Document review incomplete: source verification failed for one or more "
+            f"metric groups. No updated score was published. Details: {detail[:1200]}"
+        )
 
     metrics["_verification_cache"] = {
         "cache_version": VERIFICATION_CACHE_VERSION,
@@ -520,3 +524,4 @@ def _now_iso() -> str:
     from datetime import datetime, timezone
 
     return datetime.now(timezone.utc).isoformat()
+

@@ -1,6 +1,7 @@
 import math
+from datetime import datetime, timedelta, timezone
 
-from app.routers.deal_pipeline import _pipeline_error_message
+from app.routers.deal_pipeline import _active_pipeline_status, _pipeline_error_message
 from app.services.canonical_metrics import canonical_return_summary, primary_strategy
 
 
@@ -67,7 +68,30 @@ def test_document_review_provider_failures_are_actionable():
         assert expected_action in message
 
 
+def test_fresh_running_pipeline_blocks_duplicate_ai_job():
+    now = datetime.now(timezone.utc)
+    pipeline = {
+        "status": "running",
+        "step": "verify",
+        "updated_at": (now - timedelta(minutes=2)).isoformat(),
+    }
+
+    assert _active_pipeline_status({"_pipeline": pipeline}, now=now) == pipeline
+
+
+def test_stale_running_pipeline_can_be_restarted():
+    now = datetime.now(timezone.utc)
+    pipeline = {
+        "status": "running",
+        "step": "verify",
+        "updated_at": (now - timedelta(hours=2)).isoformat(),
+    }
+
+    assert _active_pipeline_status({"_pipeline": pipeline}, now=now) is None
+
+
 def test_json_safe_removes_non_finite_numbers_from_metrics():
     clean = _json_safe({"good": 1.2, "bad": math.nan, "nested": [math.inf]})
 
     assert clean == {"good": 1.2, "bad": None, "nested": [None]}
+

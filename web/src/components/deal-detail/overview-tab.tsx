@@ -206,7 +206,7 @@ function ExecutiveReview({
         </div>
       </div>
 
-      <div className="grid gap-px bg-border/70 md:grid-cols-2 xl:grid-cols-6">
+      <div className="grid gap-px bg-border/70 md:grid-cols-2 xl:grid-cols-[1.15fr_1fr_1fr_1fr_1.2fr_1.45fr]">
         <ExecutiveMetric label="Base strategy" value={strategy} detail="Preferred plan unless the documents clearly say otherwise." />
         <ExecutiveMetric label={primaryReturnLabel} value={fmtPct(primaryReturnValue, 1)} detail="Primary return shown in comparison views." />
         <ExecutiveMetric label="Equity multiple" value={fmtMultiple(headlineMultiple)} detail="Headline multiple used for return scoring." />
@@ -222,7 +222,7 @@ function ExecutiveMetric({ label, value, detail }: { label: string; value: strin
   return (
     <div className="min-w-0 bg-card px-4 py-3.5">
       <div className="text-[10px] font-extrabold uppercase tracking-[0.12em] text-foreground/65">{label}</div>
-      <div data-figure className="mt-1.5 truncate text-base font-extrabold leading-tight text-foreground">{value}</div>
+      <div data-figure className="mt-1.5 min-h-10 break-words text-base font-extrabold leading-snug text-foreground">{value}</div>
       <div className="mt-1 line-clamp-2 text-[11px] leading-relaxed text-muted-foreground">{detail}</div>
     </div>
   );
@@ -600,3 +600,4 @@ function fmtX(n: number | null): string {
   if (n == null) return "-";
   return `${n.toFixed(2)}x`;
 }
+

@@ -2,7 +2,7 @@
 
 These functions are the backbone of the phase-6 guarantees: smart merge,
 conflict detection, provenance tagging, locks, quality counters. Getting
-any of these wrong corrupts the dashboard — they deserve coverage.
+any of these wrong corrupts the dashboard â€” they deserve coverage.
 """
 
 from app.services.data_integrity import (
@@ -35,11 +35,11 @@ def test_smart_merge_preserves_value_when_incoming_is_null():
         "target_returns": {"target_irr": None},
     }
     merged, changes = smart_merge(existing, incoming, source_doc_id=1, source_doc_name="om.pdf")
-    # LTV was null — old value survives
+    # LTV was null â€” old value survives
     assert merged["deal_structure"]["ltv"] == 65
-    # Debt changed — new value wins
+    # Debt changed â€” new value wins
     assert merged["deal_structure"]["debt_amount"] == 12_000_000
-    # IRR null — preserved
+    # IRR null â€” preserved
     assert merged["target_returns"]["target_irr"] == 16
     # Only debt_amount is in changes list
     assert "deal_structure.debt_amount" in changes
@@ -68,6 +68,32 @@ def test_smart_merge_creates_provenance_per_field():
     assert prov["source_doc_id"] == 7
     assert prov["source_doc_name"] == "om.pdf"
     assert prov["extracted_at"]  # non-empty ISO timestamp
+
+
+def test_smart_merge_reopens_review_decisions_when_value_changes():
+    existing = {
+        "deal_structure": {"ltv": 65, "debt_amount": 10_000_000},
+        "_review_resolutions": {
+            "source:deal_structure.ltv": {"resolved": True},
+            "field:deal_structure.debt_amount": {"resolved": True},
+            "math:ltv": {"resolved": True},
+            "flag:risk": {"resolved": True},
+            "source:target_returns.target_irr": {"resolved": True},
+        },
+    }
+
+    merged, changes = smart_merge(
+        existing,
+        {"deal_structure": {"ltv": 70, "debt_amount": 10_000_000}},
+    )
+
+    assert changes == ["deal_structure.ltv"]
+    resolutions = merged["_review_resolutions"]
+    assert "source:deal_structure.ltv" not in resolutions
+    assert "math:ltv" not in resolutions
+    assert "flag:risk" not in resolutions
+    assert "field:deal_structure.debt_amount" in resolutions
+    assert "source:target_returns.target_irr" in resolutions
 
 
 # -------------------- detect_conflicts -------------------- #
@@ -126,6 +152,38 @@ def test_stamp_verification_adds_per_field_status():
     assert prov["source_page"] == 3
     assert out["_verification"]["confidence"] == 88
     assert out["_verification"]["totals"]["confirmed"] == 1
+
+
+def test_stamp_verification_reopens_challenged_review_decisions():
+    metrics = {
+        "deal_structure": {"ltv": 65},
+        "_review_resolutions": {
+            "source:deal_structure.ltv": {"resolved": True},
+            "field:deal_structure.ltv": {"resolved": True},
+            "math:capital-stack": {"resolved": True},
+            "flag:risk": {"resolved": True},
+            "source:target_returns.target_irr": {"resolved": True},
+        },
+    }
+    verification = {
+        "summary": {"confidence_score": 72},
+        "audit_results": [
+            {
+                "section": "deal_structure",
+                "field": "ltv",
+                "status": "wrong",
+                "source": "Page 3 contradicts the saved LTV",
+            }
+        ],
+    }
+
+    out = stamp_verification(metrics, verification)
+    resolutions = out["_review_resolutions"]
+    assert "source:deal_structure.ltv" not in resolutions
+    assert "field:deal_structure.ltv" not in resolutions
+    assert "math:capital-stack" not in resolutions
+    assert "flag:risk" not in resolutions
+    assert "source:target_returns.target_irr" in resolutions
 
 
 # -------------------- lock + manual edit -------------------- #
@@ -193,3 +251,4 @@ def test_staleness_flag_when_doc_newer_than_last_extraction():
     doc = _FakeDoc(upload_date=datetime.now(timezone.utc))
     flags = staleness_flags(metrics, documents=[doc])
     assert any("uploaded after" in f["message"] for f in flags)
+

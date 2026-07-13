@@ -52,7 +52,6 @@ type ReviewItem = {
 
 type MathCheck = { check?: string; difference?: string; formula?: string; message?: string };
 
-const REVIEW_LIMIT = 3;
 const BAD_SOURCE_STATUSES = new Set(["wrong", "missing", "unverifiable", "stale", "math_failed"]);
 const REVIEW_THRESHOLD = 70;
 
@@ -144,34 +143,18 @@ const MATH_CONFIGS: Array<{ test: (name: string) => boolean; area: ReviewArea; p
 
 export function ReviewQueue({ deal }: { deal: DealDetail }) {
   const items = buildReviewItems(deal);
-  const visible = items.slice(0, REVIEW_LIMIT);
-  const hidden = items.slice(REVIEW_LIMIT);
-  const groups = groupItems(hidden);
 
   if (items.length === 0) return <ReviewQueueEmptyState />;
 
   return (
     <Card className="border-border/80 bg-card p-5 shadow-sm md:p-6">
-      <ReviewQueueHeader visibleCount={visible.length} hiddenCount={hidden.length} />
+      <ReviewQueueHeader count={items.length} />
       <ReviewQueueSteps />
       <div className="mt-5 space-y-3">
-        {visible.map((item, index) => (
+        {items.map((item, index) => (
           <ReviewRow key={item.key} dealId={deal.id} item={item} index={index} />
         ))}
       </div>
-      {groups.length ? (
-        <div className="mt-5 border-t border-border/60 pt-4">
-          <div className="mb-2 text-[10px] uppercase tracking-[0.14em] text-muted-foreground">More issues by area</div>
-          <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
-            {groups.map((group) => (
-              <a key={group.area} href="#technical-details" className="flex items-center justify-between rounded-lg border border-border/70 bg-background px-3 py-2 text-xs transition-colors hover:bg-muted/60">
-                <span className="font-semibold text-foreground">{group.area}</span>
-                <span className={cn("rounded-full px-2 py-0.5 font-bold ring-1", group.red ? "bg-destructive/10 text-destructive ring-destructive/30" : "bg-warning/10 text-warning ring-warning/30")}>{group.count}</span>
-              </a>
-            ))}
-          </div>
-        </div>
-      ) : null}
     </Card>
   );
 }
@@ -180,6 +163,10 @@ function ReviewRow({ dealId, item, index }: { dealId: number; item: ReviewItem; 
   const [editing, setEditing] = React.useState(false);
   const [sourceOpen, setSourceOpen] = React.useState(false);
   const hasInputs = Boolean(item.inputs?.length);
+  const primaryInput = item.inputs?.[0];
+  const sourcePath = item.path ?? primaryInput?.path;
+  const sourceValue = item.path ? item.value : primaryInput?.value;
+  const sourceProvenance = item.path ? item.provenance : primaryInput?.provenance;
   const Icon = item.kind === "math" ? Calculator : item.kind === "source" ? FileText : AlertTriangle;
 
   return (
@@ -213,7 +200,7 @@ function ReviewRow({ dealId, item, index }: { dealId: number; item: ReviewItem; 
           ) : null}
           <ResolveButton dealId={dealId} item={item} action="confirmed" label={item.confirmLabel ?? "Confirm"} />
           <ResolveButton dealId={dealId} item={item} action="unsure" label="Mark unsure" variant="outline" />
-          {item.path ? (
+          {sourcePath ? (
             <Button size="sm" variant="outline" onClick={() => setSourceOpen(true)}>
               <Search className="h-3.5 w-3.5" />
               Inspect source
@@ -222,15 +209,15 @@ function ReviewRow({ dealId, item, index }: { dealId: number; item: ReviewItem; 
         </div>
       </div>
       {editing && hasInputs ? <ReviewInputEditor dealId={dealId} item={item} onDone={() => setEditing(false)} /> : null}
-      {item.path ? (
+      {sourcePath ? (
         <SourceDetailsDrawer
           open={sourceOpen}
           onOpenChange={setSourceOpen}
-          label={humanizePath(item.path)}
-          value={formatReviewValue(item.value, item.path)}
-          rawValue={item.value}
-          path={item.path}
-          provenance={item.provenance}
+          label={humanizePath(sourcePath)}
+          value={formatReviewValue(sourceValue, sourcePath)}
+          rawValue={sourceValue}
+          path={sourcePath}
+          provenance={sourceProvenance}
           issueTitle={item.title}
           issueDetail={item.detail}
           issueWhy={whyThisMatters(item)}
@@ -531,17 +518,6 @@ function dedupeItems(items: ReviewItem[]): ReviewItem[] {
   return Array.from(byKey.values());
 }
 
-function groupItems(items: ReviewItem[]) {
-  const byArea = new Map<ReviewArea, { area: ReviewArea; count: number; red: number }>();
-  for (const item of items) {
-    const group = byArea.get(item.area) ?? { area: item.area, count: 0, red: 0 };
-    group.count += 1;
-    if (item.severity === "red") group.red += 1;
-    byArea.set(item.area, group);
-  }
-  return Array.from(byArea.values()).sort((a, b) => b.red - a.red || b.count - a.count);
-}
-
 function isReviewResolved(metrics: Metrics, key: string): boolean {
   const resolutions = metrics._review_resolutions;
   if (!resolutions || typeof resolutions !== "object") return false;
@@ -751,3 +727,4 @@ function errorDetail(error: unknown): string {
   }
   return "The server did not return a reason.";
 }
+
