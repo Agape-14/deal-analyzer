@@ -13,7 +13,7 @@ import {
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
-import { ReviewQueueEmptyState, ReviewQueueHeader, ReviewQueueSteps } from "@/components/deal-detail/review-queue-shell";
+import { ReviewQueueEmptyState, ReviewQueueHeader } from "@/components/deal-detail/review-queue-shell";
 import { SourceDetailsDrawer } from "@/components/deal-detail/source-details-drawer";
 import { api } from "@/lib/api";
 import { cn, fmtMoney, fmtMultiple, fmtPct } from "@/lib/utils";
@@ -70,6 +70,7 @@ const FIELD_META: Record<string, { label: string; format: FieldFormat }> = {
   "deal_structure.interest_rate": { label: "Interest rate", format: "pct" },
   "deal_structure.ltv": { label: "LTV", format: "pct" },
   "deal_structure.hold_period_years": { label: "Hold period", format: "integer" },
+  "deal_structure.investment_term_years": { label: "Investment term", format: "integer" },
   "deal_structure.preferred_return": { label: "Preferred return", format: "pct" },
   "deal_structure.gp_equity_coinvest_pct": { label: "GP co-invest", format: "pct" },
   "deal_structure.gp_cash_at_risk": { label: "GP cash at risk", format: "money" },
@@ -78,6 +79,7 @@ const FIELD_META: Record<string, { label: string; format: FieldFormat }> = {
   "financial_projections.exit_cap_rate": { label: "Exit cap rate", format: "pct" },
   "financial_projections.occupancy_assumption": { label: "Occupancy", format: "pct" },
   "financial_projections.rent_growth_assumption": { label: "Rent growth", format: "pct" },
+  "financial_projections.revenue_per_unit": { label: "Revenue per unit", format: "money" },
   "construction_costs.hard_costs": { label: "Hard costs", format: "money" },
   "construction_costs.hard_costs_total": { label: "Hard costs total", format: "money" },
   "construction_costs.soft_costs": { label: "Soft costs", format: "money" },
@@ -149,8 +151,7 @@ export function ReviewQueue({ deal }: { deal: DealDetail }) {
   return (
     <Card className="border-border/80 bg-card p-5 shadow-sm md:p-6">
       <ReviewQueueHeader count={items.length} />
-      <ReviewQueueSteps />
-      <div className="mt-5 space-y-3">
+      <div className="mt-4 space-y-2.5">
         {items.map((item, index) => (
           <ReviewRow key={item.key} dealId={deal.id} item={item} index={index} />
         ))}
@@ -170,42 +171,40 @@ function ReviewRow({ dealId, item, index }: { dealId: number; item: ReviewItem; 
   const Icon = item.kind === "math" ? Calculator : item.kind === "source" ? FileText : AlertTriangle;
 
   return (
-    <div className="overflow-hidden rounded-xl border border-border/80 bg-background">
-      <div className="grid gap-4 p-4 md:grid-cols-[auto_1fr_auto] md:items-start">
-        <div className={cn("flex h-9 w-9 items-center justify-center rounded-lg text-xs font-extrabold ring-1", item.severity === "red" ? "bg-destructive/15 text-destructive ring-destructive/30" : "bg-warning/15 text-warning ring-warning/30")}>{index + 1}</div>
+    <div className={cn("overflow-hidden rounded-xl border bg-background", item.severity === "red" ? "border-destructive/25" : "border-warning/25")}>
+      <div className="grid gap-4 p-4 md:grid-cols-[1fr_auto] md:items-center">
         <div className="min-w-0">
           <div className="flex flex-wrap items-center gap-2">
-            <Icon className={cn("h-4 w-4", item.severity === "red" ? "text-destructive" : "text-warning")} />
-            <h4 className="text-base font-extrabold tracking-tight text-foreground">{item.title}</h4>
+            <span className={cn("grid h-7 w-7 shrink-0 place-items-center rounded-md ring-1", item.severity === "red" ? "bg-destructive/10 text-destructive ring-destructive/25" : "bg-warning/10 text-warning ring-warning/25")}>
+              <Icon className="h-3.5 w-3.5" />
+            </span>
+            <h4 className="text-sm font-extrabold tracking-tight text-foreground">{item.title}</h4>
             <span className="rounded-md bg-muted px-1.5 py-0.5 text-[10px] font-semibold uppercase text-muted-foreground ring-1 ring-border/70">{item.area}</span>
+            <span className="text-[10px] font-semibold text-muted-foreground">#{index + 1}</span>
           </div>
-          <p className="mt-1 text-xs leading-relaxed text-muted-foreground">{item.detail}</p>
-          <p className="mt-2 rounded-lg border border-border/70 bg-muted/20 px-3 py-2 text-[11px] leading-relaxed text-muted-foreground">
-            <span className="font-semibold text-foreground">Why this matters: </span>
-            {whyThisMatters(item)}
-          </p>
+          <p className="mt-1.5 line-clamp-2 text-xs leading-relaxed text-muted-foreground">{item.detail}</p>
           {(item.value !== undefined || item.source) && (
-            <div className="mt-2 flex flex-wrap gap-2 text-[11px] text-muted-foreground">
-              {item.value !== undefined ? <span>Current: <span className="font-bold text-foreground">{formatReviewValue(item.value, item.path)}</span></span> : null}
-              {item.source ? <span>Source: <span className="font-medium text-foreground">{item.source}</span></span> : null}
+            <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-muted-foreground">
+              {item.value !== undefined ? <span>Current <span className="font-bold text-foreground">{formatReviewValue(item.value, item.path)}</span></span> : null}
+              {item.source ? <span>Source <span className="font-medium text-foreground">{item.source}</span></span> : null}
             </div>
           )}
           {hasInputs && !editing ? <ReviewInputSummary inputs={item.inputs ?? []} /> : null}
         </div>
-        <div className="flex flex-wrap items-center gap-2 md:min-w-[23rem] md:justify-end md:pt-6">
-          {hasInputs ? (
-            <Button size="sm" variant={editing ? "secondary" : "outline"} onClick={() => setEditing((value) => !value)}>
-              {editing ? "Hide values" : "Edit values"}
-            </Button>
-          ) : null}
-          <ResolveButton dealId={dealId} item={item} action="confirmed" label={item.confirmLabel ?? "Confirm"} />
-          <ResolveButton dealId={dealId} item={item} action="unsure" label="Mark unsure" variant="outline" />
+        <div className="flex flex-wrap items-center gap-2 md:max-w-[24rem] md:justify-end">
           {sourcePath ? (
             <Button size="sm" variant="outline" onClick={() => setSourceOpen(true)}>
               <Search className="h-3.5 w-3.5" />
               Inspect source
             </Button>
           ) : null}
+          {hasInputs ? (
+            <Button size="sm" variant={editing ? "secondary" : "outline"} onClick={() => setEditing((value) => !value)}>
+              {editing ? "Hide values" : "Edit values"}
+            </Button>
+          ) : null}
+          <ResolveButton dealId={dealId} item={item} action="unsure" label="Unsure" variant="secondary" />
+          <ResolveButton dealId={dealId} item={item} action="confirmed" label={item.confirmLabel ?? "Confirm"} />
         </div>
       </div>
       {editing && hasInputs ? <ReviewInputEditor dealId={dealId} item={item} onDone={() => setEditing(false)} /> : null}
@@ -279,8 +278,8 @@ function ResolveButton({
 
 function ReviewInputSummary({ inputs }: { inputs: ReviewInput[] }) {
   return (
-    <div className="mt-3 rounded-lg border border-border/70 bg-muted/20 p-3">
-      <div className="mb-1.5 text-[10px] font-extrabold uppercase tracking-[0.14em] text-muted-foreground">Values this row depends on</div>
+    <div className="mt-2.5 rounded-lg border border-border/70 bg-muted/20 px-3 py-2.5">
+      <div className="mb-1.5 text-[10px] font-extrabold uppercase tracking-[0.12em] text-muted-foreground">Key values</div>
       <div className="flex flex-wrap gap-1.5">
         {inputs.slice(0, 8).map((input) => (
           <span key={input.path} className="rounded-md border border-border bg-background px-2 py-1 text-[11px] text-muted-foreground">
@@ -688,8 +687,8 @@ function formatReviewValue(value: unknown, path?: string): string {
 function guessFormat(path: string): FieldFormat {
   if (path.includes("irr") || path.includes("rate") || path.includes("ltv") || path.includes("pct") || path.includes("yield") || path.includes("occupancy") || path.includes("return")) return "pct";
   if (path.includes("multiple") || path.includes("dscr")) return "multiple";
-  if (path.includes("cost") || path.includes("amount") || path.includes("noi") || path.includes("equity") || path.includes("debt") || path.includes("rent") || path.includes("investment")) return "money";
-  if (path.includes("count") || path.includes("years") || path.includes("score")) return "integer";
+  if (path.includes("count") || path.includes("year") || path.includes("term") || path.includes("score")) return "integer";
+  if (path.includes("cost") || path.includes("amount") || path.includes("noi") || path.includes("equity") || path.includes("debt") || path.includes("rent") || path.includes("revenue") || path.includes("investment")) return "money";
   return "text";
 }
 
@@ -727,4 +726,3 @@ function errorDetail(error: unknown): string {
   }
   return "The server did not return a reason.";
 }
-

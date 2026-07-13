@@ -12,9 +12,6 @@ import {
   Sparkles,
   Clock,
   Check,
-  Target,
-  ClipboardCheck,
-  Upload,
   GitCompareArrows,
 } from "lucide-react";
 import type { DealStatus, DealSummary } from "@/lib/types";
@@ -22,7 +19,7 @@ import { DealCard } from "@/components/deal-card";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { useCurrentUser } from "@/lib/auth-client";
-import { cn, fmtMoney, fmtMultiple, fmtPct } from "@/lib/utils";
+import { cn, fmtMoney } from "@/lib/utils";
 
 type SortKey = "score" | "irr" | "multiple" | "recent" | "name";
 
@@ -82,7 +79,6 @@ export function DealGrid({ deals }: { deals: DealSummary[] }) {
   }, [deals, query, status, sort]);
 
   const activeSort = SORTS.find((s) => s.key === sort)!;
-  const focusDeal = filtered[0] ?? null;
   const visibleExposure = filtered.reduce((sum, deal) => sum + (deal.minimum_investment ?? 0), 0);
   const showTeamCompare = !loading && !isAnalyst && deals.length > 1;
 
@@ -90,7 +86,7 @@ export function DealGrid({ deals }: { deals: DealSummary[] }) {
     <div className="relative z-10 clear-both">
       {showTeamCompare ? <TeamCompareBar deals={deals} /> : null}
 
-      <div className="relative z-20 mb-8 flex flex-col gap-3 rounded-xl bg-background/90 xl:flex-row xl:items-center xl:justify-between">
+      <div className="relative z-20 mb-6 flex flex-col gap-3 rounded-xl bg-background/90 xl:flex-row xl:items-center xl:justify-between">
         <div className="relative w-full xl:max-w-[440px]">
           <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
           <Input
@@ -174,50 +170,43 @@ export function DealGrid({ deals }: { deals: DealSummary[] }) {
         </div>
       </div>
 
-      <div className="relative z-0 grid gap-6 xl:grid-cols-[minmax(360px,0.95fr)_minmax(300px,0.72fr)_minmax(300px,0.72fr)] xl:items-start 2xl:grid-cols-[minmax(420px,0.95fr)_minmax(340px,0.72fr)_minmax(340px,0.72fr)]">
-        <div className="min-w-0">
-          <div className="mb-4 flex min-h-5 items-center justify-between gap-3 text-xs text-muted-foreground">
-            <span>
-              {filtered.length} of {deals.length} deal{deals.length === 1 ? "" : "s"}
-              {query && (
-                <>
-                  {" "}
-                  matching <span className="text-foreground">&quot;{query}&quot;</span>
-                </>
-              )}
-            </span>
-            <span className="hidden sm:inline tabular-nums">
-              Visible exposure: <span className="font-medium text-foreground">{fmtMoney(visibleExposure)}</span>
-            </span>
-          </div>
-
-          <motion.div layout className="relative z-0 grid grid-cols-1 gap-4 2xl:grid-cols-2">
-            <AnimatePresence mode="popLayout">
-              {filtered.map((deal) => (
-                <motion.div
-                  key={deal.id}
-                  layout
-                  initial={{ opacity: 0, scale: 0.95, y: 10 }}
-                  animate={{ opacity: 1, scale: 1, y: 0 }}
-                  exit={{ opacity: 0, scale: 0.95 }}
-                  transition={{ duration: 0.22, ease: [0.22, 1, 0.36, 1] }}
-                >
-                  <DealCard deal={deal} />
-                </motion.div>
-              ))}
-            </AnimatePresence>
-          </motion.div>
-
-          {filtered.length === 0 && (
-            <div className="py-16 text-center text-sm text-muted-foreground">
-              No deals match your filters.
-            </div>
+      <div className="mb-4 flex min-h-5 items-center justify-between gap-3 text-xs text-muted-foreground">
+        <span>
+          {filtered.length} of {deals.length} deal{deals.length === 1 ? "" : "s"}
+          {query && (
+            <>
+              {" "}
+              matching <span className="text-foreground">&quot;{query}&quot;</span>
+            </>
           )}
-        </div>
-
-        <FocusPanel deal={focusDeal} visibleExposure={visibleExposure} />
-        <NextActionsPanel deal={focusDeal} dealCount={filtered.length} />
+        </span>
+        <span className="hidden sm:inline tabular-nums">
+          Visible exposure: <span className="font-medium text-foreground">{fmtMoney(visibleExposure)}</span>
+        </span>
       </div>
+
+      <motion.div layout className="relative z-0 grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
+        <AnimatePresence mode="popLayout">
+          {filtered.map((deal) => (
+            <motion.div
+              key={deal.id}
+              layout
+              initial={{ opacity: 0, scale: 0.97, y: 8 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.97 }}
+              transition={{ duration: 0.2, ease: [0.22, 1, 0.36, 1] }}
+            >
+              <DealCard deal={deal} />
+            </motion.div>
+          ))}
+        </AnimatePresence>
+      </motion.div>
+
+      {filtered.length === 0 && (
+        <div className="rounded-xl border border-dashed border-border py-16 text-center text-sm text-muted-foreground">
+          No deals match your filters.
+        </div>
+      )}
     </div>
   );
 }
@@ -244,138 +233,5 @@ function TeamCompareBar({ deals }: { deals: DealSummary[] }) {
         </Button>
       </div>
     </div>
-  );
-}
-
-function FocusPanel({
-  deal,
-  visibleExposure,
-}: {
-  deal: DealSummary | null;
-  visibleExposure: number;
-}) {
-  return (
-    <aside className="overflow-hidden rounded-xl border border-border/80 bg-card/70 p-5 shadow-[0_0_0_1px_hsl(var(--border))_inset,0_20px_40px_-24px_hsl(0_0%_0%/0.7)] xl:sticky xl:top-[92px]">
-      <div className="flex items-center justify-between gap-3">
-        <div>
-          <div className="text-[11px] uppercase tracking-[0.12em] text-muted-foreground">Focus</div>
-          <h2 className="mt-1 text-sm font-semibold tracking-tight">
-            {deal ? "Top visible deal" : "No visible deals"}
-          </h2>
-        </div>
-        <div className="grid h-9 w-9 place-items-center rounded-lg bg-primary/10 text-primary ring-1 ring-primary/20">
-          <Target className="h-4 w-4" />
-        </div>
-      </div>
-
-      {deal ? (
-        <>
-          <div className="mt-5 rounded-lg border border-border/70 bg-background/45 p-4">
-            <div className="flex items-start justify-between gap-3">
-              <div className="min-w-0">
-                <div className="truncate text-base font-semibold tracking-tight">{deal.project_name}</div>
-                <div className="mt-1 truncate text-xs text-muted-foreground">{deal.developer_name}</div>
-              </div>
-              <div className="rounded-full bg-warning/15 px-2 py-1 text-xs font-semibold tabular-nums text-warning ring-1 ring-warning/30">
-                {deal.overall_score == null ? "-" : deal.overall_score.toFixed(1)}
-              </div>
-            </div>
-            <div className="mt-4 grid grid-cols-3 gap-3">
-              <MiniMetric label="Return" value={fmtPct(deal.target_irr ?? deal.target_cash_on_cash)} />
-              <MiniMetric label="Multiple" value={fmtMultiple(deal.target_equity_multiple)} />
-              <MiniMetric label="Min" value={fmtMoney(deal.minimum_investment)} />
-            </div>
-          </div>
-
-          <div className="mt-4 space-y-3 text-xs">
-            <div className="flex items-center justify-between gap-3">
-              <span className="text-muted-foreground">Visible exposure</span>
-              <span className="font-medium tabular-nums text-foreground">{fmtMoney(visibleExposure)}</span>
-            </div>
-            <div className="flex items-center justify-between gap-3">
-              <span className="text-muted-foreground">Status</span>
-              <span className="font-medium capitalize text-foreground">{deal.status}</span>
-            </div>
-          </div>
-        </>
-      ) : (
-        <div className="mt-5 rounded-lg border border-dashed border-border p-4 text-sm text-muted-foreground">
-          Adjust the filters to bring deals back into view.
-        </div>
-      )}
-    </aside>
-  );
-}
-
-function MiniMetric({ label, value }: { label: string; value: string }) {
-  return (
-    <div>
-      <div className="text-[10px] uppercase tracking-wider text-muted-foreground">{label}</div>
-      <div className="mt-1 text-sm font-semibold tabular-nums tracking-tight">{value}</div>
-    </div>
-  );
-}
-
-function NextActionsPanel({
-  deal,
-  dealCount,
-}: {
-  deal: DealSummary | null;
-  dealCount: number;
-}) {
-  const actions = deal
-    ? [
-        {
-          icon: Upload,
-          label: "Upload latest memo",
-          detail: "Keep scoring current before comparing.",
-        },
-        {
-          icon: ClipboardCheck,
-          label: "Review extraction",
-          detail: "Confirm IRR, multiple, and min investment.",
-        },
-        {
-          icon: GitCompareArrows,
-          label: "Compare alternatives",
-          detail: dealCount > 1 ? "Use score and risk deltas." : "Add another deal to unlock a real comparison.",
-        },
-      ]
-    : [
-        {
-          icon: Upload,
-          label: "Add a deal",
-          detail: "Upload an offering memo to populate the deal list.",
-        },
-      ];
-
-  return (
-    <aside className="overflow-hidden rounded-xl border border-border/80 bg-card/70 p-5 shadow-[0_0_0_1px_hsl(var(--border))_inset,0_20px_40px_-24px_hsl(0_0%_0%/0.7)] xl:sticky xl:top-[92px]">
-      <div className="flex items-center justify-between gap-3">
-        <div>
-          <div className="text-[11px] uppercase tracking-[0.12em] text-muted-foreground">Workflow</div>
-          <h2 className="mt-1 text-sm font-semibold tracking-tight">Next actions</h2>
-        </div>
-        <div className="grid h-9 w-9 place-items-center rounded-lg bg-success/10 text-success ring-1 ring-success/30">
-          <ClipboardCheck className="h-4 w-4" />
-        </div>
-      </div>
-
-      <div className="mt-5 space-y-3">
-        {actions.map((action) => (
-          <div key={action.label} className="rounded-lg border border-border/70 bg-background/40 p-3">
-            <div className="flex items-start gap-3">
-              <div className="mt-0.5 grid h-7 w-7 shrink-0 place-items-center rounded-md bg-muted text-muted-foreground">
-                <action.icon className="h-3.5 w-3.5" />
-              </div>
-              <div className="min-w-0">
-                <div className="text-sm font-medium tracking-tight">{action.label}</div>
-                <div className="mt-1 text-xs leading-relaxed text-muted-foreground">{action.detail}</div>
-              </div>
-            </div>
-          </div>
-        ))}
-      </div>
-    </aside>
   );
 }

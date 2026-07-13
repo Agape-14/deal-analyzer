@@ -8,7 +8,7 @@ import { ValidationFlagsPanel } from "@/components/deal-detail/validation-flags"
 import { MetricsSection } from "@/components/deal-detail/metrics-section";
 import { AuditTrail } from "@/components/deal-detail/audit-trail";
 import { QualityPanel } from "@/components/deal-detail/quality-panel";
-import { ReviewQueue, buildReviewItems } from "@/components/deal-detail/review-queue";
+import { ReviewQueue } from "@/components/deal-detail/review-queue";
 import { PipelineTimeline } from "@/components/deal-detail/pipeline-timeline";
 import { SourceDetailsDrawer } from "@/components/deal-detail/source-details-drawer";
 import { SourceCitations } from "@/components/deal-detail/source-citations";
@@ -51,27 +51,15 @@ export function OverviewTab({ deal }: { deal: DealDetail }) {
     ? { ...deal.quality, data_quality: deal.scores.data_quality }
     : deal.quality ?? deal.scores?.data_quality;
   const gate = deal.scores?.data_quality ?? (hasConfidenceExplanations(deal.quality) ? deal.quality : undefined);
-  const openReviewItemCount = showAnalyst ? buildReviewItems(deal).length : undefined;
-
   return (
     <div className="space-y-6">
-      <ExecutiveReview
-        deal={deal}
-        gate={gate}
-        headlineIrr={headlineIrr}
-        headlineCashOnCash={headlineCashOnCash}
-        headlineMultiple={headlineMultiple}
-        openReviewItemCount={openReviewItemCount}
-        viewerMode={!showAnalyst}
-      />
-
       {showAnalyst ? (
         <section id="admin-review-center" aria-label="Admin review queue">
           <ReviewQueue deal={deal} />
         </section>
       ) : null}
 
-      <div className="grid grid-cols-1 lg:grid-cols-[1.2fr_1fr] gap-6 items-stretch">
+      <div id="deal-summary" className="scroll-mt-28 grid grid-cols-1 gap-6 lg:grid-cols-[1.2fr_1fr] lg:items-stretch">
         <SnapshotCard
           ds={ds}
           fp={fp}
@@ -151,83 +139,6 @@ export function OverviewTab({ deal }: { deal: DealDetail }) {
   );
 }
 
-function ExecutiveReview({
-  deal,
-  gate,
-  headlineIrr,
-  headlineCashOnCash,
-  headlineMultiple,
-  openReviewItemCount,
-  viewerMode = false,
-}: {
-  deal: DealDetail;
-  gate?: DataQualityGate;
-  headlineIrr: number | null;
-  headlineCashOnCash: number | null;
-  headlineMultiple: number | null;
-  openReviewItemCount?: number;
-  viewerMode?: boolean;
-}) {
-  const metrics = deal.metrics ?? {};
-  const tr = (metrics.target_returns ?? {}) as Record<string, unknown>;
-  const ds = (metrics.deal_structure ?? {}) as Record<string, unknown>;
-  const canonical = metrics._canonical_returns;
-  const score = deal.overall_score ?? deal.scores?.provisional_overall ?? null;
-  const readiness = readinessCopy(gate, viewerMode, openReviewItemCount);
-  const decision = decisionCopy(score);
-  const strategy = strategyText(canonical?.primary_strategy ?? tr.primary_strategy ?? ds.primary_strategy);
-  const docs = deal.documents ?? [];
-  const readableDocs = docs.filter((doc) => doc.has_text).length;
-  const nextAction = viewerMode ? decision.label : gate?.next_actions?.[0] ?? readiness.action;
-  const nextActionDetail = viewerMode ? decision.detail : `${readableDocs}/${docs.length || 0} uploaded documents have readable text.`;
-  const biggestRisk = biggestRiskCopy(gate);
-  const primaryReturnLabel = headlineIrr !== null ? "Target IRR" : "Cash-on-Cash";
-  const primaryReturnValue = headlineIrr !== null ? headlineIrr : headlineCashOnCash;
-
-  return (
-    <Card id="executive-memo" className="scroll-mt-28 overflow-hidden border-border/80 bg-card p-0 shadow-sm">
-      <div className="border-b border-border/80 bg-muted/25 px-6 py-5">
-        <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
-          <div>
-            <div className="flex flex-wrap items-center gap-2">
-              <span className="text-[10px] font-extrabold uppercase tracking-[0.16em] text-primary">
-                {viewerMode ? "Investment Summary" : "Executive Review"}
-              </span>
-              <span className={`rounded-full px-2.5 py-1 text-xs font-semibold ring-1 ${readiness.className}`}>{readiness.label}</span>
-            </div>
-            <h2 className="mt-2 text-xl font-bold text-foreground">{readiness.headline}</h2>
-            <p className="mt-1 max-w-3xl text-sm leading-relaxed text-muted-foreground">{readiness.detail}</p>
-          </div>
-          <div className="min-w-[9rem] rounded-lg border border-border/80 bg-background px-4 py-3 text-right">
-            <div className="text-[10px] font-extrabold uppercase tracking-[0.14em] text-foreground/60">Score</div>
-            <div data-figure className="mt-1 text-3xl font-extrabold leading-none text-foreground">{formatScore(score)}</div>
-            <div className="mt-1 text-xs font-medium text-muted-foreground">{readiness.trust}</div>
-          </div>
-        </div>
-      </div>
-
-      <div className="grid gap-px bg-border/70 md:grid-cols-2 xl:grid-cols-[1.15fr_1fr_1fr_1fr_1.2fr_1.45fr]">
-        <ExecutiveMetric label="Base strategy" value={strategy} detail="Preferred plan unless the documents clearly say otherwise." />
-        <ExecutiveMetric label={primaryReturnLabel} value={fmtPct(primaryReturnValue, 1)} detail="Primary return shown in comparison views." />
-        <ExecutiveMetric label="Equity multiple" value={fmtMultiple(headlineMultiple)} detail="Headline multiple used for return scoring." />
-        <ExecutiveMetric label="Min investment" value={fmtMoney(deal.minimum_investment)} detail="Visible investor commitment for this deal." />
-        <ExecutiveMetric label="Biggest risk" value={biggestRisk.label} detail={biggestRisk.detail} />
-        <ExecutiveMetric label={viewerMode ? "Recommendation" : "Next action"} value={nextAction} detail={nextActionDetail} />
-      </div>
-    </Card>
-  );
-}
-
-function ExecutiveMetric({ label, value, detail }: { label: string; value: string; detail: string }) {
-  return (
-    <div className="min-w-0 bg-card px-4 py-3.5">
-      <div className="text-[10px] font-extrabold uppercase tracking-[0.12em] text-foreground/65">{label}</div>
-      <div data-figure className="mt-1.5 min-h-10 break-words text-base font-extrabold leading-snug text-foreground">{value}</div>
-      <div className="mt-1 line-clamp-2 text-[11px] leading-relaxed text-muted-foreground">{detail}</div>
-    </div>
-  );
-}
-
 function ViewerSourceStatus({ deal, gate }: { deal: DealDetail; gate?: DataQualityGate }) {
   const docs = deal.documents ?? [];
   const readableDocs = docs.filter((doc) => doc.has_text).length;
@@ -253,25 +164,6 @@ function ViewerSourceStatus({ deal, gate }: { deal: DealDetail; gate?: DataQuali
       </div>
     </Card>
   );
-}
-
-function biggestRiskCopy(gate?: DataQualityGate): { label: string; detail: string } {
-  const explanations = gate?.confidence_explanations ?? [];
-  const risk = explanations.find((item) => item.severity !== "success") ?? explanations[0];
-  if (risk) {
-    return {
-      label: risk.label || "Review queue",
-      detail: risk.detail || risk.action || "Clear the open review items before relying on the score.",
-    };
-  }
-  const action = gate?.next_actions?.[0];
-  if (action) return { label: "Needs confirmation", detail: action };
-  if (gate?.stage === "verified") return { label: "No blocking risk", detail: "No open review items are blocking the current score." };
-  return { label: "Review queue", detail: "Clear open review items before relying on the score." };
-}
-
-function formatScore(value: number | null | undefined): string {
-  return typeof value === "number" && Number.isFinite(value) ? value.toFixed(1) : "-";
 }
 
 function SnapshotCard({
@@ -385,104 +277,6 @@ function SnapshotGroup({
       </div>
     </section>
   );
-}
-
-function readinessCopy(gate?: DataQualityGate, viewerMode = false, openReviewItemCount?: number) {
-  const stage = String(gate?.stage ?? "").toLowerCase();
-  const confidence = typeof gate?.confidence_score === "number" ? Math.round(gate.confidence_score) : null;
-  const critical = gate?.critical_summary;
-  const openCritical =
-    (critical?.missing ?? 0) +
-    (critical?.conflicted ?? 0) +
-    (critical?.bad ?? 0) +
-    (critical?.review_only ?? 0);
-  const mathFailures = gate?.math_summary?.fail ?? gate?.math_summary?.blocking?.length ?? 0;
-  const openItems = typeof openReviewItemCount === "number" ? openReviewItemCount : openCritical + mathFailures;
-
-  if (stage === "verified" && openItems === 0) {
-    return {
-      label: "Ready to use",
-      headline: viewerMode ? "Ready for team review." : "The score can be used for comparison.",
-      detail: viewerMode
-        ? "Key deal assumptions have been organized into a clean investment summary for comparison."
-        : "The documents have been read, key values were source-checked, and no blocking review items are open.",
-      action: "Compare the deal against alternatives or export the underwriting summary.",
-      trust: confidence === null ? "Verified" : `${confidence}% confidence`,
-      className: "bg-success/15 text-success ring-success/30",
-    };
-  }
-
-  if (stage === "blocked") {
-    return {
-      label: viewerMode ? "Internal review" : "Blocked",
-      headline: viewerMode ? "Internal review is still in progress." : "The score should not be trusted yet.",
-      detail: viewerMode
-        ? "This deal is visible as a working summary while admin review is completed."
-        : "Required information is missing, contradicted, or could not be tied back to the uploaded documents.",
-      action: "Clear the review queue below before using the score.",
-      trust: confidence === null ? "Blocked" : `${confidence}% confidence`,
-      className: viewerMode ? "bg-warning/15 text-warning ring-warning/30" : "bg-destructive/15 text-destructive ring-destructive/30",
-    };
-  }
-
-  if (stage.includes("incomplete")) {
-    return {
-      label: viewerMode ? "Working summary" : "Document review incomplete",
-      headline: viewerMode ? "Document review is still being finalized." : "The score may be based on partial document reading.",
-      detail: viewerMode
-        ? "The current summary may change after the admin document review finishes."
-        : "Review documents again after API limits clear, then confirm any remaining items in the review queue.",
-      action: "Click Review documents again before relying on the score.",
-      trust: confidence === null ? "Incomplete" : `${confidence}% confidence`,
-      className: "bg-warning/15 text-warning ring-warning/30",
-    };
-  }
-
-  return {
-    label: viewerMode ? "Working summary" : "Needs review",
-    headline: viewerMode
-      ? "Current investment summary."
-      : openItems > 0
-        ? `${openItems} item${openItems === 1 ? " needs" : "s need"} review before the score is trusted.`
-        : "Confirm the review queue before relying on the score.",
-    detail: viewerMode
-      ? "The important numbers and score drivers are shown below; admin-only correction tools are hidden from this view."
-      : "The app has extracted useful information, but a few assumptions still need a human confirmation or correction.",
-    action: "Start with the first item in the review queue.",
-    trust: confidence === null ? "Needs review" : `${confidence}% confidence`,
-    className: "bg-warning/15 text-warning ring-warning/30",
-  };
-}
-
-function decisionCopy(score: number | null | undefined): { label: string; detail: string } {
-  if (typeof score !== "number" || !Number.isFinite(score)) {
-    return {
-      label: "Not scored yet",
-      detail: "Upload and review documents before treating this as an investment recommendation.",
-    };
-  }
-  if (score >= 8) {
-    return {
-      label: "Recommended",
-      detail: "Strong enough to prioritize for deeper diligence or comparison against active alternatives.",
-    };
-  }
-  if (score >= 6) {
-    return {
-      label: "Mixed - review",
-      detail: "Worth discussing, but the risks and score drivers should be compared carefully.",
-    };
-  }
-  return {
-    label: "Hold or pass",
-    detail: "The current underwriting score is below target; only continue if the risk/reward has a specific strategic reason.",
-  };
-}
-
-function strategyText(value: unknown): string {
-  const text = typeof value === "string" ? value.trim() : "";
-  if (!text) return "Not confirmed yet";
-  return text.replace(/_/g, " ").replace(/\b\w/g, (match) => match.toUpperCase());
 }
 
 function ConfidenceExplainer({ gate }: { gate?: DataQualityGate }) {
@@ -600,4 +394,3 @@ function fmtX(n: number | null): string {
   if (n == null) return "-";
   return `${n.toFixed(2)}x`;
 }
-

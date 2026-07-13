@@ -24,7 +24,7 @@ export default async function ComparePage() {
           </div>
           <h1 className="text-display tracking-tight">Compare deals</h1>
           <p className="text-sm text-muted-foreground mt-1.5 max-w-xl">
-            Executive, Returns, Leverage, Risk, Market, Sponsor, Underwriting presets — or build your own. Highlight winners, show deltas vs a baseline, or normalize across the group.
+            Compare returns, leverage, risk, market, sponsor, and underwriting assumptions side by side.
           </p>
         </div>
       </FadeIn>

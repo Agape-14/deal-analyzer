@@ -214,9 +214,9 @@ export function DealHero({ deal }: { deal: DealDetail }) {
 
             <div className="mt-4 grid gap-2">
               <Button size="sm" variant="secondary" asChild className="justify-center">
-                <a href="#executive-memo">
+                <a href="#deal-summary">
                   <FileText className="h-4 w-4" />
-                  Executive memo
+                  Deal summary
                 </a>
               </Button>
               <Button size="sm" variant="outline" asChild className="justify-center">

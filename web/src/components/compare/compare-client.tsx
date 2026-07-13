@@ -287,7 +287,7 @@ function EmptyState({ onPick }: { onPick: () => void }) {
         </div>
         <h3 className="text-lg font-semibold tracking-tight">Compare any two deals side-by-side</h3>
         <p className="text-sm text-muted-foreground mt-2 max-w-md mx-auto leading-relaxed">
-          Executive, Returns, Leverage, Risk, Market, Sponsor, Underwriting presets — or build your own. Highlight winners, show deltas vs a baseline, or normalize across the group.
+          Choose at least two deals. The comparison highlights the strongest values and shows differences against your baseline.
         </p>
         <Button className="mt-6" onClick={onPick}>
           <Plus className="h-4 w-4" />

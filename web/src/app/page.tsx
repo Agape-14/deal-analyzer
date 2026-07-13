@@ -7,9 +7,8 @@ import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { NeedsReviewPanel } from "@/components/needs-review-panel";
 import { PipelineWidgets, type PipelineSummary } from "@/components/pipeline-widgets";
-import { fmtMoney } from "@/lib/utils";
 import Link from "next/link";
-import { LayoutDashboard, Sparkles } from "lucide-react";
+import { LayoutDashboard } from "lucide-react";
 
 export const dynamic = "force-dynamic";
 
@@ -26,8 +25,6 @@ export default async function Home() {
     error = (e as { detail?: string }).detail ?? "Failed to load deals";
   }
 
-  const totalValue = deals.reduce((a, d) => a + (d.minimum_investment ?? 0), 0);
-
   return (
     <div className="w-full px-6 md:px-10 xl:px-12 2xl:px-14 py-8 md:py-12">
       {/* Hero */}
@@ -37,10 +34,10 @@ export default async function Home() {
             <div className="text-[11px] uppercase tracking-[0.14em] text-muted-foreground mb-2">
               Overview
             </div>
-            <h1 className="text-display tracking-tight">Deal Review</h1>
+            <h1 className="text-display tracking-tight">Deal Pipeline</h1>
             <p className="text-sm text-muted-foreground mt-1.5 max-w-xl">
               {deals.length
-                ? `${deals.length} deal${deals.length === 1 ? "" : "s"} across your sponsors. Upload offering memos to extract, verify, and score them automatically.`
+                ? `${deals.length} active deal${deals.length === 1 ? "" : "s"}. Review underwriting, compare opportunities, and open any deal that needs attention.`
                 : "Upload your first offering memo to start analyzing deals."}
             </p>
           </div>
@@ -76,13 +73,6 @@ export default async function Home() {
         <DealGrid deals={deals} />
       )}
 
-      <FadeIn delay={0.3}>
-        <div className="mt-16 flex items-center gap-2 text-[11px] text-muted-foreground">
-          <Sparkles className="h-3 w-3" />
-          Total min-investment exposure:{" "}
-          <span className="tabular-nums text-foreground font-medium">{fmtMoney(totalValue)}</span>
-        </div>
-      </FadeIn>
     </div>
   );
 }
