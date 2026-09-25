@@ -203,8 +203,20 @@ def test_waterfall_with_explicit_terms_conserves_total_cash():
     from app.services.waterfall_calculator import waterfall_from_deal
     metrics = {"deal_structure": {"total_equity_required": 1000000,
         "gp_equity_coinvest_pct": 10, "preferred_return": 8, "hold_period_years": 5,
-        "promote_tiers": [{"threshold": 15, "lp_split": 80, "gp_split": 20}]},
+        "waterfall_hurdle_basis": "simple_annual_return", "preferred_return_allocation": "pro_rata",
+        "promote_tiers": [{"threshold": "8", "lp_split": "80", "gp_split": "20"}]},
         "target_returns": {"total_project_profit": 1000000}}
-    result = waterfall_from_deal(metrics)
+    result = waterfall_from_deal(metrics, 90000)
     assert result["status"] == "illustrative"
     assert result["totals"]["lp_total"] + result["totals"]["gp_total"] == 2000000
+    assert result["tiers"][1]["your_amount"] == 36000
+    assert result["totals"]["your_total"] == result["totals"]["lp_total"] * 0.1
+
+
+def test_three_waterfall_tiers_use_each_increment_once():
+    from app.services.waterfall_calculator import calculate_waterfall
+    result = calculate_waterfall(1000000, 900000, 100000, 8,
+        [{"threshold": 8, "lp_split": 80, "gp_split": 20},
+         {"threshold": 15, "lp_split": 70, "gp_split": 30},
+         {"threshold": 20, "lp_split": 50, "gp_split": 50}], 1, 1000000)
+    assert [tier["total"] for tier in result["tiers"]] == [1000000, 80000, 70000, 50000, 800000]

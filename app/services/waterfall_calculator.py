@@ -125,12 +125,11 @@ def calculate_waterfall(
         "gp_amount": round(pref_gp),
         "lp_pct": round(lp_pct_of_equity * 100, 1),
         "gp_pct": round(gp_pct_of_equity * 100, 1),
-        "your_amount": round(pref_actual * investor_pct) if investment_amount else None,
+        "your_amount": round(pref_lp * investor_pct) if investment_amount else None,
     })
 
     # Promote tiers
     sorted_tiers = sorted(promote_tiers, key=lambda t: t["threshold"])
-    prev_threshold = preferred_return
 
     for i, tier in enumerate(sorted_tiers):
         if remaining_profit <= 0:
@@ -144,7 +143,7 @@ def calculate_waterfall(
         if i < len(sorted_tiers) - 1:
             next_threshold = sorted_tiers[i + 1]["threshold"]
             # Profit needed to reach next threshold from current
-            tier_target = total_equity * ((next_threshold - prev_threshold) / 100.0) * hold_years
+            tier_target = total_equity * ((next_threshold - threshold) / 100.0) * hold_years
             tier_profit = min(tier_target, remaining_profit)
         else:
             # Last tier gets all remaining
@@ -157,7 +156,7 @@ def calculate_waterfall(
 
         tier_name = f"Profit Split Tier {i + 1} ({tier['lp_split']}/{tier['gp_split']}"
         if i < len(sorted_tiers) - 1:
-            tier_name += f" to {sorted_tiers[i + 1]['threshold']}% IRR)"
+            tier_name += f" to {sorted_tiers[i + 1]['threshold']}% simple annual hurdle)"
         else:
             tier_name += f" above {threshold}%)"
 
@@ -171,7 +170,6 @@ def calculate_waterfall(
             "your_amount": round(tier_lp * investor_pct) if investment_amount else None,
         })
 
-        prev_threshold = threshold
 
     # Totals
     total_distributed = sum(t["total"] for t in tiers_result)
@@ -226,6 +224,10 @@ def waterfall_from_deal(metrics: dict, investment_amount: float = None) -> dict:
     def unavailable(message):
         return {"status": "unavailable", "message": message, "tiers": [], "totals": {}}
 
+    if (get_path(metrics, "deal_structure.waterfall_hurdle_basis") != "simple_annual_return"
+            or get_path(metrics, "deal_structure.preferred_return_allocation") != "pro_rata"):
+        return unavailable("Waterfall unavailable: the current model requires explicit simple annual hurdles and pro-rata preferred distributions. IRR hurdles, LP-only preferences and catch-up terms require a more complete model.")
+
     required = {
         "deal_structure.total_equity_required": (1, float("inf")),
         "deal_structure.gp_equity_coinvest_pct": (0, 100),
@@ -243,7 +245,12 @@ def waterfall_from_deal(metrics: dict, investment_amount: float = None) -> dict:
     tiers = get_path(metrics, "deal_structure.promote_tiers")
     if not isinstance(tiers, list) or not tiers:
         return unavailable("Waterfall unavailable: the source terms have not been mapped to structured LP/GP tiers. Free-text terms are not reliable enough to calculate investor distributions.")
+    provenance = metrics.get("_provenance") or {}
+    for path in ("deal_structure.promote_tiers", "deal_structure.waterfall_hurdle_basis", "deal_structure.preferred_return_allocation"):
+        if any(bad_source(entry) for key, entry in provenance.items() if key == path or key.startswith(path + ".")):
+            return unavailable("Waterfall terms have an unresolved source check.")
     previous = values["deal_structure.preferred_return"]
+    normalized_tiers = []
     for tier in tiers:
         if not isinstance(tier, dict):
             return unavailable("Waterfall tiers need source review.")
@@ -254,15 +261,22 @@ def waterfall_from_deal(metrics: dict, investment_amount: float = None) -> dict:
         if threshold < previous or not (0 <= lp <= 100 and 0 <= gp <= 100) or abs(lp + gp - 100) > 0.01:
             return unavailable("Waterfall tiers need source review.")
         previous = threshold
+        normalized_tiers.append({"threshold": threshold, "lp_split": lp, "gp_split": gp})
+    if normalized_tiers[0]["threshold"] != values["deal_structure.preferred_return"]:
+        return unavailable("Waterfall tiers must explicitly cover distributions immediately above the preferred return.")
     equity = values["deal_structure.total_equity_required"]
     gp_equity = equity * values["deal_structure.gp_equity_coinvest_pct"] / 100
+    if investment_amount is not None:
+        investment_amount = _safe_float(investment_amount, None)
+        if investment_amount is None or not math.isfinite(investment_amount) or not 0 < investment_amount <= equity - gp_equity:
+            return unavailable("Investment amount must be positive and no greater than the LP equity.")
     result = calculate_waterfall(
         total_equity=equity, lp_equity=equity - gp_equity, gp_equity=gp_equity,
-        preferred_return=values["deal_structure.preferred_return"], promote_tiers=tiers,
+        preferred_return=values["deal_structure.preferred_return"], promote_tiers=normalized_tiers,
         hold_years=values["deal_structure.hold_period_years"],
         total_profit=values["target_returns.total_project_profit"],
         investment_amount=investment_amount,
     )
     result["status"] = "illustrative"
-    result["message"] = "Illustrative end-of-hold allocation from explicit tiers. This simplified model excludes interim timing, compounding, catch-up provisions and tax allocations."
+    result["message"] = "Illustrative end-of-hold allocation using simple annual hurdles and pro-rata preferred distributions. This model excludes interim timing, IRR hurdles, compounding, catch-up provisions and tax allocations."
     return result
