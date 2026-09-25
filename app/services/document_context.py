@@ -127,6 +127,8 @@ def document_fingerprint(doc: Any) -> dict[str, Any]:
         "page_count": getattr(doc, "page_count", 0) or 0,
         "file_sha256": file_hash,
         "text_sha256": sha256_text(text) if text else "",
+        "source_role": getattr(doc, "source_role", None) or "active",
+        "superseded_by_id": getattr(doc, "superseded_by_id", None),
     }
 
 

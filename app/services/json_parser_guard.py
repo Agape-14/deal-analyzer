@@ -473,9 +473,9 @@ def install_deal_verifier_json_guard() -> None:
 
     current_verify = deal_verifier.verify_deal_metrics
     if not getattr(current_verify, "_metrics_object_guard", False):
-        async def guarded_verify_deal_metrics(deal, db) -> dict:
+        async def guarded_verify_deal_metrics(deal, db, *args, **kwargs) -> dict:
             deal.metrics = normalize_metrics_tree(deal.metrics, context="Stored deal metrics")
-            result = await current_verify(deal, db)
+            result = await current_verify(deal, db, *args, **kwargs)
             return _coerce_json_object(result, context="Verification result")
 
         guarded_verify_deal_metrics._metrics_object_guard = True  # type: ignore[attr-defined]

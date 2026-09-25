@@ -50,7 +50,9 @@ export default function LoginPage() {
     try {
       await api.post("/api/auth/login", { username, password });
       toast.success("Welcome back");
-      router.replace(next);
+      // Root-level drawers and search cache the anonymous session. A full
+      // navigation refreshes them along with the new session cookie.
+      window.location.assign(next.startsWith("/") && !next.startsWith("//") ? next : "/");
     } catch (err) {
       const d = (err as { detail?: string })?.detail ?? "Login failed";
       toast.error(d);

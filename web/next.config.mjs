@@ -61,6 +61,14 @@ const nextConfig = {
         source: "/:path*",
         headers: SECURITY_HEADERS,
       },
+      {
+        // Permit the app's own authenticated PDF preview, never other sites.
+        source: "/api/deals/documents/:id/file",
+        headers: [
+          { key: "X-Frame-Options", value: "SAMEORIGIN" },
+          { key: "Content-Security-Policy", value: CSP.replace("frame-ancestors 'none'", "frame-ancestors 'self'") },
+        ],
+      },
     ];
   },
 

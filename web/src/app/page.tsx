@@ -46,7 +46,7 @@ export default async function Home() {
 
       {/* Deal widgets: velocity, win rate, capital, aging */}
       {pipeline ? (
-        <PipelineWidgets summary={pipeline} />
+        <details className="mb-6 rounded-xl border border-border p-4"><summary className="cursor-pointer text-sm font-medium">Pipeline activity and capital</summary><div className="mt-4"><PipelineWidgets summary={pipeline} /></div></details>
       ) : (
         <div className="grid grid-cols-2 md:grid-cols-4 gap-3 md:gap-4 mb-10">
           <StatCard label="Total Deals" value={deals.length} />
@@ -64,7 +64,7 @@ export default async function Home() {
           <div className="text-destructive font-medium">Couldn&apos;t load deals</div>
           <div className="text-sm text-muted-foreground mt-1">{error}</div>
           <div className="text-xs text-muted-foreground mt-4">
-            Is the FastAPI backend running on <code className="font-mono">http://127.0.0.1:8000</code>?
+            Refresh to retry. Your saved deals have not been changed.
           </div>
         </Card>
       ) : deals.length === 0 ? (

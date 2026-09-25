@@ -9,20 +9,21 @@ import {
   MessageSquare,
   Waves,
   MapPin,
+  CircleHelp,
 } from "lucide-react";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { useCurrentUser } from "@/lib/auth-client";
 
 const TABS = [
-  { key: "overview", label: "Overview", icon: Gauge },
-  { key: "metrics", label: "Metrics", icon: Waves },
-  { key: "cashflow", label: "Cashflow", icon: LineChartIcon },
-  { key: "location", label: "Location", icon: MapPin },
+  { key: "overview", label: "Summary", icon: Gauge },
+  { key: "questions", label: "Questions", icon: CircleHelp },
   { key: "documents", label: "Documents", icon: FileText },
+  { key: "analysis", label: "Analysis", icon: Waves },
   { key: "chat", label: "Analyst", icon: MessageSquare },
 ] as const;
 
-export type DealTabKey = (typeof TABS)[number]["key"];
+export type DealTabKey = (typeof TABS)[number]["key"] | "metrics" | "cashflow" | "location" | "audit";
+const ANALYSIS_TABS = ["metrics", "cashflow", "location", "audit"];
 
 /**
  * Tab shell that drives the deal-detail view via `?tab=...` in the URL.
@@ -31,6 +32,8 @@ export type DealTabKey = (typeof TABS)[number]["key"];
  */
 export function DealTabs({
   overview,
+  questions,
+  audit,
   metrics,
   cashflow,
   location,
@@ -39,6 +42,8 @@ export function DealTabs({
   defaultTab = "overview",
 }: {
   overview: React.ReactNode;
+  questions: React.ReactNode;
+  audit: React.ReactNode;
   metrics: React.ReactNode;
   cashflow: React.ReactNode;
   location: React.ReactNode;
@@ -56,7 +61,7 @@ export function DealTabs({
   );
   const urlTab = (searchParams?.get("tab") as DealTabKey) || defaultTab;
   const [active, setActive] = React.useState<DealTabKey>(urlTab);
-  const resolvedActive = visibleTabs.some((tab) => tab.key === active) ? active : "overview";
+  const resolvedActive = ANALYSIS_TABS.includes(active) ? "analysis" : visibleTabs.some((tab) => tab.key === active) ? active : "overview";
 
   // Keep local state in sync with URL (e.g. back button)
   React.useEffect(() => {
@@ -65,7 +70,7 @@ export function DealTabs({
   }, [urlTab]);
 
   React.useEffect(() => {
-    if (visibleTabs.some((tab) => tab.key === active)) return;
+    if (visibleTabs.some((tab) => tab.key === active) || ANALYSIS_TABS.includes(active)) return;
     setActive("overview");
     const params = new URLSearchParams(searchParams?.toString() ?? "");
     params.set("tab", "overview");
@@ -91,14 +96,26 @@ export function DealTabs({
             className="shrink-0"
           >
             <t.icon className="h-3.5 w-3.5" />
-            <span className="hidden sm:inline">{t.label}</span>
+            <span>{t.label}</span>
           </TabsTrigger>
         ))}
       </TabsList>
       <TabsContent value="overview">{overview}</TabsContent>
-      <TabsContent value="metrics">{metrics}</TabsContent>
-      <TabsContent value="cashflow">{cashflow}</TabsContent>
-      <TabsContent value="location">{location}</TabsContent>
+      <TabsContent value="questions">{questions}</TabsContent>
+      <TabsContent value="analysis">
+        <Tabs value={ANALYSIS_TABS.includes(active) ? active : "metrics"} onValueChange={onValueChange}>
+          <TabsList className="mb-5 w-full overflow-x-auto">
+            <TabsTrigger value="metrics">Reported metrics</TabsTrigger>
+            <TabsTrigger value="cashflow">Projections</TabsTrigger>
+            <TabsTrigger value="location">Location</TabsTrigger>
+            <TabsTrigger value="audit">Evidence and history</TabsTrigger>
+          </TabsList>
+          <TabsContent value="metrics"><p className="mb-4 text-sm text-muted-foreground">Source-reported values and optional context. Use Summary for accepted facts.</p>{metrics}</TabsContent>
+          <TabsContent value="cashflow">{cashflow}</TabsContent>
+          <TabsContent value="location">{location}</TabsContent>
+          <TabsContent value="audit">{audit}</TabsContent>
+        </Tabs>
+      </TabsContent>
       <TabsContent value="documents">{documents}</TabsContent>
       <TabsContent value="chat">{chat}</TabsContent>
     </Tabs>

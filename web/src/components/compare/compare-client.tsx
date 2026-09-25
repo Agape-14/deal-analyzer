@@ -2,7 +2,7 @@
 
 import * as React from "react";
 import { useRouter, usePathname } from "next/navigation";
-import { Loader2, Plus, FileSpreadsheet, AlertCircle, GitCompareArrows } from "lucide-react";
+import { Loader2, Plus, FileSpreadsheet, AlertCircle, GitCompareArrows, RefreshCw } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -68,6 +68,7 @@ export function CompareClient({ deals }: { deals: DealSummary[] }) {
   const [details, setDetails] = React.useState<DealDetail[] | null>(null);
   const [loading, setLoading] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
+  const [retryCount, setRetryCount] = React.useState(0);
   const [overallWins, setOverallWins] = React.useState<Record<number, number>>({});
 
   const cacheRef = React.useRef(new Map<string, DealDetail[]>());
@@ -80,8 +81,11 @@ export function CompareClient({ deals }: { deals: DealSummary[] }) {
 
   // Fetch detailed compare whenever the selected-ids set changes
   React.useEffect(() => {
+    setDetails(null);
+    setError(null);
+    setLoading(false);
+    setOverallWins({});
     if (selectedIds.length < 2) {
-      setDetails(null);
       return;
     }
     const key = [...selectedIds].sort((a, b) => a - b).join(",");
@@ -91,19 +95,29 @@ export function CompareClient({ deals }: { deals: DealSummary[] }) {
       setDetails(reorder(cached, selectedIds));
       return;
     }
+    const controller = new AbortController();
+    let active = true;
     setLoading(true);
-    setError(null);
     api
-      .post<{ deals: DealDetail[] }>("/api/deals/compare", { deal_ids: selectedIds })
+      .post<{ deals: DealDetail[] }>("/api/deals/compare", { deal_ids: selectedIds }, {
+        timeoutMs: 15_000,
+        signal: controller.signal,
+      })
       .then((res) => {
+        if (!active) return;
         cacheRef.current.set(key, res.deals);
         setDetails(reorder(res.deals, selectedIds));
       })
       .catch((e) => {
+        if (!active) return;
         setError((e as { detail?: string })?.detail ?? "Couldn't load compare data");
       })
-      .finally(() => setLoading(false));
-  }, [idsParam]); // eslint-disable-line react-hooks/exhaustive-deps
+      .finally(() => { if (active) setLoading(false); });
+    return () => {
+      active = false;
+      controller.abort();
+    };
+  }, [selectedIds, retryCount]);
 
   const rows: MetricRow[] = React.useMemo(() => {
     if (preset === "custom") {
@@ -236,14 +250,18 @@ export function CompareClient({ deals }: { deals: DealSummary[] }) {
       )}
 
       {error && (
-        <Card elevated className="p-8 text-center">
+        <Card elevated className="p-8 text-center" role="alert">
           <AlertCircle className="h-5 w-5 text-destructive mx-auto mb-2" />
           <div className="text-sm font-medium text-destructive">Couldn&apos;t load comparison</div>
           <div className="text-xs text-muted-foreground mt-1">{error}</div>
+          <Button className="mt-4" variant="outline" onClick={() => setRetryCount((count) => count + 1)}>
+            <RefreshCw className="h-4 w-4" />
+            Try again
+          </Button>
         </Card>
       )}
 
-      {details && !loading && (
+      {details && !loading && !error && (
         <>
           <DealHeaderRow deals={details} overallWins={overallWins} onRemove={removeDeal} cols={cols} />
           {rows.length === 0 ? (

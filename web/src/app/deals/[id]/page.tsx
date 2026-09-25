@@ -3,7 +3,12 @@ import { api } from "@/lib/api";
 import type { DealDetail } from "@/lib/types";
 import { DealHero } from "@/components/deal-detail/hero";
 import { DealTabs, type DealTabKey } from "@/components/deal-detail/deal-tabs";
-import { OverviewTab } from "@/components/deal-detail/overview-tab";
+import { AcceptedSummary } from "@/components/deal-detail/accepted-summary";
+import { AnalysisQuestions } from "@/components/deal-detail/analysis-questions";
+import { AnalysisHistory } from "@/components/deal-detail/analysis-history";
+import { SourceCitations } from "@/components/deal-detail/source-citations";
+import { AuditTrail } from "@/components/deal-detail/audit-trail";
+import { PipelineTimeline } from "@/components/deal-detail/pipeline-timeline";
 import { MetricsTab } from "@/components/deal-detail/metrics-tab";
 import { CashflowTab } from "@/components/deal-detail/cashflow-tab";
 import { DocumentsPanel } from "@/components/deal-detail/documents-panel";
@@ -42,7 +47,9 @@ export default async function DealDetailPage({
       <div className="mt-8">
         <DealTabs
           defaultTab={tab}
-          overview={<OverviewTab deal={deal} />}
+          overview={<AcceptedSummary deal={deal} />}
+          questions={<AnalysisQuestions deal={deal} />}
+          audit={<div className="space-y-6"><AnalysisHistory dealId={deal.id} revision={deal.revision} analysisVersion={deal.analysis?.version} /><SourceCitations deal={deal} /><PipelineTimeline deal={deal} /><AuditTrail deal={deal} /></div>}
           metrics={<MetricsTab deal={deal} />}
           cashflow={<CashflowTab dealId={deal.id} projectedIrr={deal.target_irr} />}
           location={
@@ -60,7 +67,7 @@ export default async function DealDetailPage({
               }
             />
           }
-          documents={<DocumentsPanel dealId={deal.id} documents={deal.documents ?? []} />}
+          documents={<DocumentsPanel dealId={deal.id} revision={deal.revision} documents={deal.documents ?? []} />}
           chat={<ChatPanel dealId={deal.id} />}
         />
       </div>
