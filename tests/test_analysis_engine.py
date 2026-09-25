@@ -230,8 +230,90 @@ async def test_json_guard_forwards_scoped_verification_options(client, monkeypat
     from unittest.mock import AsyncMock
     from app.services import deal_verifier, json_parser_guard
     verifier = AsyncMock(return_value={"verified_fields": []})
+    verifier._metrics_object_guard = False
     monkeypatch.setattr(deal_verifier, "verify_deal_metrics", verifier)
     json_parser_guard.install_deal_verifier_json_guard()
     deal = SimpleNamespace(metrics={})
     await deal_verifier.verify_deal_metrics(deal, None, sections=["target_returns"])
     verifier.assert_awaited_once_with(deal, None, sections=["target_returns"])
+
+
+def test_manual_resolution_replaces_conflicting_dotted_aliases():
+    from app.services.data_integrity import mark_manual_edit
+    metrics = manual_metrics()
+    metrics["target_returns"]["hold_scenario.cash_on_cash_return"] = 11
+    metrics["target_returns.hold_scenario"] = {"cash_on_cash_return": 12}
+    mark_manual_edit(metrics, "target_returns.hold_scenario.cash_on_cash_return", 9)
+    assert build_analysis(metrics)["returns"]["cash_on_cash"] == 9
+
+
+def test_verification_preserves_manual_reason_but_surfaces_a_source_challenge():
+    from app.services.data_integrity import mark_manual_edit, stamp_verification
+    path = "target_returns.hold_scenario.cash_on_cash_return"
+    metrics = mark_manual_edit(manual_metrics(), path, 8)
+    metrics["_provenance"][path]["verification_note"] = "Analyst checked signed terms"
+    row = {"section": "target_returns", "field": "hold_scenario.cash_on_cash_return", "status": "confirmed", "source": "Memo.pdf page 1"}
+    stamp_verification(metrics, {"audit_results": [row]})
+    assert build_analysis(metrics)["facts"][path]["state"] == "manual"
+    assert metrics["_provenance"][path]["verification_note"] == "Analyst checked signed terms"
+    row.update(status="wrong", note="Memo says 6 percent")
+    stamp_verification(metrics, {"audit_results": [row]})
+    assert build_analysis(metrics)["facts"][path]["state"] == "disputed"
+    assert metrics["target_returns"]["hold_scenario"]["cash_on_cash_return"] == 8
+    assert metrics["_locks"][path] is True
+
+
+@pytest.mark.asyncio
+async def test_legacy_preview_is_read_only_and_adoption_checks_revision(client):
+    from sqlalchemy import delete, update
+    from app.database import async_session
+    from app.models import Deal, AnalysisSnapshot
+    deal_id = (await client.post("/api/deals", json={"project_name": "Legacy migration"})).json()["id"]
+    async with async_session() as db:
+        await db.execute(delete(AnalysisSnapshot).where(AnalysisSnapshot.deal_id == deal_id))
+        await db.execute(update(Deal).where(Deal.id == deal_id).values(metrics=manual_metrics(), analysis_snapshot=None, analysis_version=0))
+        await db.commit()
+    preview = (await client.get(f"/api/deals/{deal_id}/analysis/preview")).json()
+    assert preview["candidate"]["returns"]["cash_on_cash"] == 8
+    assert (await client.get(f"/api/deals/{deal_id}/analysis/history")).json() == []
+    payload = {"expected_revision": preview["expected_revision"], "input_hash": preview["candidate"]["input_hash"]}
+    assert (await client.post(f"/api/deals/{deal_id}/analysis/adopt", json={**payload, "input_hash": "0" * 64})).status_code == 409
+    saved = await client.post(f"/api/deals/{deal_id}/analysis/adopt", json=payload)
+    assert saved.status_code == 200, saved.text
+    assert saved.json()["analysis"]["version"] == 1
+    actual = (await client.get(f"/api/deals/{deal_id}")).json()
+    assert actual["metrics"] == manual_metrics()
+
+
+@pytest.mark.asyncio
+async def test_restore_creates_new_revision_preserves_history_and_rechecks_current_sources(client):
+    from app.database import async_session
+    from app.models import Deal, DealDocument
+    deal_id = (await client.post("/api/deals", json={"project_name": "Restorable source"})).json()["id"]
+    async with async_session() as db:
+        doc = DealDocument(deal_id=deal_id, filename="Memo.pdf", file_path="", file_sha256="a", page_count=5)
+        db.add(doc)
+        await db.flush()
+        deal = await db.get(Deal, deal_id)
+        metrics = manual_metrics()
+        metrics["_provenance"]["target_returns.hold_scenario.cash_on_cash_return"] = {"status": "confirmed", "source_doc_id": doc.id, "source_page": 2, "source_document_hash": "a"}
+        deal.metrics = metrics
+        await db.commit()
+        previous = copy.deepcopy(deal.analysis_snapshot)
+        version = deal.analysis_version
+        metrics = copy.deepcopy(metrics)
+        metrics["deal_structure"]["total_project_cost"] = 2000000
+        metrics["deal_structure"]["total_equity_required"] = 1400000
+        deal.metrics = metrics
+        await db.delete(doc)
+        await db.commit()
+    current = (await client.get(f"/api/deals/{deal_id}")).json()
+    request = {"expected_revision": current["revision"], "reason": "Restore original funding inputs"}
+    restored = await client.post(f"/api/deals/{deal_id}/analysis/{version}/restore", json=request)
+    assert restored.status_code == 200, restored.text
+    analysis = restored.json()["analysis"]
+    assert analysis["version"] > current["analysis"]["version"]
+    assert analysis["facts"]["deal_structure.total_project_cost"]["value"] == 1000000
+    assert analysis["returns"]["cash_on_cash"] is None  # deleted evidence stays unavailable
+    assert (await client.get(f"/api/deals/{deal_id}/analysis/{version}")).json() == previous
+    assert (await client.post(f"/api/deals/{deal_id}/analysis/{version}/restore", json=request)).status_code == 409

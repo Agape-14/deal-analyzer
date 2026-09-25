@@ -87,6 +87,7 @@ class AnalysisSnapshot(Base):
     version = Column(Integer, nullable=False)
     input_hash = Column(String(64), nullable=False)
     payload = Column(JSON, nullable=False)
+    input_metrics = Column(JSON, nullable=True)
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
     deal = relationship("Deal", back_populates="analysis_history")
 

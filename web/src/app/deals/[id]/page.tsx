@@ -49,7 +49,7 @@ export default async function DealDetailPage({
           defaultTab={tab}
           overview={<AcceptedSummary deal={deal} />}
           questions={<AnalysisQuestions deal={deal} />}
-          audit={<div className="space-y-6"><AnalysisHistory dealId={deal.id} /><SourceCitations deal={deal} /><PipelineTimeline deal={deal} /><AuditTrail deal={deal} /></div>}
+          audit={<div className="space-y-6"><AnalysisHistory dealId={deal.id} revision={deal.revision} analysisVersion={deal.analysis?.version} /><SourceCitations deal={deal} /><PipelineTimeline deal={deal} /><AuditTrail deal={deal} /></div>}
           metrics={<MetricsTab deal={deal} />}
           cashflow={<CashflowTab dealId={deal.id} projectedIrr={deal.target_irr} />}
           location={

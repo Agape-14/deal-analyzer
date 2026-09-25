@@ -15,7 +15,7 @@ def test_analysis_migrations_preserve_legacy_metrics_and_are_idempotent(tmp_path
         conn.execute(sa.text("INSERT INTO deals (id, metrics) VALUES (1, :metrics)"), {"metrics": original})
         op = Operations(MigrationContext.configure(conn))
         for _ in range(2):
-            for filename in ("c210925a001_analysis_snapshots.py", "c210925a002_review_jobs.py"):
+            for filename in ("c210925a001_analysis_snapshots.py", "c210925a002_review_jobs.py", "c210925a003_snapshot_inputs.py"):
                 path = Path(__file__).parents[1] / "alembic" / "versions" / filename
                 spec = importlib.util.spec_from_file_location(filename[:-3], path)
                 migration = importlib.util.module_from_spec(spec)

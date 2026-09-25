@@ -66,8 +66,11 @@ def assert_lease(session):
     if not lease:
         return
     deal_id, token = lease
-    row = session.execute(select(ReviewJob.lease_token, ReviewJob.lease_until).where(ReviewJob.deal_id == deal_id)).first()
-    if not row or row.lease_token != token or not row.lease_until or row.lease_until < utcnow():
+    # A conditional write holds the job row (SQLite: writer transaction) until
+    # commit, closing the gap between checking ownership and saving results.
+    result = session.execute(update(ReviewJob).where(ReviewJob.deal_id == deal_id, ReviewJob.lease_token == token,
+        ReviewJob.lease_until >= utcnow()).values(lease_token=token).execution_options(synchronize_session=False))
+    if result.rowcount != 1:
         raise StaleDataError("This review worker no longer owns the job")
 
 

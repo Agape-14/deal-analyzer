@@ -6,10 +6,12 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm.attributes import flag_modified
 
 from app.database import get_db
-from app.models import AnalysisSnapshot, Deal
-from app.services.analysis import REGISTRY, analysis_for_deal, valid_number
+from app.models import AnalysisSnapshot, Deal, DealDocument
+from app.services.analysis import REGISTRY, analysis_for_deal, build_analysis, valid_number
+from app.services.analysis_store import document_manifest
 from app.services.data_integrity import mark_manual_edit, now_iso
 from app.routers.field_edits import _append_field_history, _refresh_integrity
 
@@ -27,7 +29,56 @@ async def get_deal(deal_id, db):
 async def history(deal_id: int, db: AsyncSession = Depends(get_db)):
     await get_deal(deal_id, db)
     records = (await db.execute(select(AnalysisSnapshot).where(AnalysisSnapshot.deal_id == deal_id).order_by(AnalysisSnapshot.version.desc()).limit(50))).scalars().all()
-    return [{"version": s.version, "input_hash": s.input_hash, "created_at": s.created_at.isoformat(), "status": s.payload["status"], "changes": s.payload.get("changes", [])} for s in records]
+    return [{"version": s.version, "input_hash": s.input_hash, "created_at": s.created_at.isoformat(), "status": s.payload["status"], "changes": s.payload.get("changes", []), "can_restore": s.input_metrics is not None} for s in records]
+
+
+@router.get("/{deal_id}/analysis/preview")
+async def preview(deal_id: int, db: AsyncSession = Depends(get_db)):
+    deal = await get_deal(deal_id, db)
+    docs = (await db.execute(select(DealDocument).where(DealDocument.deal_id == deal_id))).scalars().all()
+    candidate = build_analysis(deal.metrics, document_manifest(docs), deal.property_type)
+    return {"expected_revision": deal.revision, "current": analysis_for_deal(deal), "candidate": candidate}
+
+
+class Adoption(BaseModel):
+    expected_revision: int = Field(ge=1)
+    input_hash: str = Field(min_length=64, max_length=64)
+
+
+@router.post("/{deal_id}/analysis/adopt")
+async def adopt(deal_id: int, data: Adoption, db: AsyncSession = Depends(get_db)):
+    deal = await get_deal(deal_id, db)
+    candidate = await preview(deal_id, db)
+    if deal.revision != data.expected_revision or candidate["candidate"]["input_hash"] != data.input_hash:
+        raise HTTPException(409, "The inputs changed. Preview the current documents before saving.")
+    flag_modified(deal, "metrics")
+    await db.commit()
+    await db.refresh(deal)
+    return {"revision": deal.revision, "analysis": analysis_for_deal(deal)}
+
+
+class Restoration(BaseModel):
+    expected_revision: int = Field(ge=1)
+    reason: str = Field(min_length=3, max_length=1000)
+
+
+@router.post("/{deal_id}/analysis/{version}/restore")
+async def restore(deal_id: int, version: int, data: Restoration, db: AsyncSession = Depends(get_db)):
+    deal = await get_deal(deal_id, db)
+    if deal.review_job and deal.review_job.status in {"queued", "running"}:
+        raise HTTPException(409, "Document review is active. Wait for it to finish before restoring inputs.")
+    if deal.revision != data.expected_revision:
+        raise HTTPException(409, "The deal changed. Reload before restoring inputs.")
+    row = (await db.execute(select(AnalysisSnapshot).where(AnalysisSnapshot.deal_id == deal_id, AnalysisSnapshot.version == version))).scalar_one_or_none()
+    if not row or row.input_metrics is None:
+        raise HTTPException(409, "This revision predates restorable input history.")
+    metrics = copy.deepcopy(row.input_metrics)
+    metrics["_analysis_restore"] = {"version": version, "reason": data.reason, "at": now_iso()}
+    metrics["_pipeline"] = {"status": "complete", "message": "Prior inputs restored; source acceptance was rechecked against the current documents."}
+    _refresh_integrity(deal, metrics)
+    await db.commit()
+    await db.refresh(deal)
+    return {"revision": deal.revision, "analysis": analysis_for_deal(deal)}
 
 
 @router.get("/{deal_id}/analysis/{version}")

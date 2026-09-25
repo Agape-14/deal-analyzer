@@ -139,3 +139,38 @@ async def test_upload_and_queue_are_saved_together_without_browser_handoff(clien
         assert doc.extraction_quality["status"] == "queued"
         assert job.status == "queued"
         assert job.request_seq == 1
+
+
+async def test_queue_runs_real_pipeline_with_controlled_provider_replies(client, monkeypatch):
+    from unittest.mock import AsyncMock
+    from app.database import async_session
+    from app.models import DealDocument, ReviewJob, Notification
+    from app.routers import deal_pipeline
+    from app.services import deal_verifier, review_jobs
+    from app.services.analysis import flatten
+    deal_id = await setup_job(client)
+    metrics = {
+        "target_returns": {"primary_strategy": "hold", "hold_scenario": {"cash_on_cash_return": 8}},
+        "deal_structure": {"total_project_cost": 1000000, "total_equity_required": 400000, "debt_amount": 600000, "minimum_investment": 25000},
+        "project_details": {"unit_count": 10},
+    }
+    async with async_session() as db:
+        db.add(DealDocument(deal_id=deal_id, filename="Synthetic.csv", file_path="synthetic.csv", file_sha256="source-a",
+            extracted_text="Synthetic capital terms and return", page_count=1, extraction_quality={"status": "extracted"}))
+        await db.commit()
+    audit = [{"section": path.split(".")[0], "field": path.partition(".")[2], "status": "confirmed", "source_doc_name": "Synthetic.csv", "source_sheet": "Terms", "source_cell": f"B{i + 1}"} for i, path in enumerate(flatten(metrics))]
+    extractor = AsyncMock(return_value=metrics)
+    verifier = AsyncMock(return_value={"audit_results": audit, "summary": {"confidence_score": 99}})
+    monkeypatch.setattr(deal_pipeline, "extract_metrics_from_docs", extractor)
+    monkeypatch.setattr(deal_verifier, "verify_deal_metrics", verifier)
+    assert await review_jobs.process_one_job()
+    actual = (await client.get(f"/api/deals/{deal_id}")).json()
+    assert actual["analysis"]["returns"]["cash_on_cash"] == 8
+    assert actual["analysis"]["questions"] == []
+    assert actual["analysis"]["facts"]["deal_structure.loan_to_cost"]["value"] == 60
+    assert actual["scores"]["analysis_input_hash"] == actual["analysis"]["input_hash"]
+    async with async_session() as db:
+        assert (await db.get(ReviewJob, deal_id)).status == "complete"
+        assert len((await db.execute(select(Notification))).scalars().all()) == 1
+    extractor.assert_awaited_once()
+    verifier.assert_awaited_once()

@@ -401,7 +401,7 @@ def stamp_verification(
     For each audit entry we update `_provenance[section.field]` with:
       - status: confirmed | wrong | unverifiable | calculated | missing
       - verified_at: now
-      - confidence: from the verification summary
+      - field evidence, without copying overall confidence to the field
       - source_page / source_doc_name if parseable from the free-text 'source'
 
     Does NOT mutate the metric values themselves — that's the job of
@@ -429,6 +429,15 @@ def stamp_verification(
         path = f"{section}.{field_name}"
         p = dict(prov.get(path) or {})
         status = str(row.get("status") or "").lower() or "extracted"
+        if p.get("source") == "manual" and is_path_locked(metrics, path):
+            # A source check may challenge a decision, but cannot erase its
+            # identity, reason or lock or relabel it as independently checked.
+            p["last_source_check"] = {"status": status, "note": row.get("note"), "source": row.get("source"), "at": verified_at}
+            p["source_challenge"] = str(row.get("note") or "The source check challenges this analyst decision.") if status in {"wrong", "missing", "unverifiable", "math_failed"} else None
+            prov[path] = p
+            if p["source_challenge"]:
+                challenged_paths.add(path)
+            continue
         if status in {"wrong", "missing", "unverifiable", "math_failed"}:
             challenged_paths.add(path)
         p["status"] = status
@@ -547,6 +556,17 @@ def mark_manual_edit(
     section, _, field_name = path.partition(".")
     if not section or not field_name:
         return metrics
+    def remove_aliases(tree, prefix="", aliased=False):
+        for key, child in list(tree.items()):
+            if str(key).startswith("_"):
+                continue
+            current = f"{prefix}.{key}" if prefix else key
+            is_alias = aliased or "." in key
+            if current == path and is_alias:
+                del tree[key]
+            elif isinstance(child, dict):
+                remove_aliases(child, current, is_alias)
+    remove_aliases(metrics)
     block = dict(metrics.get(section) or {})
     metrics[section] = block
     parts = field_name.split(".")

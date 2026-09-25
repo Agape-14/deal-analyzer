@@ -231,6 +231,8 @@ def build_analysis(metrics, documents=None, property_type="multifamily"):
         elif len({json.dumps(clean_json(v), sort_keys=True) for v in values}) > 1 or prov.get("conflict"):
             fact.state, fact.reason = "disputed", "The same fact has conflicting source values."
             fact.alternatives = clean_json(prov.get("conflict") or values)
+        elif prov.get("source_challenge"):
+            fact.state, fact.reason = "disputed", str(prov["source_challenge"])
         elif status in BAD:
             fact.state, fact.reason = "disputed", str(prov.get("verification_note") or "The source check remains unresolved.")
         elif status == "manual":

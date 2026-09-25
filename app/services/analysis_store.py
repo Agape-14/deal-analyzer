@@ -11,6 +11,12 @@ from app.models import AnalysisSnapshot, Deal, DealDocument
 from app.services.analysis import build_analysis
 
 
+def snapshot_inputs(metrics):
+    # Keep the source/decision record, not provider caches or transient jobs.
+    omitted = {"_pipeline", "_document_review_cache", "_verification_cache", "_math_checks", "_data_quality"}
+    return copy.deepcopy({k: v for k, v in (metrics or {}).items() if k not in omitted})
+
+
 def collect_changes(session):
     from app.services.review_jobs import assert_lease
     assert_lease(session)
@@ -63,4 +69,4 @@ def persist_changes(session):
             ]
             deal.analysis_version = version
             deal.analysis_snapshot = snapshot
-            session.add(AnalysisSnapshot(deal_id=deal.id, version=version, input_hash=snapshot["input_hash"], payload=copy.deepcopy(snapshot)))
+            session.add(AnalysisSnapshot(deal_id=deal.id, version=version, input_hash=snapshot["input_hash"], payload=copy.deepcopy(snapshot), input_metrics=snapshot_inputs(deal.metrics)))
