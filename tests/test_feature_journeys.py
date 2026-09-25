@@ -32,6 +32,7 @@ async def test_return_values_agree_in_detail_compare_and_exports(client):
             "hold_scenario": {"cash_on_cash_return": 8},
             "sale_scenario": {"sale_irr": 22, "sale_equity_multiple": 2.4, "is_hypothetical": True}},
         "deal_structure": {"ltv": 60},
+        "_provenance": {"target_returns.hold_scenario.cash_on_cash_return": {"status": "manual"}},
     }
     await client.put(f"/api/deals/{a}", json={"metrics": metrics, "scores": {"overall": None}, "notes": "A < B & C"})
     await client.put(f"/api/deals/{b}", json={"metrics": {"target_returns": {"target_irr": 15}, "deal_structure": {"ltv": 80}}})

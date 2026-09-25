@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, Text, Float, DateTime, ForeignKey, JSON, Date
+from sqlalchemy import Column, Integer, String, Text, Float, DateTime, ForeignKey, JSON, Date, UniqueConstraint
 from sqlalchemy.orm import relationship
 from datetime import datetime, timezone, date
 from app.database import Base
@@ -27,6 +27,10 @@ class Deal(Base):
     __tablename__ = "deals"
 
     id = Column(Integer, primary_key=True, index=True)
+    revision = Column(Integer, nullable=False, default=1, server_default="1")
+    analysis_version = Column(Integer, nullable=False, default=0, server_default="0")
+    analysis_snapshot = Column(JSON, default=dict)
+    __mapper_args__ = {"version_id_col": revision}
     deleted_at = Column(DateTime, nullable=True, index=True)
     # `developer_id` is the join key for the developer-detail view and
     # gets an index so looking up "all deals under sponsor X" is fast.
@@ -55,6 +59,19 @@ class Deal(Base):
     chats = relationship("DealChat", back_populates="deal", cascade="all, delete-orphan")
     investments = relationship("Investment", back_populates="deal", cascade="all, delete-orphan")
     ai_usage_events = relationship("AIUsageEvent", back_populates="deal", cascade="all, delete-orphan")
+    analysis_history = relationship("AnalysisSnapshot", back_populates="deal", cascade="all, delete-orphan")
+
+
+class AnalysisSnapshot(Base):
+    __tablename__ = "analysis_snapshots"
+    __table_args__ = (UniqueConstraint("deal_id", "version", name="uq_analysis_deal_version"),)
+    id = Column(Integer, primary_key=True)
+    deal_id = Column(Integer, ForeignKey("deals.id"), nullable=False, index=True)
+    version = Column(Integer, nullable=False)
+    input_hash = Column(String(64), nullable=False)
+    payload = Column(JSON, nullable=False)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    deal = relationship("Deal", back_populates="analysis_history")
 
 
 class DealDocument(Base):

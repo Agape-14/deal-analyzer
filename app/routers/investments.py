@@ -190,10 +190,12 @@ async def create_investment(data: InvestmentCreate, db: AsyncSession = Depends(g
             if not data.sponsor_name and deal.developer:
                 data.sponsor_name = deal.developer.name
             # Pull from metrics
-            m = deal.metrics or {}
+            from app.services.analysis import analysis_for_deal
+            analysis = analysis_for_deal(deal)
+            m = analysis["accepted_metrics"]
             ds = m.get('deal_structure', {}) or {}
             from app.services.canonical_metrics import canonical_return_summary
-            returns = canonical_return_summary(m)
+            returns = analysis["returns"]
             if data.preferred_return is None and ds.get('preferred_return') is not None:
                 data.preferred_return = ds['preferred_return']
             if data.projected_irr is None:

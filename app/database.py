@@ -2,6 +2,7 @@ import os
 from sqlalchemy import event
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
 from sqlalchemy.orm import DeclarativeBase
+from sqlalchemy.orm import Session
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
@@ -45,7 +46,28 @@ if DATABASE_URL.startswith("sqlite+aiosqlite"):
             cursor.close()
 
 
-async_session = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
+class SnapshotSession(Session):
+    """Session-local hooks keep facts/history atomic with every mutation path."""
+
+
+@event.listens_for(SnapshotSession, "before_flush")
+def _collect_analysis_changes(session, flush_context, instances):
+    from app.services.analysis_store import collect_changes
+    collect_changes(session)
+
+
+@event.listens_for(SnapshotSession, "after_flush_postexec")
+def _persist_analysis_changes(session, flush_context):
+    from app.services.analysis_store import persist_changes
+    persist_changes(session)
+
+
+@event.listens_for(SnapshotSession, "after_rollback")
+def _discard_analysis_changes(session):
+    session.info.pop("analysis_pending", None)
+
+
+async_session = async_sessionmaker(engine, class_=AsyncSession, sync_session_class=SnapshotSession, expire_on_commit=False)
 
 
 class Base(DeclarativeBase):
@@ -97,7 +119,7 @@ def _apply_schema_patches(sync_conn) -> None:
     insp = inspect(sync_conn)
     for table in Base.metadata.sorted_tables:
         if not insp.has_table(table.name):
-            if table.name == "ai_usage_events":
+            if table.name in {"ai_usage_events", "analysis_snapshots"}:
                 table.create(sync_conn, checkfirst=True)
             continue
         existing = {c["name"] for c in insp.get_columns(table.name)}

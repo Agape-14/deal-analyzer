@@ -99,6 +99,7 @@ Rules:
 7. For risk scores assigned by analysis rather than stated by the document, mark as "calculated" with a note explaining the basis.
 8. If evidence conflicts, mark the field wrong or unverifiable and explain the conflict.
 9. Do not silently correct investor-level return metrics from a sponsor/GP column. Investor/LP returns should come from Investor, LP, Class A/B, or new-money investor columns.
+10. On each audit row include source_doc_name exactly as supplied, source_excerpt containing the short supporting quote, and either source_page (PDF) or source_sheet plus source_cell/source_range (workbook). A filename by itself is insufficient. For nested values use a dotted field path; audit distinct scenarios and investor classes separately. Include fact_context with scenario, investor_class, basis (gross/net), debt_phase, period and currency only when the source explicitly states them. Never guess missing dimensions.
 
 HERE ARE THE EXTRACTED METRICS TO VERIFY:
 """

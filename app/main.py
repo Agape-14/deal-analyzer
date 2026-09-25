@@ -39,6 +39,8 @@ from app.auth import (
 from app.rate_limit import describe_policies
 from app.services.json_parser_guard import install_deal_verifier_json_guard
 from app.services.pipeline_runner import start_pipeline_runner, stop_pipeline_runner
+from app.routers import analysis as analysis_router
+from sqlalchemy.orm.exc import StaleDataError
 
 
 # ----------------------------- logging setup ----------------------------- #
@@ -85,6 +87,14 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="Kenyon Investment Dashboard", version="1.0.0", lifespan=lifespan)
+
+
+@app.exception_handler(StaleDataError)
+async def stale_analysis_handler(request, exc):
+    return JSONResponse(status_code=409, content={"detail": "The deal changed during this operation. Reload and retry; no older result was saved."})
+
+
+app.include_router(analysis_router.router, prefix="/api/deals", tags=["analysis"])
 
 
 class EnforceAuthMiddleware(BaseHTTPMiddleware):

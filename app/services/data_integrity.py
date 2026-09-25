@@ -61,6 +61,9 @@ META_KEYS = {
     "_shape_errors",
     "_review_resolutions",
     "_manual_edit_warning",
+    "_fact_context",
+    "_analysis_context",
+    "_analysis_resolution",
     "validation_flags",
 }
 
@@ -386,6 +389,9 @@ def auto_resolve_conflicts(
     merged: dict[str, Any],
     doc_upload_dates: dict[int, Any],
 ) -> int:
+    # Upload order is not document version order. Preserve conflicting evidence.
+    return 0
+
     """Auto-resolve conflicts by preferring the newest document's value.
 
     For each conflicting field:
@@ -451,6 +457,7 @@ def auto_resolve_conflicts(
 def stamp_verification(
     metrics: dict[str, Any],
     verification: dict[str, Any],
+    documents: list | None = None,
 ) -> dict[str, Any]:
     """Fold `/verify` audit_results into the provenance tree.
 
@@ -489,8 +496,8 @@ def stamp_verification(
             challenged_paths.add(path)
         p["status"] = status
         p["verified_at"] = verified_at
-        if confidence is not None:
-            p["confidence"] = confidence
+        # Overall model confidence is not field-level evidence.
+        p.pop("confidence", None)
 
         # Parse "Page N" out of the free-text source so the UI can link
         # to a specific PDF page.
@@ -504,6 +511,23 @@ def stamp_verification(
         note = row.get("note")
         if note:
             p["verification_note"] = str(note)
+        for key in ("source_doc_name", "source_sheet", "source_cell", "source_range", "source_excerpt"):
+            if isinstance(row.get(key), str) and row[key].strip():
+                p[key] = row[key].strip()
+        if isinstance(row.get("source_page"), int) and row["source_page"] > 0:
+            p["source_page"] = row["source_page"]
+        if isinstance(row.get("fact_context"), dict):
+            contexts = dict(metrics.get("_fact_context") or {})
+            contexts[path] = {key: value for key, value in row["fact_context"].items() if key in {"scenario", "investor_class", "basis", "debt_phase", "period", "currency"} and isinstance(value, str)}
+            metrics["_fact_context"] = contexts
+        if documents:
+            from app.services.analysis_store import document_manifest
+            from app.services.analysis import evidence_for
+            evidence, _ = evidence_for({k: v for k, v in p.items() if k != "source_document_hash"}, document_manifest(documents))
+            if len(evidence) == 1:
+                p["source_doc_id"] = evidence[0]["document_id"]
+                p["source_doc_name"] = evidence[0]["document_name"]
+                p["source_document_hash"] = evidence[0]["content_hash"]
 
         prov[path] = p
 

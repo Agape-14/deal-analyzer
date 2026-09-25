@@ -56,8 +56,8 @@ export function DealHero({ deal }: { deal: DealDetail }) {
   const visibleScore = deal.scores?.data_quality?.can_score === true ? deal.overall_score : null;
   const { headlineMultiple, primaryReturnLabel, primaryReturnValue } = getHeadlineReturnMetrics(deal);
   const gate = deal.scores?.data_quality;
-  const reviewSummary = dealReviewSummary(gate);
-  const viewerSummary = viewerScoreSummary(gate);
+  const reviewSummary = deal.analysis ? `${deal.analysis.questions.length} material question groups. Accepted facts and evidence are shared across Summary, comparison and exports.` : dealReviewSummary(gate);
+  const viewerSummary = deal.analysis ? `${deal.analysis.coverage.accepted} of ${deal.analysis.coverage.total} recognized facts accepted. Source checks and analyst decisions are labeled separately.` : viewerScoreSummary(gate);
   const reviewStatusName = normalizedPipelineStatus(pipelineStatus);
   const showAnalystTools = !loading && isAnalyst;
   const openAnalystTools = showAnalystTools && (pipelineRunning || reviewStatusName === "failed" || reviewStatusName === "running");
@@ -203,7 +203,7 @@ export function DealHero({ deal }: { deal: DealDetail }) {
               <div>
                 <div className="text-[10px] font-extrabold uppercase tracking-[0.14em] text-muted-foreground">Investment summary</div>
                 <div className="mt-2">
-                  <ViewerTrustBadge gate={gate} />
+                  {deal.analysis ? <span className="text-xs font-medium">{deal.analysis.questions.length ? `${deal.analysis.questions.length} questions remain` : "Evidence reviewed"}</span> : <ViewerTrustBadge gate={gate} />}
                 </div>
                 <p className="mt-3 text-xs leading-relaxed text-muted-foreground">{viewerSummary}</p>
               </div>
@@ -214,7 +214,7 @@ export function DealHero({ deal }: { deal: DealDetail }) {
 
             <div className="mt-4 grid gap-2">
               <Button size="sm" variant="secondary" asChild className="justify-center">
-                <a href="#deal-summary">
+                <a href={`/deals/${deal.id}?tab=overview`}>
                   <FileText className="h-4 w-4" />
                   Deal summary
                 </a>
@@ -238,7 +238,7 @@ export function DealHero({ deal }: { deal: DealDetail }) {
                   </summary>
                   <div className="space-y-3 border-t border-border/70 p-3">
                     <div>
-                      <ScoreQualityBadge gate={gate} />
+                      {deal.analysis ? <a href={`/deals/${deal.id}?tab=questions`} className="text-sm underline">Open material questions</a> : <ScoreQualityBadge gate={gate} />}
                       <p className="mt-2 text-xs leading-relaxed text-muted-foreground">{reviewSummary}</p>
                     </div>
                     <div className="grid gap-2">

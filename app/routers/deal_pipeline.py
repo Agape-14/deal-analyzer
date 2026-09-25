@@ -582,7 +582,7 @@ async def _run_verify_background(deal_id: int, auto_correct: bool):
                 isinstance(verification.get("summary"), dict)
                 and verification["summary"].get("cache_hit")
             )
-            metrics = stamp_verification(metrics, verification)
+            metrics = stamp_verification(metrics, verification, deal.documents)
 
             math_results = run_math_checks(metrics)
             metrics["_math_checks"] = {
@@ -716,6 +716,11 @@ async def _run_score_background(deal_id: int):
 
 
 async def _persist_pipeline_failure(db: AsyncSession, deal_id: int, step: str, message: str, error: Exception) -> None:
+    from sqlalchemy.orm.exc import StaleDataError
+    if isinstance(error, StaleDataError):
+        await db.rollback()
+        log.info("Discarded stale %s result for deal %s; newer inputs are preserved", step, deal_id)
+        return
     try:
         await db.rollback()
         result = await db.execute(select(Deal).where(Deal.id == deal_id))

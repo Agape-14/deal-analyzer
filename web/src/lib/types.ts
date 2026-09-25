@@ -2,6 +2,8 @@ export type DealStatus = "reviewing" | "interested" | "passed" | "committed" | "
 
 export interface DealSummary {
   id: number;
+  revision?: number;
+  analysis?: DealAnalysis;
   developer_id: number | null;
   developer_name: string;
   project_name: string;
@@ -19,6 +21,43 @@ export interface DealSummary {
   created_at: string;
   quality?: DealQualitySummary | DataQualityGate;
   scores?: Partial<DealScores>;
+}
+
+export interface AnalysisFact {
+  path: string;
+  label: string;
+  value: number | string | null;
+  state: "reported" | "checked" | "calculated" | "disputed" | "missing" | "manual" | "unclassified";
+  reason: string;
+  identity: { metric: string; unit: string; scenario: string; investor_class: string; basis: string; debt_phase: string; period: string; currency: string };
+  evidence: Array<{ document_id: number; document_name: string; content_hash: string; page?: number; sheet?: string; cell?: string; excerpt?: string }>;
+  dependencies: string[];
+  formula?: string;
+  alternatives: unknown[];
+  locked: boolean;
+}
+
+export interface AnalysisQuestion {
+  id: string;
+  area: string;
+  title: string;
+  impact: string;
+  issues: Array<{ path: string; reason: string; state: string }>;
+}
+
+export interface DealAnalysis {
+  schema_version: number;
+  version: number;
+  input_hash: string;
+  created_at?: string;
+  status: "questions" | "ready";
+  primary_strategy: string;
+  investor_class: string;
+  facts: Record<string, AnalysisFact>;
+  questions: AnalysisQuestion[];
+  returns: CanonicalReturnSummary;
+  coverage: { accepted: number; checked: number; manual: number; calculated: number; total: number };
+  unclassified_paths: string[];
 }
 
 export interface Developer {

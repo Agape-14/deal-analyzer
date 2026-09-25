@@ -18,6 +18,7 @@ from app.services.market_data import fetch_market_data
 from app.services.cashflow_projector import project_cash_flows
 from app.services.waterfall_calculator import waterfall_from_deal
 from app.services.canonical_metrics import canonical_return_summary
+from app.services.analysis import analysis_for_deal, effective_scores
 from app.services.data_integrity import quality_summary
 from app.services.location_intelligence import build_location_bundle
 
@@ -92,13 +93,16 @@ class CompareRequest(BaseModel):
 
 def _deal_to_dict(deal: Deal, developer_name: str = None) -> dict:
     metrics = dict(deal.metrics or {})
-    scores = deal.scores or {}
-    return_summary = canonical_return_summary(metrics)
+    analysis = analysis_for_deal(deal)
+    scores = effective_scores(deal)
+    return_summary = analysis["returns"]
     metrics["_canonical_returns"] = return_summary
     deal_structure = metrics.get("deal_structure", {}) or {}
 
     return {
         "id": deal.id,
+        "revision": deal.revision,
+        "analysis": analysis,
         "developer_id": deal.developer_id,
         "developer_name": developer_name or "",
         "project_name": deal.project_name,
@@ -113,7 +117,7 @@ def _deal_to_dict(deal: Deal, developer_name: str = None) -> dict:
         "target_irr": return_summary.get("target_irr"),
         "target_equity_multiple": return_summary.get("target_equity_multiple"),
         "target_cash_on_cash": return_summary.get("cash_on_cash"),
-        "minimum_investment": deal_structure.get("minimum_investment"),
+        "minimum_investment": (analysis["accepted_metrics"].get("deal_structure") or {}).get("minimum_investment"),
         "notes": deal.notes,
         "lat": deal.lat,
         "lng": deal.lng,
@@ -498,7 +502,7 @@ async def cashflow_projection(deal_id: int, investment: Optional[float] = None, 
     if not deal.metrics:
         raise HTTPException(status_code=400, detail="No metrics extracted yet.")
 
-    cashflow = project_cash_flows(deal.metrics, investment_amount=investment)
+    cashflow = project_cash_flows(analysis_for_deal(deal)["accepted_metrics"], investment_amount=investment)
     return cashflow
 
 
@@ -515,7 +519,7 @@ async def waterfall_calculation(deal_id: int, investment: Optional[float] = None
     if not deal.metrics:
         raise HTTPException(status_code=400, detail="No metrics extracted yet.")
 
-    waterfall = waterfall_from_deal(deal.metrics, investment_amount=investment)
+    waterfall = waterfall_from_deal(analysis_for_deal(deal)["accepted_metrics"], investment_amount=investment)
     return waterfall
 
 
@@ -604,9 +608,9 @@ async def export_comparison(data: CompareRequest, db: AsyncSession = Depends(get
             ("Asset Mgmt Fee", lambda d: ((d.metrics or {}).get("deal_structure") or {}).get("fees_asset_mgmt")),
         ]),
         ("TARGET RETURNS", [
-            ("Target IRR", lambda d: canonical_return_summary(d.metrics or {}).get("target_irr")),
-            ("Equity Multiple", lambda d: canonical_return_summary(d.metrics or {}).get("target_equity_multiple")),
-            ("Cash-on-Cash", lambda d: canonical_return_summary(d.metrics or {}).get("cash_on_cash")),
+            ("Target IRR", lambda d: analysis_for_deal(d)["returns"].get("target_irr")),
+            ("Equity Multiple", lambda d: analysis_for_deal(d)["returns"].get("target_equity_multiple")),
+            ("Cash-on-Cash", lambda d: analysis_for_deal(d)["returns"].get("cash_on_cash")),
             ("Avg Annual Return", lambda d: ((d.metrics or {}).get("target_returns") or {}).get("target_avg_annual_return")),
             ("Projected Profit", lambda d: ((d.metrics or {}).get("target_returns") or {}).get("projected_profit")),
         ]),

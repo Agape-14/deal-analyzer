@@ -30,6 +30,7 @@ from app.database import get_db
 from app.models import Deal, Developer, Investment
 from app.services.portfolio_analytics import portfolio_analytics
 from app.services.canonical_metrics import canonical_return_summary
+from app.services.analysis import analysis_for_deal, effective_scores
 
 router = APIRouter()
 
@@ -122,11 +123,12 @@ async def deal_pdf_report(deal_id: int, db: AsyncSession = Depends(get_db)):
     if not deal:
         raise HTTPException(status_code=404, detail="Deal not found")
 
-    metrics = deal.metrics or {}
-    scores = deal.scores or {}
+    analysis = analysis_for_deal(deal)
+    metrics = analysis["accepted_metrics"]
+    scores = effective_scores(deal)
     ds = metrics.get("deal_structure", {}) or {}
     tr = metrics.get("target_returns", {}) or {}
-    returns = canonical_return_summary(metrics)
+    returns = analysis["returns"]
     pd_ = metrics.get("project_details", {}) or {}
     fp = metrics.get("financial_projections", {}) or {}
     ml = metrics.get("market_location", {}) or {}
@@ -156,6 +158,7 @@ async def deal_pdf_report(deal_id: int, db: AsyncSession = Depends(get_db)):
         styles["Small"],
     ))
     story.append(Spacer(1, 12))
+    story.append(Paragraph(f"Analysis revision {analysis['version']} · {len(analysis['questions'])} unresolved question groups. Unavailable facts are withheld.", styles["Small"]))
 
     # Scores
     story.append(Paragraph("Investment Scores", styles["SectionHeading"]))
