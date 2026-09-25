@@ -127,7 +127,7 @@ async def test_success_records_one_outcome_and_no_more_work(client, monkeypatch)
 
 async def test_upload_and_queue_are_saved_together_without_browser_handoff(client, monkeypatch):
     from app.database import async_session
-    from app.models import DealDocument, ReviewJob
+    from app.models import Deal, DealDocument, ReviewJob
     from app.routers import deal_uploads
     monkeypatch.setattr(deal_uploads, "AUTO_REVIEW_AFTER_UPLOAD", True)
     deal_id = (await client.post("/api/deals", json={"project_name": "Durable upload"})).json()["id"]
@@ -142,9 +142,13 @@ async def test_upload_and_queue_are_saved_together_without_browser_handoff(clien
         doc.extracted_text = "Error extracting text: temporary reader failure"
         doc.extraction_quality = {"status": "error"}
         job.status = "failed"
+        from app.services.data_integrity import now_iso
+        deal = await db.get(Deal, deal_id)
+        deal.metrics = {"_pipeline": {"status": "running", "step": "verify", "updated_at": now_iso()}}
         await db.commit()
     retry = await client.post(f"/api/deals/{deal_id}/review")
     assert retry.status_code == 200, retry.text
+    assert retry.json()["status"] == "started"
     async with async_session() as db:
         assert (await db.get(ReviewJob, deal_id)).status == "queued"
 

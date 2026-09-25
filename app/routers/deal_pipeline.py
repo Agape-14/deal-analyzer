@@ -204,6 +204,13 @@ def _already_running_response(deal_id: int, pipeline: dict) -> dict:
     }
 
 
+def _active_review_status(deal: Deal) -> dict | None:
+    job = deal.__dict__.get("review_job")
+    if job:
+        return public_pipeline(deal) if job.status in {"queued", "running"} else None
+    return _active_pipeline_status(deal.metrics)
+
+
 def _pipeline_error_kind(error: Exception) -> str:
     text = str(error) or error.__class__.__name__
     lower = text.lower()
@@ -284,7 +291,7 @@ async def extract_deal_metrics(deal_id: int, db: AsyncSession = Depends(get_db))
     if not usable_docs and not usable_pdfs:
         raise HTTPException(status_code=400, detail="No extracted text or PDF files available")
 
-    active_pipeline = _active_pipeline_status(deal.metrics)
+    active_pipeline = _active_review_status(deal)
     if active_pipeline:
         return _already_running_response(deal_id, active_pipeline)
 
@@ -317,7 +324,7 @@ async def review_deal_documents(deal_id: int, db: AsyncSession = Depends(get_db)
     # The durable worker reads pending/failed files before extracting metrics.
     # A spreadsheet with a failed first read must be retryable from Documents.
 
-    active_pipeline = _active_pipeline_status(deal.metrics)
+    active_pipeline = _active_review_status(deal)
     if active_pipeline:
         return _already_running_response(deal_id, active_pipeline)
 
@@ -554,7 +561,7 @@ async def verify_deal_endpoint(deal_id: int, auto_correct: bool = True, db: Asyn
     if not deal.metrics:
         raise HTTPException(status_code=400, detail="No metrics extracted yet. Run extraction first.")
 
-    active_pipeline = _active_pipeline_status(deal.metrics)
+    active_pipeline = _active_review_status(deal)
     if active_pipeline:
         return _already_running_response(deal_id, active_pipeline)
 
@@ -633,7 +640,7 @@ async def score_deal_endpoint(deal_id: int, db: AsyncSession = Depends(get_db)):
     if not deal.metrics:
         raise HTTPException(status_code=400, detail="No metrics extracted yet. Run extraction first.")
 
-    if _active_pipeline_status(deal.metrics):
+    if _active_review_status(deal):
         raise HTTPException(
             status_code=409,
             detail="Document review is still running. Wait for it to finish before recalculating the score.",
