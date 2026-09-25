@@ -15,6 +15,7 @@ from app.services.confidence import assess_data_quality, summarize_math_checks
 from app.services.canonical_metrics import annotate_canonical_metrics
 from app.services.data_integrity import mark_manual_edit, now_iso, set_lock
 from app.services.deal_scorer import score_deal
+from app.services.analysis import score_accepted_deal
 from app.services.deal_validator import validate_deal_metrics
 from app.services.math_checker import run_math_checks
 
@@ -257,7 +258,7 @@ def _refresh_integrity(deal: Deal, metrics: dict) -> None:
         metrics.setdefault("validation_flags", [])
         metrics["_manual_edit_warning"] = f"Validation did not rerun: {type(e).__name__}: {e}"
     try:
-        scores = score_deal(metrics, math_checks=math_checks)
+        scores = score_accepted_deal(deal, metrics)
     except Exception as e:
         metrics["_manual_edit_warning"] = f"Score did not refresh: {type(e).__name__}: {e}"
         try:

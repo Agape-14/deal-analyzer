@@ -212,6 +212,7 @@ def build_analysis(metrics, documents=None, property_type="multifamily"):
     provenance = metrics.get("_provenance") or {}
     contexts = metrics.get("_fact_context") or {}
     facts = {}
+    reconciliation = []
     for path, values in flat.items():
         spec = REGISTRY.get(path)
         if not spec:
@@ -242,6 +243,17 @@ def build_analysis(metrics, documents=None, property_type="multifamily"):
             fact.reason = reason or "Reported value has not completed a source check."
         facts[path] = fact
 
+    funding_paths = ["deal_structure.debt_amount", "deal_structure.total_equity_required", "deal_structure.total_project_cost"]
+    funding = [facts.get(p) for p in funding_paths]
+    if all(f and f.state in ACCEPTED for f in funding):
+        dimensions = ("debt_phase", "period", "currency")
+        incompatible = any(len({getattr(f.identity, dim) for f in funding if getattr(f.identity, dim) != "unspecified"}) > 1 for dim in dimensions)
+        gap = funding[0].value + funding[1].value - funding[2].value
+        if incompatible or abs(gap) > max(1000, funding[2].value * .01):
+            reason = ("Debt, equity and project cost refer to different phases, periods or currencies. Resolve their context before reconciling funding." if incompatible else
+                      f"Debt plus equity differs from total project cost by {gap:,.0f}. Check the funding amounts or provide the missing source/use; accepting a source value does not resolve this calculation.")
+            reconciliation.extend({"path": path, "area": "Debt", "state": "disputed", "reason": reason} for path in funding_paths)
+
     # Recalculate supported formulas from accepted dependencies on every revision.
     # A manually resolved/reported source figure is never overwritten by a formula.
     formulas = [
@@ -252,8 +264,6 @@ def build_analysis(metrics, documents=None, property_type="multifamily"):
     for path, dependencies, scale, formula in formulas:
         prior = facts.get(path)
         derived = (provenance.get(path) or {}).get("source") == "calculated"
-        if prior and prior.state != "missing" and (not derived or prior.locked):
-            continue
         inputs = [facts.get(p) for p in dependencies]
         if not all(f and f.state in ACCEPTED and isinstance(f.value, (float, int)) for f in inputs) or inputs[1].value <= 0:
             if prior and derived and not prior.locked:
@@ -265,7 +275,14 @@ def build_analysis(metrics, documents=None, property_type="multifamily"):
                 prior.state, prior.reason = "disputed", "Calculation inputs refer to different phases or periods."
             continue
         unit, label = REGISTRY[path]
-        facts[path] = Fact(path=path, label=label, identity=identity(path, unit, {}), value=round(inputs[0].value / inputs[1].value * scale, 2),
+        calculated = round(inputs[0].value / inputs[1].value * scale, 2)
+        if prior and prior.state != "missing" and (not derived or prior.locked):
+            if prior.state in ACCEPTED and abs(prior.value - calculated) > max(.02, abs(calculated) * .02):
+                prior.state, prior.reason = "disputed", f"Reported {prior.value} disagrees with {formula} = {calculated}. Resolve the inputs or the reported value."
+                prior.dependencies, prior.formula = dependencies, formula
+                reconciliation.append({"path": path, "state": "disputed", "reason": prior.reason})
+            continue
+        facts[path] = Fact(path=path, label=label, identity=identity(path, unit, {}), value=calculated,
                            state="calculated", dependencies=dependencies, formula=formula,
                            evidence=[e for f in inputs for e in f.evidence])
 
@@ -307,6 +324,8 @@ def build_analysis(metrics, documents=None, property_type="multifamily"):
     # Optional alternate scenarios remain inspectable, not mandatory chores.
     material = {p for p in material if not (".sale_scenario." in p and strategy.startswith("hold")) and not (".hold_scenario." in p and strategy == "sale")}
     grouped = defaultdict(list)
+    for issue in reconciliation:
+        grouped[issue.get("area", group_for(issue["path"]))].append({k: v for k, v in issue.items() if k != "area"})
     for path in sorted(material):
         fact = facts.get(path)
         if fact and fact.state in ACCEPTED:
@@ -323,7 +342,7 @@ def build_analysis(metrics, documents=None, property_type="multifamily"):
     if not any(returns.get(k) is not None for k in ("target_irr", "cash_on_cash", "target_equity_multiple")) and not grouped["Returns"]:
         grouped["Returns"].append({"path": "target_returns.target_irr", "reason": "No source-supported return is available for the primary strategy.", "state": "missing"})
     questions = [{"id": digest({"area": area, "issues": issues})[:16], "area": area, "title": f"Resolve {area.lower()}", "issues": issues,
-                  "impact": "These facts are withheld from the accepted summary until the evidence or values are resolved."} for area, issues in sorted(grouped.items()) if issues]
+                  "impact": "The summary remains incomplete until these evidence or calculation questions are resolved."} for area, issues in sorted(grouped.items()) if issues]
     coverage = {"accepted": sum(f.state in ACCEPTED for f in facts.values()), "checked": sum(f.state == "checked" for f in facts.values()),
                 "manual": sum(f.state == "manual" for f in facts.values()), "calculated": sum(f.state == "calculated" for f in facts.values()), "total": len(facts)}
     return clean_json({"schema_version": SCHEMA_VERSION, "input_hash": input_fingerprint(metrics, documents, property_type), "version": 0,
@@ -344,7 +363,7 @@ def analysis_for_deal(deal):
 def effective_scores(deal):
     scores = copy.deepcopy(deal.scores or {})
     analysis = analysis_for_deal(deal)
-    stale = scores.get("analysis_input_hash") != analysis["input_hash"]
+    stale = scores.get("analysis_input_hash") != analysis["input_hash"] or scores.get("input_policy") != "accepted-facts-v1"
     gate = dict(scores.get("data_quality") or {})
     can_score = bool(gate.get("can_score")) and not stale and not analysis["questions"]
     gate.update({"can_score": can_score, "analysis_version": analysis["version"], "stage": "outdated" if stale else analysis["status"]})
@@ -355,4 +374,32 @@ def effective_scores(deal):
             if isinstance(scores.get(key), dict):
                 scores[key] = {**scores[key], "score": None}
     scores["data_quality"] = gate
+    return scores
+
+
+def score_accepted_deal(deal, metrics):
+    """All score categories consume the same typed inputs as the summary.
+
+    Raw data is retained for audit, but unknown fields, optional source claims
+    and incompatible return contexts cannot silently influence scoring.
+    """
+    from app.services.analysis_store import document_manifest
+    from app.services.deal_scorer import score_deal
+    from app.services.math_checker import run_math_checks
+
+    documents = (document_manifest(deal.__dict__["documents"]) if "documents" in deal.__dict__
+                 else (getattr(deal, "analysis_snapshot", None) or {}).get("documents", []))
+    analysis = build_analysis(metrics, documents, deal.property_type)
+    inputs = copy.deepcopy(analysis["accepted_metrics"])
+    inputs["_provenance"] = {
+        path: copy.deepcopy((metrics.get("_provenance") or {}).get(path) or {})
+        for path, fact in analysis["facts"].items() if fact["state"] in ACCEPTED
+    }
+    inputs["_verification"] = copy.deepcopy(metrics.get("_verification") or {})
+    scores = score_deal(inputs, math_checks=run_math_checks(inputs))
+    scores["input_policy"] = "accepted-facts-v1"
+    scores["analysis_input_hash"] = analysis["input_hash"]
+    if analysis["questions"]:
+        scores["overall"] = None
+        scores["data_quality"]["can_score"] = False
     return scores

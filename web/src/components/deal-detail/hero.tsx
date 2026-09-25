@@ -203,7 +203,7 @@ export function DealHero({ deal }: { deal: DealDetail }) {
               <div>
                 <div className="text-[10px] font-extrabold uppercase tracking-[0.14em] text-muted-foreground">Investment summary</div>
                 <div className="mt-2">
-                  {deal.analysis ? <span className="text-xs font-medium">{deal.analysis.questions.length ? `${deal.analysis.questions.length} questions remain` : "Evidence reviewed"}</span> : <ViewerTrustBadge gate={gate} />}
+                  {deal.analysis ? <span className="text-xs font-medium">{deal.analysis.questions.length ? `${deal.analysis.questions.length} question${deal.analysis.questions.length === 1 ? " remains" : "s remain"}` : "Summary ready"}</span> : <ViewerTrustBadge gate={gate} />}
                 </div>
                 <p className="mt-3 text-xs leading-relaxed text-muted-foreground">{viewerSummary}</p>
               </div>

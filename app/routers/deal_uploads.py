@@ -142,11 +142,7 @@ async def upload_document(
             href=f"/deals/{deal_id}?tab=documents",
             payload={"deal_id": deal_id, "doc_id": doc.id, "queued": True},
         )
-        if AUTO_REVIEW_AFTER_UPLOAD:
-            from app.services.review_jobs import enqueue_review
-            await enqueue_review(db, deal_id)
-            await db.commit()
-        else:
+        if not AUTO_REVIEW_AFTER_UPLOAD:
             background_tasks.add_task(_extract_document_background, doc.id, file_path, ext)
 
         return {
@@ -373,6 +369,9 @@ async def _create_document_record_with_retry(
         doc = DealDocument(**values)
         db.add(doc)
         try:
+            if AUTO_REVIEW_AFTER_UPLOAD:
+                from app.services.review_jobs import enqueue_review
+                await enqueue_review(db, doc.deal_id)
             await db.commit()
             await db.refresh(doc)
             return doc

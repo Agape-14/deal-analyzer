@@ -123,3 +123,19 @@ async def test_success_records_one_outcome_and_no_more_work(client, monkeypatch)
     async with async_session() as db:
         assert (await db.get(ReviewJob, deal_id)).status == "questions"
         assert len((await db.execute(select(Notification))).scalars().all()) == 1
+
+
+async def test_upload_and_queue_are_saved_together_without_browser_handoff(client, monkeypatch):
+    from app.database import async_session
+    from app.models import DealDocument, ReviewJob
+    from app.routers import deal_uploads
+    monkeypatch.setattr(deal_uploads, "AUTO_REVIEW_AFTER_UPLOAD", True)
+    deal_id = (await client.post("/api/deals", json={"project_name": "Durable upload"})).json()["id"]
+    response = await client.post(f"/api/deals/{deal_id}/documents/upload", files={"file": ("synthetic.csv", b"label,value\ncost,100\n", "text/csv")})
+    assert response.status_code == 200, response.text
+    async with async_session() as db:
+        doc = await db.get(DealDocument, response.json()["id"])
+        job = await db.get(ReviewJob, deal_id)
+        assert doc.extraction_quality["status"] == "queued"
+        assert job.status == "queued"
+        assert job.request_seq == 1

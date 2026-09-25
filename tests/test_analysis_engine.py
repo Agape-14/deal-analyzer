@@ -155,3 +155,83 @@ async def test_document_deletion_invalidates_source_supported_returns(client):
         await db.delete(doc)
         await db.commit()
         assert deal.analysis_snapshot["returns"]["cash_on_cash"] is None
+
+
+def test_changed_document_package_rechecks_sources_without_erasing_manual_decisions():
+    from app.services.analysis import digest
+    metrics = manual_metrics()
+    path = "target_returns.hold_scenario.cash_on_cash_return"
+    docs = [{"id": 1, "filename": "Memo.pdf", "content_hash": "a", "page_count": 5}]
+    metrics["_provenance"][path] = {"status": "confirmed", "source_doc_id": 1, "source_page": 2, "source_document_hash": "a"}
+    metrics["_verified_document_set"] = digest(docs)
+    assert build_analysis(metrics, docs)["returns"]["cash_on_cash"] == 8
+    docs.append({"id": 2, "filename": "Update.pdf", "content_hash": "b", "page_count": 3})
+    analysis = build_analysis(metrics, docs)
+    assert analysis["returns"]["cash_on_cash"] is None
+    assert analysis["facts"]["deal_structure.debt_amount"]["state"] == "manual"
+
+
+@pytest.mark.parametrize("path,value", [("project_details.unit_count", 1.5), ("deal_structure.debt_amount", -1), ("deal_structure.ltv", 120)])
+def test_invalid_units_and_bounds_cannot_be_accepted(path, value):
+    from app.services.analysis import set_path
+    metrics = manual_metrics()
+    set_path(metrics, path, value)
+    metrics["_provenance"][path] = {"status": "manual"}
+    assert build_analysis(metrics)["facts"][path]["state"] == "missing"
+
+
+def test_checked_sources_do_not_bypass_funding_or_ratio_reconciliation():
+    metrics = manual_metrics()
+    metrics["deal_structure"]["debt_amount"] = 700000
+    metrics["deal_structure"]["loan_to_cost"] = 90
+    metrics["_provenance"]["deal_structure.loan_to_cost"] = {"status": "manual", "locked": True}
+    analysis = build_analysis(metrics)
+    assert analysis["status"] == "questions"
+    debt = next(q for q in analysis["questions"] if q["area"] == "Debt")
+    assert {i["path"] for i in debt["issues"]} >= {"deal_structure.debt_amount", "deal_structure.total_equity_required", "deal_structure.total_project_cost"}
+    assert analysis["facts"]["deal_structure.loan_to_cost"]["state"] == "disputed"
+    assert "loan_to_cost" not in analysis["accepted_metrics"]["deal_structure"]
+    assert metrics["deal_structure"]["loan_to_cost"] == 90  # raw locked record preserved
+
+
+def test_scores_exclude_unknown_and_unsupported_source_fields():
+    from types import SimpleNamespace
+    from app.services.analysis import score_accepted_deal
+    metrics = manual_metrics()
+    deal = SimpleNamespace(property_type="multifamily", documents=[])
+    baseline = score_accepted_deal(deal, metrics)
+    metrics["market_location"] = {"walk_score": 100, "market_rent_growth": 99}
+    metrics["sponsor_evaluation"] = {"alignment_score": 10, "full_cycle_deals": 100}
+    metrics["target_returns"]["sale_scenario"] = {"sale_irr": 99}
+    changed = score_accepted_deal(deal, metrics)
+    assert changed["provisional_overall"] == baseline["provisional_overall"]
+    assert changed["market"] == baseline["market"]
+    assert changed["sponsor"] == baseline["sponsor"]
+    assert changed["input_policy"] == "accepted-facts-v1"
+
+
+@pytest.mark.asyncio
+async def test_history_includes_removed_optional_facts(client):
+    deal_id = (await client.post("/api/deals", json={"project_name": "Removed source fact"})).json()["id"]
+    metrics = manual_metrics()
+    metrics["project_details"]["construction_type"] = "Wood"
+    await client.put(f"/api/deals/{deal_id}", json={"metrics": metrics})
+    del metrics["project_details"]["construction_type"]
+    await client.put(f"/api/deals/{deal_id}", json={"metrics": metrics})
+    current = (await client.get(f"/api/deals/{deal_id}")).json()
+    removed = next(c for c in current["analysis"]["changes"] if c["path"] == "project_details.construction_type")
+    assert removed["state"] == "removed"
+    assert removed["previous_value"] == "Wood"
+
+
+@pytest.mark.asyncio
+async def test_json_guard_forwards_scoped_verification_options(client, monkeypatch):
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+    from app.services import deal_verifier, json_parser_guard
+    verifier = AsyncMock(return_value={"verified_fields": []})
+    monkeypatch.setattr(deal_verifier, "verify_deal_metrics", verifier)
+    json_parser_guard.install_deal_verifier_json_guard()
+    deal = SimpleNamespace(metrics={})
+    await deal_verifier.verify_deal_metrics(deal, None, sections=["target_returns"])
+    verifier.assert_awaited_once_with(deal, None, sections=["target_returns"])

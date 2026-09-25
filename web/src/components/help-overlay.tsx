@@ -144,7 +144,7 @@ export function FirstRunWelcome() {
     {
       title: "Welcome to Kenyon",
       body:
-        "Institutional-grade real-estate deal analysis without the spreadsheet tax. Upload an offering memo, let Claude extract metrics, validate against Burke-style rules, and compare deals head-to-head.",
+        "Upload your deal documents. Kenyon reads them, checks sources and calculations, and builds one reviewed summary. Questions highlights the material gaps or conflicts that still need evidence.",
       icon: Sparkles,
     },
     {
@@ -153,13 +153,13 @@ export function FirstRunWelcome() {
       icon: Command,
     },
     {
-      title: "Upload an OM",
-      body: "Click a deal → Documents → drop a PDF. We run OCR + table extraction automatically. On the Metrics tab you'll see a provenance badge per field so you always know where each value came from.",
+      title: "Upload documents",
+      body: "Open Documents and drop your PDFs, Excel models or CSVs. Reading and review continue automatically even after you leave the page. Summary shows accepted facts and expandable source evidence.",
       icon: Upload,
     },
     {
-      title: "Verify against the source",
-      body: "The Data Integrity panel on Overview shows extracted / verified / conflicting / manual counters plus a trust score. Hit Verify against docs for a second-pass AI forensic audit.",
+      title: "Resolve material questions",
+      body: "Questions groups the evidence gaps and conflicts that affect the summary. Add supporting documents or record a checked analyst decision. Optional context and investment cautions stay out of the task list.",
       icon: ShieldCheck,
     },
     {
@@ -169,7 +169,7 @@ export function FirstRunWelcome() {
     },
     {
       title: "See the neighborhood",
-      body: "Every deal has a Location tab — satellite map, nearby apartments + employers + transit (from OpenStreetMap), and HUD Fair Market Rent context so you can sanity-check proforma rents.",
+      body: "Open Analysis → Location for maps and available neighborhood context. If the address cannot be found, you can place it with coordinates. Optional missing benchmarks do not block the deal summary.",
       icon: MapPin,
     },
   ];

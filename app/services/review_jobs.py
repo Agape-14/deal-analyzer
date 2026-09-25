@@ -146,7 +146,8 @@ async def finish_job(job, outcome, error=None):
             deal = await db.get(Deal, row.deal_id)
             if deal and deal.deleted_at is None:
                 count = len((deal.analysis_snapshot or {}).get("questions") or [])
-                await emit(db, "error" if error else "warning" if count else "success", f"Document review {'stopped' if error else 'finished'} - {deal.project_name}",
+                label = {"read": "Document reading", "extract": "Metric extraction", "verify": "Source verification"}.get(job["mode"], "Document review")
+                await emit(db, "error" if error else "warning" if count else "success", f"{label} {'stopped' if error else 'finished'} - {deal.project_name}",
                     body="Review could not finish after three attempts. Your previous analysis is preserved; retry from Documents." if error else f"{count} material question groups remain. Open the accepted summary and evidence.",
                     href=f"/deals/{deal.id}?tab={'questions' if count else 'overview'}", payload={"deal_id": deal.id, "analysis_version": deal.analysis_version, "job_status": state})
         await db.commit()
@@ -175,6 +176,8 @@ async def process_one_job():
             await pulse
         except asyncio.CancelledError:
             pass
+        except Exception:
+            log.exception("Review heartbeat failed; the lease will be checked before saving")
         active_lease.reset(token)
     await finish_job(job, outcome, error)
     return True

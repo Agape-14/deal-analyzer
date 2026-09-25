@@ -55,14 +55,12 @@ def persist_changes(session):
             snapshot["created_at"] = datetime.now(timezone.utc).isoformat()
             snapshot["changes"] = [
                 {"path": path, "previous_value": (previous.get("facts", {}).get(path) or {}).get("value"),
-                 "value": fact["value"], "previous_state": (previous.get("facts", {}).get(path) or {}).get("state"), "state": fact["state"]}
-                for path, fact in snapshot["facts"].items()
-                if fact != previous.get("facts", {}).get(path)
+                 "value": (snapshot["facts"].get(path) or {}).get("value"),
+                 "previous_state": (previous.get("facts", {}).get(path) or {}).get("state"),
+                 "state": (snapshot["facts"].get(path) or {}).get("state", "removed")}
+                for path in sorted(set(snapshot["facts"]) | set(previous.get("facts", {})))
+                if snapshot["facts"].get(path) != previous.get("facts", {}).get(path)
             ]
             deal.analysis_version = version
             deal.analysis_snapshot = snapshot
             session.add(AnalysisSnapshot(deal_id=deal.id, version=version, input_hash=snapshot["input_hash"], payload=copy.deepcopy(snapshot)))
-        if scores_changed and deal.scores:
-            next_scores = {**deal.scores, "analysis_input_hash": snapshot["input_hash"]}
-            if next_scores != deal.scores:
-                deal.scores = next_scores

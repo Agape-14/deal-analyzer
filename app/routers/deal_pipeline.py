@@ -27,6 +27,7 @@ from app.services.data_integrity import (
 )
 from app.services.deal_extractor_cost_aware import extract_metrics_from_docs
 from app.services.deal_scorer import score_deal
+from app.services.analysis import score_accepted_deal, effective_scores
 from app.services.deal_validator import validate_deal_metrics
 from app.services.deal_verifier import verify_with_corrections
 from app.services.document_context import documents_fingerprint
@@ -650,7 +651,7 @@ async def score_deal_endpoint(deal_id: int, db: AsyncSession = Depends(get_db)):
         metrics = annotate_canonical_metrics(metrics)
         math_checks = metrics.get("_math_checks", {})
         results = math_checks.get("results") if isinstance(math_checks, dict) else None
-        scores = score_deal(metrics, math_checks=results if isinstance(results, list) else None)
+        scores = score_accepted_deal(deal, metrics)
     except Exception as e:
         await _persist_pipeline_failure(db, deal_id, "score", "Score update failed.", e)
         raise HTTPException(status_code=503, detail=_pipeline_error_message(e))
@@ -661,7 +662,7 @@ async def score_deal_endpoint(deal_id: int, db: AsyncSession = Depends(get_db)):
         _pipeline_status("complete", "score", "Document review complete. Values were extracted, source-checked, math-checked, and scored."),
     )
     await db.commit()
-    return {"message": "Deal scored", "scores": scores}
+    return {"message": "Deal scored", "scores": effective_scores(deal)}
 
 
 async def _run_score_background(deal_id: int):
@@ -689,7 +690,7 @@ async def _run_score_background(deal_id: int):
             metrics = annotate_canonical_metrics(metrics)
             math_checks = metrics.get("_math_checks", {})
             results = math_checks.get("results") if isinstance(math_checks, dict) else None
-            scores = score_deal(metrics, math_checks=results if isinstance(results, list) else None)
+            scores = score_accepted_deal(deal, metrics)
         except Exception as e:
             await _persist_pipeline_failure(db, deal_id, "score", "Score update failed.", e)
             return

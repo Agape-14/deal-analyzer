@@ -45,7 +45,7 @@ export function AcceptedSummary({ deal }: { deal: DealDetail }) {
         <div><h2 className="text-lg font-semibold">One reviewed view of the deal</h2>
           <p className="mt-1 text-sm text-muted-foreground">{analysis.primary_strategy === "unknown" ? "Strategy needs clarification" : `Primary strategy: ${analysis.primary_strategy.replaceAll("_", " ")}`}{analysis.investor_class !== "unspecified" ? ` · ${analysis.investor_class}` : ""}</p>
         </div>
-        <Link href={`/deals/${deal.id}?tab=questions`} className="rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground">{analysis.questions.length ? `${analysis.questions.length} questions` : "No material questions"}</Link>
+        <Link href={`/deals/${deal.id}?tab=questions`} className="rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground">{analysis.questions.length ? `${analysis.questions.length} question${analysis.questions.length === 1 ? "" : "s"}` : "No material questions"}</Link>
       </div>
       <p className="mt-4 text-sm text-muted-foreground">{analysis.coverage.accepted} of {analysis.coverage.total} recognized facts accepted: {analysis.coverage.checked} source checked, {analysis.coverage.calculated} calculated, {analysis.coverage.manual} analyst resolved. This describes evidence coverage, not investment quality.</p>
       <p className="mt-2 text-xs text-muted-foreground">{analysis.version ? `Analysis revision ${analysis.version}` : "Preview of existing data"}{analysis.created_at ? ` · ${new Date(analysis.created_at).toLocaleString()}` : ""}. Missing or disputed facts remain withheld.</p>
