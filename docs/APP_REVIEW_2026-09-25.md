@@ -18,7 +18,7 @@ Live browser checks used the signed-in application and existing records. Product
 
 | Feature | Live inspection | Automated verification |
 | --- | --- | --- |
-| Dashboard and deal navigation | Loaded, visually reviewed cards, scores and attention states | CRUD, list/detail and pipeline summary |
+| Dashboard and deal navigation | Loaded, reviewed cards, scores and attention states; checked text/status filters, empty state and alphabetical sorting | CRUD, list/detail and pipeline summary |
 | Login and role-dependent controls | New Deal initially did nothing after sign-in; reload restored it | Existing authentication tests; build validation for navigation fix |
 | Search and help | Search found a deal; command palette and help opened | Build/type checks |
 | Deal summary and evidence | Inspected headline metrics, review queue and source drawer | Canonical selection, rejected values, field locks, nested edits |
@@ -149,6 +149,6 @@ Validate full browser journeys and failure paths against staging, then recheck t
 
 ## Test results
 
-Initial production-code baseline: 65 backend tests passed and 4 failed. The first correction run passed 91 backend tests, 17 frontend tests and the Next.js production build. A final run with the live-walkthrough regressions is recorded in the pull request checks.
+Initial production-code baseline: 65 backend tests passed and 4 failed. The final functional revision passed **99 backend tests, 23 frontend tests and the Next.js production build** ([CI run](https://github.com/Agape-14/deal-analyzer/actions/runs/36159631901), commit `784bde5`). Subsequent cleanup only restores existing line endings and updates this report. All checks are also available on the draft pull request.
 
 The provider-boundary correction tests use controlled replies. They verify orchestration, locking and failure handling, not the factual accuracy of an AI provider. No claim of zero manual review or complete extraction accuracy is made.
