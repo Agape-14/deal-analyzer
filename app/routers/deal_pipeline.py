@@ -31,6 +31,7 @@ from app.services.analysis import score_accepted_deal, effective_scores
 from app.services.deal_validator import validate_deal_metrics
 from app.services.deal_verifier import verify_with_corrections
 from app.services.document_context import documents_fingerprint
+from app.services.document_versions import review_documents
 from app.services.math_checker import run_math_checks
 from app.services.review_jobs import enqueue_review, public_pipeline
 
@@ -113,7 +114,7 @@ def _estimate_review_seconds(deal: Deal) -> int:
     AI provider queueing and rate limits can dominate runtime, so this is only a
     planning estimate for the UI. It scales mainly by document type/count.
     """
-    docs = list(deal.documents or [])
+    docs = review_documents(deal.documents)
     if not docs:
         return 60
     pdf_count = len(_pdf_docs(deal))
@@ -242,7 +243,7 @@ def _pipeline_error_message(error: Exception) -> str:
 def _pdf_docs(deal: Deal):
     return [
         d
-        for d in deal.documents
+        for d in review_documents(deal.documents)
         if d.file_path and str(d.file_path).lower().endswith(".pdf")
     ]
 
@@ -258,7 +259,7 @@ def _doc_has_usable_text(doc) -> bool:
 
 
 def _usable_text_docs(deal: Deal):
-    return [d for d in deal.documents if _doc_has_usable_text(d)]
+    return [d for d in review_documents(deal.documents) if _doc_has_usable_text(d)]
 
 
 @router.get("/{deal_id}/quality")
@@ -432,8 +433,11 @@ async def _run_extract_background(deal_id: int):
                 cache_hit = True
                 log.info("Using cached extraction for deal %s docs_fp=%s", deal_id, docs_fp[:12])
 
-            if not cache_hit and len(deal.documents) > 1 and _deep_conflict_scan_enabled():
-                for doc in deal.documents:
+            active_docs = review_documents(deal.documents)
+            if not active_docs:
+                raise ValueError("Choose at least one current document for primary review.")
+            if not cache_hit and len(active_docs) > 1 and _deep_conflict_scan_enabled():
+                for doc in active_docs:
                     text = doc.extracted_text or ""
                     path = doc.file_path if doc in usable_pdfs else None
                     if not text and not path:

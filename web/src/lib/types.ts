@@ -159,6 +159,12 @@ export interface PortfolioAnalytics {
 /* ------------------------------------------------------------------ */
 
 export interface DealDocument {
+  source_role?: "active" | "alternative" | "superseded";
+  superseded_by_id?: number | null;
+  duplicate_of_id?: number | null;
+  same_name_different_content?: boolean;
+  included_in_review?: boolean;
+  version_note?: string;
   id: number;
   filename: string;
   doc_type: "offering_memo" | "proforma" | "market_study" | "other" | string;
@@ -385,6 +391,7 @@ export interface DealDetail extends DealSummary {
 
 export interface CashflowYear {
   year: number;
+  duration_years?: number;
   gross_revenue: number;
   expenses: number;
   noi: number;

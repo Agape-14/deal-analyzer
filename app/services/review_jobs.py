@@ -107,6 +107,8 @@ async def execute_job(job):
         if not deal or deal.deleted_at is not None:
             return "cancelled"
         docs = (await db.execute(select(DealDocument).where(DealDocument.deal_id == deal_id))).scalars().all()
+        from app.services.document_versions import review_documents
+        docs = review_documents(docs)
         pending = [(doc.id, doc.file_path, os.path.splitext(doc.file_path)[1].lower()) for doc in docs if (doc.extraction_quality or {}).get("status") in {"queued", "extracting", "error"}]
     for doc_id, path, ext in pending:
         await deal_uploads._extract_document_background(doc_id, path, ext, handoff=False)

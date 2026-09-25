@@ -105,6 +105,9 @@ class DealDocument(Base):
     # verification results without weakening the review quality.
     file_sha256 = Column(String(64), default="", index=True)
     content_fingerprint = Column(String(64), default="", index=True)
+    source_role = Column(String(20), default="active", nullable=False)
+    superseded_by_id = Column(Integer, nullable=True)
+    version_note = Column(Text, default="", nullable=False)
     doc_type = Column(String(50), default="other")
     extracted_text = Column(Text, default="")
     page_count = Column(Integer, default=0)

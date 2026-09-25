@@ -136,6 +136,7 @@ def test_irr_uses_timing_not_multiple_cagr():
 
 def test_cashflow_includes_invested_capital_and_does_not_double_discount_gp_share():
     metrics = {
+        "target_returns": {"primary_strategy": "sale"},
         "project_details": {"unit_count": 10},
         "financial_projections": {"avg_rent_per_unit": 1000, "occupancy_assumption": 100,
             "operating_expense_ratio": 50, "rent_growth_assumption": 0, "exit_cap_rate": 5},
@@ -181,14 +182,18 @@ def test_nested_lock_survives_reextraction_and_parent_correction():
 
 def test_partial_year_cashflow_is_not_silently_shortened():
     metrics = {
+        "target_returns": {"primary_strategy": "sale"},
         "project_details": {"unit_count": 10},
         "financial_projections": {"avg_rent_per_unit": 1000, "occupancy_assumption": 100,
             "operating_expense_ratio": 50, "rent_growth_assumption": 0, "exit_cap_rate": 5},
         "deal_structure": {"debt_amount": 0, "hold_period_years": 2.5, "total_equity_required": 1000000},
     }
     projection = project_cash_flows(metrics)
-    assert projection["status"] == "unavailable"
-    assert "partial-year" in projection["message"]
+    assert projection["status"] == "illustrative"
+    assert [row["year"] for row in projection["project_level"]] == [1, 2, 2.5]
+    assert projection["project_level"][-1]["gross_revenue"] == 60000
+    assert projection["project_level"][-1]["noi"] == 30000
+    assert projection["summary"]["exit_value"] == 1200000
     assert metrics["deal_structure"]["hold_period_years"] == 2.5
 
 

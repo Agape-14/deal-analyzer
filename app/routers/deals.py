@@ -192,24 +192,8 @@ async def get_deal(deal_id: int, db: AsyncSession = Depends(get_db)):
         raise HTTPException(status_code=404, detail="Deal not found")
 
     data = _deal_to_dict(deal, deal.developer.name if deal.developer else "")
-    data["documents"] = [
-        {
-            "id": doc.id,
-            "filename": doc.filename,
-            "doc_type": doc.doc_type,
-            "page_count": doc.page_count,
-            "upload_date": doc.upload_date.isoformat() if doc.upload_date else None,
-            "has_text": bool(doc.extracted_text),
-            "extraction_quality": {
-                "quality_score": (doc.extraction_quality or {}).get("quality_score"),
-                "ocr_pages": (doc.extraction_quality or {}).get("ocr_pages", 0),
-                "empty_pages": (doc.extraction_quality or {}).get("empty_pages", []),
-            }
-            if doc.extraction_quality
-            else None,
-        }
-        for doc in deal.documents
-    ]
+    from app.services.document_versions import document_payloads
+    data["documents"] = document_payloads(deal.documents)
     # Quality summary of the metrics (counts of verified / extracted / conflicting / locked)
     if deal.metrics:
         data["quality"] = quality_summary(deal.metrics)

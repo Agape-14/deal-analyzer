@@ -22,6 +22,7 @@ import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import type { DealDocument } from "@/lib/types";
+import { DocumentVersionControls } from "./document-version-controls";
 
 type UploadState = {
   id: string;
@@ -36,6 +37,8 @@ type UploadState = {
 };
 
 type UploadResult = {
+  duplicate?: boolean;
+  message?: string;
   id?: number;
   filename?: string;
   extraction?: {
@@ -67,9 +70,11 @@ const ACCEPTED_UPLOAD_EXTENSIONS = new Set([".pdf", ".xlsx", ".xlsm", ".xls", ".
 export function DocumentsPanel({
   dealId,
   documents,
+  revision,
 }: {
   dealId: number;
   documents: DealDocument[];
+  revision?: number;
 }) {
   const router = useRouter();
   const [dragActive, setDragActive] = React.useState(false);
@@ -121,8 +126,8 @@ export function DocumentsPanel({
           ),
         );
 
-        toast.success("Document uploaded", {
-          description: queued
+        toast.success(result.duplicate ? "File already saved" : "Document uploaded", {
+          description: result.duplicate ? result.message : queued
             ? `${file.name} was saved. Reading the document now.`
             : `${file.name} was saved. Review continues automatically.`,
         });
@@ -338,6 +343,7 @@ export function DocumentsPanel({
                     >
                       {d.filename}
                     </button>
+                    <DocumentVersionControls dealId={dealId} revision={revision} document={d} documents={documents} />
                     <div className="text-[11px] text-muted-foreground mt-0.5 flex items-center gap-2 flex-wrap">
                       <span className="uppercase tracking-wider">{d.doc_type.replace(/_/g, " ")}</span>
                       <span className="opacity-40">-</span>

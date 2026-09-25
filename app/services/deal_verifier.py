@@ -350,6 +350,10 @@ async def _verify_sections(
 
 async def verify_deal_metrics(deal, db, *, sections: set[str] | None = None) -> dict:
     """Run second-pass verification on extracted metrics."""
+    from app.services.document_versions import review_documents
+    active_docs = review_documents(deal.documents)
+    if not active_docs:
+        raise ValueError("Choose at least one current document for primary review.")
     api_key = os.environ.get("ANTHROPIC_API_KEY")
     if not api_key:
         raise ValueError("ANTHROPIC_API_KEY not set")
@@ -361,11 +365,11 @@ async def verify_deal_metrics(deal, db, *, sections: set[str] | None = None) -> 
 
     pdf_docs = [
         (doc.filename, doc.file_path)
-        for doc in deal.documents
+        for doc in active_docs
         if doc.file_path and str(doc.file_path).lower().endswith(".pdf")
     ]
     doc_texts = []
-    for doc in deal.documents:
+    for doc in active_docs:
         text = (doc.extracted_text or "").strip()
         quality = doc.extraction_quality or {}
         if text and not text.startswith("Error extracting text:") and not (isinstance(quality, dict) and quality.get("error")):

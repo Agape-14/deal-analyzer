@@ -67,7 +67,7 @@ export default async function DealDetailPage({
               }
             />
           }
-          documents={<DocumentsPanel dealId={deal.id} documents={deal.documents ?? []} />}
+          documents={<DocumentsPanel dealId={deal.id} revision={deal.revision} documents={deal.documents ?? []} />}
           chat={<ChatPanel dealId={deal.id} />}
         />
       </div>

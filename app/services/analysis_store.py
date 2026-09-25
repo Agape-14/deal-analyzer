@@ -40,8 +40,12 @@ def collect_changes(session):
 
 
 def document_manifest(documents):
+    from app.services.document_versions import document_inventory, file_hash
+    documents = list(documents)
+    inventory = document_inventory(documents)
     return sorted([
         {"id": doc.id, "filename": doc.filename, "page_count": doc.page_count or 0,
+         "file_sha256": file_hash(doc), **inventory[doc.id],
          "content_hash": doc.file_sha256 or doc.content_fingerprint or hashlib.sha256((doc.extracted_text or "").encode()).hexdigest()}
         for doc in documents
     ], key=lambda d: d["id"])

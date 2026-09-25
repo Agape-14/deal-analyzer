@@ -224,6 +224,11 @@ def waterfall_from_deal(metrics: dict, investment_amount: float = None) -> dict:
     def unavailable(message):
         return {"status": "unavailable", "message": message, "tiers": [], "totals": {}}
 
+    from app.services.model_limits import limitations_for
+    limits = limitations_for(metrics, "waterfall")
+    if limits:
+        return unavailable("Waterfall unavailable: " + " ".join(limits))
+
     if (get_path(metrics, "deal_structure.waterfall_hurdle_basis") != "simple_annual_return"
             or get_path(metrics, "deal_structure.preferred_return_allocation") != "pro_rata"):
         return unavailable("Waterfall unavailable: the current model requires explicit simple annual hurdles and pro-rata preferred distributions. IRR hurdles, LP-only preferences and catch-up terms require a more complete model.")

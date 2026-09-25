@@ -88,7 +88,7 @@ function YearlyTable({ cf }: { cf: CashflowResponse }) {
           <tbody>
             {cf.project_level.map((row) => (
               <tr key={row.year} className="border-t border-border/50">
-                <td className="py-2 pr-4 font-medium">Y{row.year}</td>
+                <td className="py-2 pr-4 font-medium">Y{row.year}{row.duration_years != null && row.duration_years < 1 && <span className="block text-xs text-muted-foreground">{Math.round(row.duration_years * 12)} months</span>}</td>
                 <td className="py-2 px-4 text-right tabular-nums">{fmtMoney(row.gross_revenue)}</td>
                 <td className="py-2 px-4 text-right tabular-nums">{fmtMoney(row.expenses)}</td>
                 <td className="py-2 px-4 text-right tabular-nums">{fmtMoney(row.noi)}</td>

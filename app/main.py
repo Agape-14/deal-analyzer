@@ -80,13 +80,16 @@ async def lifespan(app: FastAPI):
         log.info("[auth] enabled for user '%s' roles=%s", auth.get("username"), auth.get("roles"))
     else:
         log.warning("[auth] %s", auth.get("message"))
-    pipeline_task = start_pipeline_runner()
-    review_task = start_review_worker()
+    workers_enabled = os.getenv("REVIEW_WORKERS_ENABLED", "1").lower() not in {"0", "false", "no"}
+    pipeline_task = start_pipeline_runner() if workers_enabled else None
+    review_task = start_review_worker() if workers_enabled else None
     try:
         yield
     finally:
-        await stop_review_worker(review_task)
-        await stop_pipeline_runner(pipeline_task)
+        if review_task:
+            await stop_review_worker(review_task)
+        if pipeline_task:
+            await stop_pipeline_runner(pipeline_task)
 
 
 app = FastAPI(title="Kenyon Investment Dashboard", version="1.0.0", lifespan=lifespan)

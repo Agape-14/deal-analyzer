@@ -16,7 +16,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from app.services.canonical_metrics import canonical_return_summary, primary_strategy
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 ACCEPTED = {"checked", "calculated", "manual"}
 BAD = {"wrong", "missing", "unverifiable", "stale", "math_failed"}
 
@@ -197,10 +197,20 @@ def identity(path, unit, context):
 def evidence_for(prov, documents):
     source = str(prov.get("verification_source") or prov.get("correction_source") or "")
     doc_id, name = prov.get("source_doc_id"), prov.get("source_doc_name")
-    matches = [d for d in documents if (doc_id is not None and d["id"] == doc_id) or (name and d["filename"] == name) or (d["filename"] and d["filename"].lower() in source.lower())]
+    # An exact document ID is authoritative; a same-named file cannot obscure it.
+    if doc_id is not None:
+        matches = [d for d in documents if d["id"] == doc_id]
+    elif name:
+        matches = [d for d in documents if d["filename"].casefold() == str(name).casefold()]
+    else:
+        matches = [d for d in documents if d["filename"] and d["filename"].lower() in source.lower()]
+    if len(matches) > 1 and all(d.get("file_sha256") for d in matches) and len({d["file_sha256"] for d in matches}) == 1:
+        matches = sorted(matches, key=lambda d: (d.get("source_role", "active") != "active", d["id"]))[:1]
     if len(matches) != 1:
         return [], "The cited document is missing or ambiguous."
     doc = matches[0]
+    if doc.get("source_role", "active") != "active":
+        return [], "The cited document is superseded or belongs to an alternate scenario. Use a current primary source."
     stored_hash = prov.get("source_document_hash")
     if stored_hash and stored_hash != doc["content_hash"]:
         return [], "The source document changed after this fact was checked."
@@ -315,6 +325,8 @@ def build_analysis(metrics, documents=None, property_type="multifamily"):
     for path, fact in facts.items():
         if fact.state in ACCEPTED:
             set_path(accepted, path, fact.value)
+    from app.services.model_limits import model_limits
+    accepted["_model_limits"] = model_limits(metrics)
     strategy = primary_strategy(metrics)
     accepted.setdefault("target_returns", {})["primary_strategy"] = strategy
     selection = metrics.get("_analysis_context") or {}

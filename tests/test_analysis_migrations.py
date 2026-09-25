@@ -12,10 +12,12 @@ def test_analysis_migrations_preserve_legacy_metrics_and_are_idempotent(tmp_path
     original = '{"deal_structure":{"debt_amount":123},"_locks":{"deal_structure.debt_amount":true}}'
     with engine.begin() as conn:
         conn.execute(sa.text("CREATE TABLE deals (id INTEGER PRIMARY KEY, metrics JSON)"))
+        conn.execute(sa.text("CREATE TABLE deal_documents (id INTEGER PRIMARY KEY, filename TEXT)"))
+        conn.execute(sa.text("INSERT INTO deal_documents VALUES (1, 'existing.pdf')"))
         conn.execute(sa.text("INSERT INTO deals (id, metrics) VALUES (1, :metrics)"), {"metrics": original})
         op = Operations(MigrationContext.configure(conn))
         for _ in range(2):
-            for filename in ("c210925a001_analysis_snapshots.py", "c210925a002_review_jobs.py", "c210925a003_snapshot_inputs.py"):
+            for filename in ("c210925a001_analysis_snapshots.py", "c210925a002_review_jobs.py", "c210925a003_snapshot_inputs.py", "c210925a004_document_versions.py"):
                 path = Path(__file__).parents[1] / "alembic" / "versions" / filename
                 spec = importlib.util.spec_from_file_location(filename[:-3], path)
                 migration = importlib.util.module_from_spec(spec)
@@ -27,4 +29,5 @@ def test_analysis_migrations_preserve_legacy_metrics_and_are_idempotent(tmp_path
         assert (row.revision, row.analysis_version, row.analysis_snapshot) == (1, 0, None)
         assert {"analysis_snapshots", "review_jobs"}.issubset(sa.inspect(conn).get_table_names())
         assert conn.execute(sa.text("SELECT count(*) FROM analysis_snapshots")).scalar() == 0
+        assert conn.execute(sa.text("SELECT filename, source_role, superseded_by_id FROM deal_documents")).one() == ("existing.pdf", "active", None)
     engine.dispose()
