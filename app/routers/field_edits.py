@@ -94,7 +94,7 @@ def _mark_review_resolved(metrics: dict, key: str, action: str, note: Optional[s
         return False
     old_value = resolutions.get(key)
     new_value = {
-        "resolved": True,
+        "resolved": action != "unsure",
         "action": action,
         "note": note,
         "at": now_iso(),
@@ -407,7 +407,7 @@ async def resolve_review_item(deal_id: int, data: ReviewResolveIn, db: AsyncSess
             status_code=500,
             detail=f"Could not resolve review item: {type(e).__name__}: {e}",
         )
-    return {"message": "Review item resolved", "key": data.key, "resolved": True}
+    return {"message": "Uncertainty recorded" if data.action == "unsure" else "Review item resolved", "key": data.key, "resolved": data.action != "unsure"}
 
 
 @router.post("/{deal_id}/fields/lock")

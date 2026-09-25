@@ -28,7 +28,7 @@ from app.services.data_integrity import (
 from app.services.deal_extractor_cost_aware import extract_metrics_from_docs
 from app.services.deal_scorer import score_deal
 from app.services.deal_validator import validate_deal_metrics
-from app.services.deal_verifier import apply_corrections, verify_deal_metrics
+from app.services.deal_verifier import verify_with_corrections
 from app.services.document_context import documents_fingerprint
 from app.services.math_checker import run_math_checks
 
@@ -577,15 +577,11 @@ async def _run_verify_background(deal_id: int, auto_correct: bool):
             if not deal or not deal.metrics:
                 return
 
-            verification = await verify_deal_metrics(deal, db)
+            metrics, verification, changes = await verify_with_corrections(deal, db, auto_correct)
             verification_cache_hit = bool(
                 isinstance(verification.get("summary"), dict)
                 and verification["summary"].get("cache_hit")
             )
-            metrics = _ensure_metrics_dict(deal.metrics, "Stored deal metrics")
-            changes: list[str] = []
-            if auto_correct:
-                metrics, changes = apply_corrections(metrics, verification)
             metrics = stamp_verification(metrics, verification)
 
             math_results = run_math_checks(metrics)
@@ -601,9 +597,9 @@ async def _run_verify_background(deal_id: int, auto_correct: bool):
             metrics["_pipeline"] = _pipeline_status(
                 "verify_complete",
                 "verify",
-                "Sources checked using the unchanged document cache. Values are ready for scoring."
+                "Source checks reused for unchanged documents. Checking score eligibility next."
                 if verification_cache_hit
-                else "Sources checked. Values are ready for scoring.",
+                else "Source checks complete. Checking score eligibility next.",
                 started_at=(deal.metrics or {}).get("_pipeline", {}).get("started_at")
                 if isinstance((deal.metrics or {}).get("_pipeline"), dict)
                 else None,
@@ -743,4 +739,3 @@ async def _persist_pipeline_failure(db: AsyncSession, deal_id: int, step: str, m
         await db.commit()
     except Exception:
         log.exception("failed to persist pipeline failure for deal %s", deal_id)
-

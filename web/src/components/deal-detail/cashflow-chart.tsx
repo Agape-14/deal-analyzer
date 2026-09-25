@@ -42,27 +42,19 @@ export function CashflowChart({
       }
     } else if (data.project_level?.length) {
       // Year 0 = invested equity (negative), then annual cash_flow, then exit
-      const investedEquity = data.summary?.exit_equity
-        ? data.summary.exit_value
-          ? Math.max(0, data.summary.exit_value - data.summary.exit_equity) === 0
-            ? 0
-            : 0 // placeholder — we don't have explicit invested equity
-          : 0
-        : 0;
-      // The project_level doesn't include equity-in, so display just the
-      // operating cashflow; cumulative starts at 0 and grows.
-      let cum = 0;
+      const investedEquity = data.summary.invested_equity ?? 0;
+      let cum = -investedEquity;
+      rows.push({ year: 0, cf: -investedEquity, cumulative: cum });
       for (const y of data.project_level) {
         cum += y.cash_flow;
         rows.push({ year: y.year, cf: y.cash_flow, cumulative: cum, noi: y.noi });
       }
-      // Add exit proceeds to terminal year for visual impact
+      // Include modeled exit proceeds once in the final year's cash flows.
       if (data.summary?.exit_equity && rows.length) {
         const last = rows[rows.length - 1];
         last.cf += data.summary.exit_equity;
         last.cumulative += data.summary.exit_equity;
       }
-      void investedEquity; // reserved for when backend exposes equity-in
     }
     return rows;
   }, [data]);
@@ -75,18 +67,17 @@ export function CashflowChart({
         <div>
           <h3 className="text-base font-semibold tracking-tight">Cashflow projection</h3>
           <p className="text-xs text-muted-foreground mt-0.5">
-            LP-level cash flow with cumulative return overlay.
+            {data.lp_level?.length ? "Illustrative investor cash flow" : "Project cash flow"} with invested capital included.
           </p>
         </div>
         <div className="flex items-center gap-5 text-right flex-wrap">
-          {projectedIrr != null && (
-            <SummaryStat label="Target IRR" value={fmtPct(projectedIrr, 1)} accent="primary" />
-          )}
           <SummaryStat label="Multiple" value={fmtMultiple(summary.equity_multiple)} />
           <SummaryStat label="Exit Equity" value={fmtMoney(summary.exit_equity)} accent="success" />
           <SummaryStat label="Total Return" value={fmtMoney(summary.total_return_to_equity)} />
         </div>
       </div>
+
+      {data.message && <p className="mb-4 rounded-md bg-muted p-3 text-sm text-muted-foreground" role="status">{data.message}</p>}
 
       {series.length > 0 ? (
         <div className="h-[280px] w-full">
@@ -143,7 +134,9 @@ export function CashflowChart({
         </div>
       ) : (
         <div className="py-16 text-center text-sm text-muted-foreground">
-          No cashflow series available yet.
+          {data.missing_inputs?.length
+            ? `Missing or disputed assumptions: ${data.missing_inputs.map((path) => path.split(".").pop()?.replaceAll("_", " ")).join(", ")}.`
+            : "No cashflow series available yet."}
         </div>
       )}
 

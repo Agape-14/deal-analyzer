@@ -1,5 +1,27 @@
 """Cash Flow Projector — generates year-by-year projections from deal metrics."""
 
+import math
+
+
+def _periodic_irr(flows):
+    """Annual IRR for conventional cash flows; withhold ambiguous roots."""
+    if not flows or flows[0] >= 0 or any(v < 0 for v in flows[1:]) or not any(v > 0 for v in flows[1:]):
+        return None
+    def npv(rate):
+        return sum(value / (1 + rate) ** year for year, value in enumerate(flows))
+    low, high = -0.99, 1.0
+    while npv(high) > 0 and high < 10000:
+        high *= 2
+    if npv(low) < 0 or npv(high) > 0:
+        return None
+    for _ in range(100):
+        middle = (low + high) / 2
+        if npv(middle) > 0:
+            low = middle
+        else:
+            high = middle
+    return round((low + high) / 2 * 100, 2)
+
 
 def _safe_float(val, default=0.0):
     """Safely convert to float."""
@@ -20,16 +42,45 @@ def project_cash_flows(metrics: dict, investment_amount: float = None) -> dict:
     tr = metrics.get("target_returns", {}) or {}
     pd = metrics.get("project_details", {}) or {}
 
+    from app.services.canonical_metrics import get_path, bad_source
+    required = {
+        "project_details.unit_count": (1, 1000000),
+        "financial_projections.avg_rent_per_unit": (0, 1000000),
+        "financial_projections.occupancy_assumption": (0, 100),
+        "financial_projections.operating_expense_ratio": (0, 100),
+        "financial_projections.rent_growth_assumption": (-99, 100),
+        "deal_structure.debt_amount": (0, float("inf")),
+        "deal_structure.hold_period_years": (1, 50),
+        "deal_structure.total_equity_required": (1, float("inf")),
+        "financial_projections.exit_cap_rate": (0.01, 100),
+    }
+    if _safe_float(ds.get("debt_amount")) > 0:
+        required["deal_structure.interest_rate"] = (0, 100)
+    if investment_amount:
+        required["deal_structure.preferred_return"] = (0, 100)
+    unavailable = []
+    for path, (lower, upper) in required.items():
+        value = _safe_float(get_path(metrics, path), None)
+        if (value is None or not math.isfinite(value) or not lower <= value <= upper
+                or bad_source((metrics.get("_provenance") or {}).get(path))):
+            unavailable.append(path)
+    if unavailable:
+        return {
+            "status": "unavailable", "missing_inputs": unavailable,
+            "message": "Projection needs source-supported assumptions. Missing or disputed inputs have not been filled with defaults.",
+            "project_level": [], "lp_level": [], "summary": {}, "assumptions": {},
+        }
+
     # Core inputs
     unit_count = _safe_float(pd.get("unit_count"), 100)
-    avg_rent = _safe_float(fp.get("avg_rent_per_unit") or pd.get("current_avg_rent"), 1500)
+    avg_rent = _safe_float(fp.get("avg_rent_per_unit"))
     occupancy = _safe_float(fp.get("occupancy_assumption"), 93) / 100.0
     expense_ratio = _safe_float(fp.get("operating_expense_ratio"), 45) / 100.0
     rent_growth = _safe_float(fp.get("rent_growth_assumption"), 3.0) / 100.0
 
     debt_amount = _safe_float(ds.get("debt_amount"), 0)
     interest_rate = _safe_float(ds.get("interest_rate"), 5.0) / 100.0
-    hold_period = int(_safe_float(ds.get("hold_period_years") or ds.get("investment_term_years"), 5))
+    hold_period = int(_safe_float(ds.get("hold_period_years")))
     total_equity = _safe_float(ds.get("total_equity_required"), 0)
     preferred_return = _safe_float(ds.get("preferred_return"), 8.0) / 100.0
     exit_cap = _safe_float(fp.get("exit_cap_rate"), 5.0) / 100.0
@@ -71,17 +122,6 @@ def project_cash_flows(metrics: dict, investment_amount: float = None) -> dict:
     lp_level = []
     summary = {}
 
-    # LP's share of equity (pro-rata). If the "GP co-invest" is
-    # rolled-over LP equity from a prior phase, all equity is LP-side.
-    gp_is_rollover = ds.get("gp_coinvest_is_rollover")
-    if gp_is_rollover is True:
-        lp_equity_share = 1.0
-    elif total_equity > 0:
-        gp_pct = _safe_float(ds.get("gp_equity_coinvest_pct"), 5) / 100.0
-        lp_equity_share = max(0.5, 1.0 - gp_pct)
-    else:
-        lp_equity_share = 1.0
-
     if investment_amount and investment_amount > 0 and total_equity > 0:
         investor_pct = investment_amount / total_equity
 
@@ -99,7 +139,7 @@ def project_cash_flows(metrics: dict, investment_amount: float = None) -> dict:
             # Distribution = preferred return on invested capital (common syndication model)
             annual_dist = round(investment_amount * preferred_return)
             # Cap at available cash flow to this investor
-            max_dist = round(year_data["cash_flow"] * investor_pct * lp_equity_share)
+            max_dist = round(year_data["cash_flow"] * investor_pct)
             annual_dist = min(annual_dist, max(max_dist, 0))
 
             cumulative += annual_dist
@@ -113,11 +153,11 @@ def project_cash_flows(metrics: dict, investment_amount: float = None) -> dict:
         # Final year: distribution + exit proceeds
         last_year = project_level[-1] if project_level else {"year": hold_period, "cash_flow": 0}
         annual_dist = round(investment_amount * preferred_return)
-        max_dist = round(last_year["cash_flow"] * investor_pct * lp_equity_share)
+        max_dist = round(last_year["cash_flow"] * investor_pct)
         annual_dist = min(annual_dist, max(max_dist, 0))
 
         # Exit proceeds for this investor
-        exit_proceeds_investor = round(exit_equity * investor_pct * lp_equity_share)
+        exit_proceeds_investor = round(exit_equity * investor_pct)
 
         total_final = annual_dist + exit_proceeds_investor
         cumulative += total_final
@@ -143,11 +183,7 @@ def project_cash_flows(metrics: dict, investment_amount: float = None) -> dict:
         net_profit = cumulative
         equity_multiple = round(total_returned / investment_amount, 2) if investment_amount > 0 else 0
 
-        # Approximate IRR using equity multiple and hold period
-        if equity_multiple > 0 and hold_period > 0:
-            irr_estimate = round((equity_multiple ** (1 / hold_period) - 1) * 100, 1)
-        else:
-            irr_estimate = 0
+        irr_estimate = _periodic_irr([entry["amount"] for entry in lp_level])
 
         summary = {
             "total_distributions": round(total_distributions),
@@ -175,7 +211,10 @@ def project_cash_flows(metrics: dict, investment_amount: float = None) -> dict:
             "years_modeled": hold_period,
         }
 
+    summary["invested_equity"] = investment_amount if lp_level else total_equity
     return {
+        "status": "illustrative",
+        "message": "Illustrative sale-at-exit model using interest-only debt, flat expense ratios and pro-rata ownership. It excludes fees, taxes, promote tiers and refinancing; it is not the sponsor's LP forecast or a hold-strategy forecast.",
         "project_level": project_level,
         "lp_level": lp_level,
         "summary": summary,

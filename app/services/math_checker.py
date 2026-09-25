@@ -45,10 +45,10 @@ def run_math_checks(metrics: dict) -> list[dict]:
         if construction_loan > permanent_loan:
             results.append({
                 'check': 'Construction Loan ≤ Permanent Loan',
-                'status': 'fail',
+                'status': 'warn',
                 'expected': f'Construction ≤ Perm',
                 'actual': f'Construction ${construction_loan:,.0f} > Perm ${permanent_loan:,.0f}',
-                'difference': 'Construction loan should not exceed permanent loan',
+                'difference': 'Permanent refinancing would require a debt paydown; confirm the funding plan',
                 'formula': f'${construction_loan:,.0f} vs ${permanent_loan:,.0f}',
             })
         else:
@@ -89,17 +89,18 @@ def run_math_checks(metrics: dict) -> list[dict]:
             'formula': f'{components} = ${calc_total:,.0f}',
         })
     
-    # LTV = debt / total cost
+    # Debt / cost is LTC. LTV requires a stated property value.
     ltv = _n(ds.get('ltv'))
+    ltc = _n(ds.get('loan_to_cost'))
     if debt and total_cost and total_cost > 0:
         calc_ltv = round(debt / total_cost * 100, 1)
-        if ltv:
-            diff = abs(calc_ltv - ltv)
+        if ltc is not None:
+            diff = abs(calc_ltv - ltc)
             results.append({
-                'check': 'LTV = Debt / Total Cost',
+                'check': 'LTC = Debt / Total Cost',
                 'status': 'pass' if diff < 0.5 else ('warn' if diff < 2 else 'fail'),
                 'expected': f'{calc_ltv}%',
-                'actual': f'{ltv}%',
+                'actual': f'{ltc}%',
                 'difference': f'{diff:.1f}pp off' if diff > 0.1 else 'match',
                 'formula': f'${debt:,.0f} / ${total_cost:,.0f} × 100 = {calc_ltv}%',
             })

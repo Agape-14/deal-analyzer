@@ -482,15 +482,8 @@ async def _extract_document_background(doc_id: int, file_path: str, ext: str) ->
                     payload={"deal_id": doc.deal_id, "doc_id": doc.id, "error": quality.get("error")},
                 )
             else:
-                unit = "sheet" if ext in SPREADSHEET_EXTS else "page"
-                await _safe_emit(
-                    db,
-                    kind="info",
-                    title=f"Extraction complete - {doc.filename}",
-                    body=f"{page_count} {unit}{'s' if page_count != 1 else ''} - {len(extracted_text)} characters extracted",
-                    href=f"/deals/{doc.deal_id}?tab=documents",
-                    payload={"deal_id": doc.deal_id, "doc_id": doc.id, **extraction},
-                )
+                # Progress is visible on the document. Notify once for upload,
+                # then for a completed review or failure, not every sub-step.
                 if AUTO_REVIEW_AFTER_UPLOAD:
                     asyncio.create_task(_auto_review_after_upload(doc.deal_id, doc.id))
         except Exception as exc:

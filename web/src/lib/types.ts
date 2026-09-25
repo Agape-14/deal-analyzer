@@ -361,15 +361,19 @@ export interface LpCashflowRow {
 }
 
 export interface CashflowResponse {
+  status?: "unavailable" | "illustrative";
+  message?: string;
+  missing_inputs?: string[];
   project_level: CashflowYear[];
   lp_level: LpCashflowRow[];
   summary: {
-    total_operating_cashflow: number;
-    exit_value: number;
-    exit_equity: number;
-    total_return_to_equity: number;
-    equity_multiple: number;
-    years_modeled: number;
+    invested_equity?: number;
+    total_operating_cashflow?: number;
+    exit_value?: number;
+    exit_equity?: number;
+    total_return_to_equity?: number;
+    equity_multiple?: number;
+    years_modeled?: number;
   };
   assumptions?: Record<string, unknown>;
 }

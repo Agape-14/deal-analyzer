@@ -482,212 +482,85 @@ def _safe_num(val):
 
 
 def _post_process_metrics(metrics: dict):
-    """Calculate derived fields if they're missing or obviously wrong."""
-    ds = metrics.get("deal_structure", {}) or {}
-    pd_ = metrics.get("project_details", {}) or {}
-    fp = metrics.get("financial_projections", {}) or {}
-    uc = metrics.get("underwriting_checks", {}) or {}
-    tr = metrics.get("target_returns", {}) or {}
+    """Fill only unambiguous missing derived values; never rewrite source facts.
 
-    # target_irr is the HEADLINE number on the snapshot card. For an
-    # LP reading this dashboard, "target" means what THEY are
-    # projected to earn — which depends on the deal's strategy.
-    #
-    # For HOLD strategies, the investor's actual return is bounded by
-    # cash flow: preferred return + whatever excess the waterfall
-    # distributes. An IRR of 17-21% on a hold deal is almost always
-    # the hypothetical-sale IRR being pulled from the wrong row —
-    # real hold yields are in the 8-14% range (pref + excess).
-    #
-    # For SALE strategies, net IRR is the right headline — it
-    # includes the terminal sale value that the investor actually
-    # receives.
-    net = _safe_num(tr.get("net_irr"))
-    gross = _safe_num(tr.get("gross_irr"))
-    pref = _safe_num(ds.get("preferred_return"))  # lives on deal_structure
-    coc = _safe_num(tr.get("target_cash_on_cash"))
-    primary_strategy = (tr.get("primary_strategy") or "").strip().lower()
+    Cash yield is not IRR, cost is not market value, and construction debt is
+    not permanent debt. Those distinctions must survive extraction/correction.
+    A calculated value remains provisional until its inputs are verified.
+    """
+    from app.services.canonical_metrics import get_path, bad_source
 
-    # Try to get hold-scenario-specific return
-    hold = tr.get("hold_scenario") or {}
-    hold_coc = _safe_num(hold.get("cash_on_cash_return")) if isinstance(hold, dict) else None
-    hold_priority = _safe_num(hold.get("priority_return")) if isinstance(hold, dict) else None
-
-    if primary_strategy in ("hold", "hold_with_sale_option"):
-        # For hold-first deals, the investor's projected return is
-        # the cash flow yield, not any sale-scenario IRR.
-        #
-        # Priority: hold_scenario.cash_on_cash → target_cash_on_cash
-        # → hold_scenario.priority_return → preferred_return.
-        # NEVER use net_irr or gross_irr as target — those are
-        # almost always from the hypothetical sale scenario.
-        hold_return = hold_coc or coc or hold_priority or pref
-        if hold_return is not None:
-            tr["target_irr"] = hold_return
-        elif net is not None:
-            # Last resort: if we have absolutely nothing else, use
-            # net_irr but sanity-check it against the pref. If it's
-            # >30% above pref, it's suspiciously high for a hold deal.
-            if pref is not None and net > pref * 1.3:
-                tr["target_irr"] = pref
-            else:
-                tr["target_irr"] = net
-        elif gross is not None:
-            tr["target_irr"] = gross
-    elif primary_strategy == "sale":
-        # Sale strategy: net IRR is the right headline.
-        if net is not None:
-            tr["target_irr"] = net
-        elif tr.get("target_irr") is None and gross is not None:
-            tr["target_irr"] = gross
-    else:
-        # Unknown strategy: prefer net over gross.
-        if net is not None:
-            tr["target_irr"] = net
-        elif tr.get("target_irr") is None and gross is not None:
-            tr["target_irr"] = gross
-
-    metrics["target_returns"] = tr
-
-    total_cost = ds.get("total_project_cost")
-    units = pd_.get("unit_count")
-    sqft = pd_.get("total_sqft")
-
-    # Calculate total project cost if missing but we have equity + debt
-    if not total_cost or total_cost == 0:
-        equity = _safe_num(ds.get("total_equity_required"))
-        debt = _safe_num(ds.get("debt_amount"))
-        if equity and debt:
-            total_cost = equity + debt
-            ds["total_project_cost"] = total_cost
-        elif equity:
-            total_cost = equity
-            ds["total_project_cost"] = total_cost
-
-    # ALWAYS calculate price per unit and price per sqft
-    if total_cost and units and units > 0:
-        pd_["price_per_unit"] = round(total_cost / units)
-
-    if total_cost and sqft and sqft > 0:
-        pd_["price_per_sqft"] = round(total_cost / sqft)
-
-    # Reconcile construction vs permanent loans
-    construction_loan = _safe_num(ds.get("construction_loan_amount"))
-    permanent_loan = _safe_num(ds.get("permanent_loan_amount"))
-    debt = _safe_num(ds.get("debt_amount"))
-
-    # If we have construction loan but debt_amount is the perm loan, fix it
-    if construction_loan and permanent_loan and debt:
-        # If debt matches perm but project is in development, use construction loan
-        if debt == permanent_loan and construction_loan < permanent_loan:
-            ds["debt_amount"] = construction_loan
-            debt = construction_loan
-    elif construction_loan and not debt:
-        ds["debt_amount"] = construction_loan
-        debt = construction_loan
-    elif not construction_loan and debt:
-        ds["construction_loan_amount"] = debt
-        construction_loan = debt
-
-    # LTV = debt / total project cost (using current/construction loan)
-    if total_cost and debt and total_cost > 0:
-        calculated_ltv = round(debt / total_cost * 100, 1)
-        ds["ltv"] = calculated_ltv  # Always recalculate from components
-        # Also calculate perm LTV if we have it
-        if permanent_loan and permanent_loan != debt:
-            ds["ltv_at_stabilization"] = round(permanent_loan / total_cost * 100, 1)
-
-    # Yield on cost = stabilized NOI / total project cost
-    noi = fp.get("stabilized_noi")
-    if noi and total_cost and total_cost > 0 and not uc.get("yield_on_cost"):
-        uc["yield_on_cost"] = round(noi / total_cost * 100, 2)
-
-    # DSCR = NOI / annual debt service (use perm loan for stabilized DSCR)
-    interest_rate = ds.get("interest_rate")
-    dscr_debt = permanent_loan or debt  # Use perm loan for stabilized DSCR if available
-    if noi and dscr_debt and interest_rate and not uc.get("dscr"):
-        annual_debt_service = dscr_debt * (interest_rate / 100)  # Simplified interest-only
-        if annual_debt_service > 0:
-            uc["dscr"] = round(noi / annual_debt_service, 2)
-
-    # Revenue per unit
-    avg_rent = fp.get("avg_rent_per_unit")
-    if avg_rent and units and units > 0 and not uc.get("revenue_per_unit"):
-        uc["revenue_per_unit"] = round(avg_rent * 12)
-
-    # GP co-invest percentage calculation
-    gp_coinvest_raw = ds.get("gp_coinvest")
-    total_equity = ds.get("total_equity_required")
-    if gp_coinvest_raw and total_equity and not ds.get("gp_equity_coinvest_pct"):
-        try:
-            gp_val = float(str(gp_coinvest_raw).replace("%", "").replace("$", "").replace(",", ""))
-            if gp_val > 100:  # Looks like a dollar amount
-                ds["gp_equity_coinvest_pct"] = round(gp_val / total_equity * 100, 1)
-        except (ValueError, TypeError):
-            pass
-
-    # Construction costs: cross-fill from financial_projections FIRST,
-    # then calculate per-unit figures. Order matters — per-unit calcs
-    # need the totals to already be populated.
-    cc = metrics.get("construction_costs", {}) or {}
-
-    # Step 1: Cross-fill totals from financial_projections if missing
-    if not cc.get("hard_costs_total") and fp.get("hard_costs"):
-        cc["hard_costs_total"] = fp["hard_costs"]
-    if not cc.get("land_cost_total") and fp.get("land_cost"):
-        cc["land_cost_total"] = fp["land_cost"]
-    if not cc.get("soft_costs_total") and fp.get("soft_costs"):
-        cc["soft_costs_total"] = fp["soft_costs"]
-    if not cc.get("contingency_total") and fp.get("contingency"):
-        cc["contingency_total"] = fp["contingency"]
-    if not cc.get("total_project_cost") and total_cost:
-        cc["total_project_cost"] = total_cost
-
-    # Step 2: Calculate per-unit and per-sqft figures from totals
     prov = dict(metrics.get("_provenance") or {})
+    locks = metrics.get("_locks") or {}
 
-    def _calc_per_unit(total_key: str, per_unit_key: str):
-        total_val = _safe_num(cc.get(total_key))
-        if total_val and units and units > 0 and not cc.get(per_unit_key):
-            cc[per_unit_key] = round(total_val / units)
-            prov[f"construction_costs.{per_unit_key}"] = {
-                "source": "calculated",
-                "status": "calculated",
-                "extracted_at": _now_iso(),
-                "verification_note": f"{total_key} (${total_val:,.0f}) / unit_count ({units})",
-            }
-
-    _calc_per_unit("total_project_cost", "total_project_cost_per_unit")
-    _calc_per_unit("hard_costs_total", "hard_costs_per_unit")
-    _calc_per_unit("land_cost_total", "land_cost_per_unit")
-    _calc_per_unit("soft_costs_total", "soft_costs_per_unit")
-
-    sqft_val = _safe_num(sqft)
-    if sqft_val and sqft_val > 0:
-        hc = _safe_num(cc.get("hard_costs_total"))
-        if hc and not cc.get("hard_costs_per_sqft"):
-            cc["hard_costs_per_sqft"] = round(hc / sqft_val)
-            prov["construction_costs.hard_costs_per_sqft"] = {
-                "source": "calculated",
-                "status": "calculated",
-                "extracted_at": _now_iso(),
-                "verification_note": f"hard_costs_total (${hc:,.0f}) / total_sqft ({sqft_val:,.0f})",
-            }
-
-    # Step 3: Contingency as percentage of hard costs
-    cont = _safe_num(cc.get("contingency_total"))
-    hard = _safe_num(cc.get("hard_costs_total"))
-    if cont and hard and hard > 0 and not cc.get("contingency_pct"):
-        cc["contingency_pct"] = round(cont / hard * 100, 1)
-        prov["construction_costs.contingency_pct"] = {
+    def derive(path, inputs, calculate):
+        section, field = path.split(".", 1)
+        block = metrics.setdefault(section, {})
+        if not isinstance(block, dict):
+            return
+        existing = prov.get(path) or {}
+        if locks.get(path) or existing.get("locked") or block.get(field) is not None:
+            return
+        values = [_safe_num(get_path(metrics, key)) for key in inputs]
+        if any(value is None for value in values):
+            return
+        if any(bad_source(prov.get(key)) for key in inputs):
+            return
+        try:
+            value = calculate(*values)
+        except (ZeroDivisionError, ValueError, OverflowError):
+            return
+        if value is None:
+            return
+        block[field] = value
+        checked = all(
+            (prov.get(key) or {}).get("status") in {"confirmed", "manual", "calculated"}
+            for key in inputs
+        )
+        prov[path] = {
             "source": "calculated",
-            "status": "calculated",
+            "status": "calculated" if checked else "extracted",
+            "dependencies": list(inputs),
             "extracted_at": _now_iso(),
-            "verification_note": f"contingency (${cont:,.0f}) / hard_costs (${hard:,.0f}) × 100",
+            "verification_note": "Derived from " + ", ".join(inputs),
         }
 
+    def ratio(a, b, scale=1, digits=2):
+        return round(a / b * scale, digits) if a >= 0 and b > 0 else None
+
+    # Explicitly label debt / cost as LTC. Do not manufacture an LTV.
+    derive("deal_structure.loan_to_cost",
+           ["deal_structure.debt_amount", "deal_structure.total_project_cost"],
+           lambda debt, cost: ratio(debt, cost, 100, 1))
+    derive("underwriting_checks.yield_on_cost",
+           ["financial_projections.stabilized_noi", "deal_structure.total_project_cost"],
+           lambda noi, cost: ratio(noi, cost, 100))
+    # DSCR requires actual annual debt service, including amortization.
+    derive("underwriting_checks.dscr",
+           ["financial_projections.stabilized_noi", "financial_projections.annual_debt_service"],
+           ratio)
+
+    for target, source in (
+        ("hard_costs_total", "financial_projections.hard_costs"),
+        ("land_cost_total", "financial_projections.land_cost"),
+        ("soft_costs_total", "financial_projections.soft_costs"),
+        ("contingency_total", "financial_projections.contingency"),
+        ("total_project_cost", "deal_structure.total_project_cost"),
+    ):
+        derive("construction_costs." + target, [source], lambda value: value)
+
+    for total, per_unit in (
+        ("total_project_cost", "total_project_cost_per_unit"),
+        ("hard_costs_total", "hard_costs_per_unit"),
+        ("land_cost_total", "land_cost_per_unit"),
+        ("soft_costs_total", "soft_costs_per_unit"),
+    ):
+        derive("construction_costs." + per_unit,
+               ["construction_costs." + total, "project_details.unit_count"],
+               lambda cost, units: ratio(cost, units, digits=0))
+    derive("construction_costs.hard_costs_per_sqft",
+           ["construction_costs.hard_costs_total", "project_details.total_sqft"], ratio)
+    derive("construction_costs.contingency_pct",
+           ["construction_costs.contingency_total", "construction_costs.hard_costs_total"],
+           lambda contingency, hard: ratio(contingency, hard, 100, 1))
     metrics["_provenance"] = prov
-    metrics["construction_costs"] = cc
-    metrics["deal_structure"] = ds
-    metrics["project_details"] = pd_
-    metrics["underwriting_checks"] = uc

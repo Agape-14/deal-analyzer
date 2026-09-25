@@ -258,7 +258,7 @@ function ResolveButton({
         note: action === "unsure" ? "Marked unsure from the admin review queue. Do not treat this item as verified." : "Confirmed from the admin review queue.",
       });
       toast.success(action === "unsure" ? "Marked unsure" : "Review item cleared", {
-        description: action === "unsure" ? "The item is removed from the checklist and kept in the audit trail as uncertain." : "The item was confirmed and removed from Needs review.",
+        description: action === "unsure" ? "Uncertainty is recorded. This item remains open until evidence resolves it." : "The item was confirmed and removed from Needs review.",
       });
       window.location.reload();
     } catch (error) {
@@ -525,7 +525,7 @@ function isReviewResolved(metrics: Metrics, key: string): boolean {
 }
 
 function isResolvedEntry(value: unknown): boolean {
-  return value === true || Boolean(value && typeof value === "object" && (value as Record<string, unknown>).resolved === true);
+  return value === true || Boolean(value && typeof value === "object" && (value as Record<string, unknown>).resolved === true && (value as Record<string, unknown>).action !== "unsure");
 }
 
 function mathCheckLooksResolved(check: MathCheck, metrics: Metrics): boolean {
@@ -615,7 +615,7 @@ function sourceDetail(source: FieldProvenance): string {
 
 function whyThisMatters(item: ReviewItem): string {
   if (item.kind === "math") return "A failed calculation can make the score and comparison unreliable.";
-  if (item.kind === "source") return "The score should only rely on values tied to a source, confirmed by admin, or marked unsure.";
+  if (item.kind === "source") return "The score can rely on source-checked or confirmed values. Uncertain values still need evidence.";
   if (item.area === "Returns") return "Return assumptions drive the headline score and investor comparison.";
   if (item.area === "Debt") return "Debt assumptions affect leverage, DSCR, and downside risk.";
   if (item.area === "Sponsor") return "Sponsor alignment affects execution trust and risk scoring.";

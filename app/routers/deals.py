@@ -521,18 +521,22 @@ async def waterfall_calculation(deal_id: int, investment: Optional[float] = None
 
 # ===== Comparison =====
 
+async def _comparison_deals(data: CompareRequest, db: AsyncSession):
+    if len(set(data.deal_ids)) != len(data.deal_ids) or len(data.deal_ids) < 2:
+        raise HTTPException(status_code=400, detail="Select at least 2 different deals to compare")
+    result = await db.execute(
+        select(Deal).options(selectinload(Deal.developer))
+        .where(Deal.id.in_(data.deal_ids), Deal.deleted_at.is_(None))
+    )
+    by_id = {deal.id: deal for deal in result.scalars().all()}
+    if len(by_id) != len(data.deal_ids):
+        raise HTTPException(status_code=404, detail="One or more selected deals are unavailable. Refresh the deal list.")
+    return [by_id[deal_id] for deal_id in data.deal_ids]
+
 @router.post("/compare")
 async def compare_deals(data: CompareRequest, db: AsyncSession = Depends(get_db)):
     """Compare multiple deals side-by-side."""
-    if len(data.deal_ids) < 2:
-        raise HTTPException(status_code=400, detail="Select at least 2 deals to compare")
-
-    result = await db.execute(
-        select(Deal)
-        .options(selectinload(Deal.developer))
-        .where(Deal.id.in_(data.deal_ids))
-    )
-    deals = result.scalars().all()
+    deals = await _comparison_deals(data, db)
 
     comparison = []
     for deal in deals:
@@ -547,15 +551,7 @@ async def export_comparison(data: CompareRequest, db: AsyncSession = Depends(get
     import openpyxl
     from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 
-    if len(data.deal_ids) < 2:
-        raise HTTPException(status_code=400, detail="Select at least 2 deals to compare")
-
-    result = await db.execute(
-        select(Deal)
-        .options(selectinload(Deal.developer))
-        .where(Deal.id.in_(data.deal_ids))
-    )
-    deals = result.scalars().all()
+    deals = await _comparison_deals(data, db)
 
     wb = openpyxl.Workbook()
     ws = wb.active
@@ -667,8 +663,9 @@ async def export_comparison(data: CompareRequest, db: AsyncSession = Depends(get
                 if isinstance(val, (int, float)):
                     values.append((col_idx, val))
 
-            # Highlight best/worst if numeric
-            if len(values) >= 2:
+            # Only scores have an unambiguous "higher is better" meaning.
+            # Size, leverage, costs and sponsor projections are not winners.
+            if section_name == "SCORES" and len(values) >= 2:
                 best_col = max(values, key=lambda x: x[1])[0]
                 worst_col = min(values, key=lambda x: x[1])[0]
                 if best_col != worst_col:

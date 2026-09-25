@@ -18,6 +18,7 @@ import io
 import json
 import zipfile
 from datetime import date, datetime, timezone
+from xml.sax.saxutils import escape
 
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
@@ -28,6 +29,7 @@ from sqlalchemy.orm import selectinload
 from app.database import get_db
 from app.models import Deal, Developer, Investment
 from app.services.portfolio_analytics import portfolio_analytics
+from app.services.canonical_metrics import canonical_return_summary
 
 router = APIRouter()
 
@@ -124,6 +126,7 @@ async def deal_pdf_report(deal_id: int, db: AsyncSession = Depends(get_db)):
     scores = deal.scores or {}
     ds = metrics.get("deal_structure", {}) or {}
     tr = metrics.get("target_returns", {}) or {}
+    returns = canonical_return_summary(metrics)
     pd_ = metrics.get("project_details", {}) or {}
     fp = metrics.get("financial_projections", {}) or {}
     ml = metrics.get("market_location", {}) or {}
@@ -138,7 +141,7 @@ async def deal_pdf_report(deal_id: int, db: AsyncSession = Depends(get_db)):
     story = []
 
     # Header
-    story.append(Paragraph(deal.project_name, styles["BrandTitle"]))
+    story.append(Paragraph(escape(deal.project_name), styles["BrandTitle"]))
     subtitle_parts = [
         deal.developer.name if deal.developer else None,
         deal.city or ml.get("city"),
@@ -147,7 +150,7 @@ async def deal_pdf_report(deal_id: int, db: AsyncSession = Depends(get_db)):
     ]
     subtitle = " · ".join(p for p in subtitle_parts if p)
     if subtitle:
-        story.append(Paragraph(subtitle, styles["Small"]))
+        story.append(Paragraph(escape(subtitle), styles["Small"]))
     story.append(Paragraph(
         f"Generated {date.today().isoformat()} · Status: {deal.status or 'reviewing'}",
         styles["Small"],
@@ -157,7 +160,7 @@ async def deal_pdf_report(deal_id: int, db: AsyncSession = Depends(get_db)):
     # Scores
     story.append(Paragraph("Investment Scores", styles["SectionHeading"]))
     if scores:
-        rows = [("Overall", f"{scores.get('overall', '—')} / 10")]
+        rows = [("Overall", f"{scores['overall']} / 10" if scores.get("overall") is not None else "Not scored")]
         for cat in ["returns", "market", "structure", "risk", "financials", "underwriting", "sponsor"]:
             c = scores.get(cat) or {}
             if c.get("score") is not None:
@@ -167,7 +170,7 @@ async def deal_pdf_report(deal_id: int, db: AsyncSession = Depends(get_db)):
         for cat in ["returns", "market", "structure", "risk", "financials", "underwriting", "sponsor"]:
             c = scores.get(cat) or {}
             if c.get("notes"):
-                story.append(Paragraph(f"<b>{cat.title()}:</b> {c['notes']}", styles["Small"]))
+                story.append(Paragraph(f"<b>{cat.title()}:</b> {escape(str(c['notes']))}", styles["Small"]))
     else:
         story.append(Paragraph("No scores computed yet.", styles["Small"]))
 
@@ -190,9 +193,9 @@ async def deal_pdf_report(deal_id: int, db: AsyncSession = Depends(get_db)):
     # Target returns
     story.append(Paragraph("Target Returns", styles["SectionHeading"]))
     story.append(_metric_table([
-        ("Target IRR", _fmt_pct(tr.get("target_irr"))),
-        ("Target Equity Multiple", f"{tr['target_equity_multiple']}x" if tr.get("target_equity_multiple") else "—"),
-        ("Cash-on-Cash", _fmt_pct(tr.get("target_cash_on_cash"))),
+        ("Target IRR", _fmt_pct(returns.get("target_irr"))),
+        ("Target Equity Multiple", f"{returns['target_equity_multiple']}x" if returns.get("target_equity_multiple") is not None else "—"),
+        ("Cash-on-Cash", _fmt_pct(returns.get("cash_on_cash"))),
         ("Avg Annual Return", _fmt_pct(tr.get("target_avg_annual_return"))),
         ("Projected Profit", _fmt_money(tr.get("projected_profit"))),
     ]))
@@ -223,7 +226,7 @@ async def deal_pdf_report(deal_id: int, db: AsyncSession = Depends(get_db)):
     if deal.notes:
         story.append(PageBreak())
         story.append(Paragraph("Notes", styles["SectionHeading"]))
-        story.append(Paragraph(deal.notes.replace("\n", "<br/>"), styles["BodyText"]))
+        story.append(Paragraph(escape(deal.notes).replace("\n", "<br/>"), styles["BodyText"]))
 
     # Documents
     if deal.documents:
@@ -231,7 +234,7 @@ async def deal_pdf_report(deal_id: int, db: AsyncSession = Depends(get_db)):
         story.append(Paragraph("Source Documents", styles["SectionHeading"]))
         for d in deal.documents:
             line = f"• {d.filename}  ({d.doc_type}, {d.page_count} pages)"
-            story.append(Paragraph(line, styles["Small"]))
+            story.append(Paragraph(escape(line), styles["Small"]))
 
     doc.build(story)
     buf.seek(0)

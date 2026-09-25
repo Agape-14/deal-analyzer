@@ -50,6 +50,7 @@ type ProvenanceLike = {
 
 type MetricsLike = {
   target_returns?: Record<string, unknown>;
+  _canonical_returns?: Record<string, unknown>;
   _provenance?: Record<string, ProvenanceLike>;
 };
 
@@ -75,43 +76,51 @@ async function request<T>(
   if (cookieHeader) headers["Cookie"] = cookieHeader;
 
   const timeoutController = timeoutMs ? new AbortController() : null;
-  const timeout = timeoutController ? setTimeout(() => timeoutController.abort(), timeoutMs) : null;
-  let res: Response;
+  let timedOut = false;
+  const timeout = timeoutController ? setTimeout(() => {
+    timedOut = true;
+    timeoutController.abort();
+  }, timeoutMs) : null;
+  const forwardAbort = () => timeoutController?.abort();
+  if (init.signal?.aborted) forwardAbort();
+  else init.signal?.addEventListener("abort", forwardAbort, { once: true });
   try {
-    res = await fetch(url, {
+    const res = await fetch(url, {
       ...init,
       headers,
       credentials: "include",
-      signal: init.signal ?? timeoutController?.signal,
+      signal: timeoutController?.signal ?? init.signal,
       next:
         typeof window === "undefined"
           ? { revalidate: revalidate === false ? false : revalidate }
           : undefined,
     });
+
+    if (!res.ok) {
+      let detail = res.statusText;
+      try {
+        const body = await res.json();
+        detail = body.detail ?? detail;
+      } catch (error) {
+        if (timedOut || init.signal?.aborted) throw error;
+        /* body wasn't JSON */
+      }
+      throw { status: res.status, detail } satisfies ApiError;
+    }
+
+    if (res.status === 204) return undefined as T;
+    const ct = res.headers.get("content-type") || "";
+    if (!ct.includes("application/json")) return (await res.blob()) as unknown as T;
+    return normalizeApiPayload(await res.json()) as T;
   } catch (error) {
-    if (timeoutController?.signal.aborted) {
+    if (timedOut) {
       throw { status: 408, detail: "This data is taking too long to load. Refresh the page to try again." } satisfies ApiError;
     }
     throw error;
   } finally {
     if (timeout) clearTimeout(timeout);
+    init.signal?.removeEventListener("abort", forwardAbort);
   }
-
-  if (!res.ok) {
-    let detail = res.statusText;
-    try {
-      const body = await res.json();
-      detail = body.detail ?? detail;
-    } catch {
-      /* body wasn't JSON */
-    }
-    throw { status: res.status, detail } satisfies ApiError;
-  }
-
-  if (res.status === 204) return undefined as T;
-  const ct = res.headers.get("content-type") || "";
-  if (!ct.includes("application/json")) return (await res.blob()) as unknown as T;
-  return normalizeApiPayload(await res.json()) as T;
 }
 
 function normalizeApiPayload(payload: unknown): unknown {
@@ -124,6 +133,15 @@ function normalizeApiPayload(payload: unknown): unknown {
 function normalizeDealSummary(value: unknown): unknown {
   if (!isRecord(value) || !isRecord(value.metrics)) return value;
   const deal = value as DealLike;
+  const canonical = deal.metrics?._canonical_returns;
+  if (canonical) {
+    return {
+      ...value,
+      target_irr: canonical.target_irr ?? null,
+      target_equity_multiple: canonical.target_equity_multiple ?? null,
+      target_cash_on_cash: canonical.cash_on_cash ?? null,
+    };
+  }
   const targetIrr = pickReturnMetric(deal.metrics, ["target_returns.target_irr", "target_returns.net_irr"]);
   const targetMultiple = pickReturnMetric(deal.metrics, [
     "target_returns.target_equity_multiple",
@@ -131,8 +149,8 @@ function normalizeDealSummary(value: unknown): unknown {
   ]);
   return {
     ...value,
-    target_irr: targetIrr ?? deal.target_irr,
-    target_equity_multiple: targetMultiple ?? deal.target_equity_multiple,
+    target_irr: targetIrr,
+    target_equity_multiple: targetMultiple,
   };
 }
 
@@ -149,25 +167,27 @@ function pickReturnMetric(metrics: MetricsLike | undefined, paths: string[]): un
     const status = String(candidate.provenance?.status ?? "").toLowerCase();
     return Boolean(candidate.provenance?.locked) || String(candidate.provenance?.source ?? "").toLowerCase() === "manual" || REVIEWED_SOURCE_STATUSES.has(status);
   });
-  return (reviewed ?? clean[0] ?? candidates[0]).value;
+  return (reviewed ?? clean[0])?.value ?? null;
 }
 
 function isBadSource(provenance?: ProvenanceLike): boolean {
   if (!provenance) return false;
   const status = String(provenance.status ?? "").toLowerCase();
   const conflictCount = Array.isArray(provenance.conflict) ? provenance.conflict.length : 0;
-  return conflictCount > 1 || BAD_SOURCE_STATUSES.has(status);
+  return conflictCount > 0 || BAD_SOURCE_STATUSES.has(status);
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 
+type RequestOptions = { timeoutMs?: number; signal?: AbortSignal };
+
 export const api = {
-  get: <T>(path: string, opts?: { revalidate?: number | false; timeoutMs?: number }) =>
-    request<T>(path, { method: "GET" }, opts?.revalidate ?? 0, opts?.timeoutMs),
-  post: <T>(path: string, body?: unknown) =>
-    request<T>(path, { method: "POST", body: body ? JSON.stringify(body) : undefined }),
+  get: <T>(path: string, opts?: RequestOptions & { revalidate?: number | false }) =>
+    request<T>(path, { method: "GET", signal: opts?.signal }, opts?.revalidate ?? 0, opts?.timeoutMs),
+  post: <T>(path: string, body?: unknown, opts?: RequestOptions) =>
+    request<T>(path, { method: "POST", body: body ? JSON.stringify(body) : undefined, signal: opts?.signal }, 0, opts?.timeoutMs),
   put: <T>(path: string, body?: unknown) =>
     request<T>(path, { method: "PUT", body: body ? JSON.stringify(body) : undefined }),
   delete: <T>(path: string) => request<T>(path, { method: "DELETE" }),
