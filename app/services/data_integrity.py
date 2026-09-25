@@ -64,6 +64,7 @@ META_KEYS = {
     "_fact_context",
     "_analysis_context",
     "_analysis_resolution",
+    "_verified_document_set",
     "validation_flags",
 }
 
@@ -384,73 +385,9 @@ def conflicts_to_flags(conflicts: dict[str, list[dict[str, Any]]]) -> list[dict[
     return flags
 
 
-def auto_resolve_conflicts(
-    conflicts: dict[str, list[dict[str, Any]]],
-    merged: dict[str, Any],
-    doc_upload_dates: dict[int, Any],
-) -> int:
-    # Upload order is not document version order. Preserve conflicting evidence.
+def auto_resolve_conflicts(conflicts, merged, doc_upload_dates) -> int:
+    """Upload order cannot establish which source statement is authoritative."""
     return 0
-
-    """Auto-resolve conflicts by preferring the newest document's value.
-
-    For each conflicting field:
-      1. Sort the conflicting entries by the document's upload date.
-      2. Pick the value from the most recent document.
-      3. Patch `merged` with that value.
-      4. Mark the winning entry with `auto_resolved=True` so
-         `conflicts_to_flags` emits a green info flag instead of a
-         red action-required one.
-      5. Update provenance to reflect the winning document.
-
-    Returns the number of conflicts that were auto-resolved.
-    """
-    resolved = 0
-    prov = dict(merged.get("_provenance") or {})
-
-    for path, entries in conflicts.items():
-        if len(entries) < 2:
-            continue
-
-        # Sort by upload_date descending — newest first.
-        sorted_entries = sorted(
-            entries,
-            key=lambda e: doc_upload_dates.get(e.get("doc_id", 0), 0) or 0,
-            reverse=True,
-        )
-
-        winner = sorted_entries[0]
-        winner_value = winner["value"]
-
-        # Apply the winning value to the merged metrics.
-        parts = path.split(".", 1)
-        if len(parts) == 2:
-            section, field = parts
-            if section in merged and isinstance(merged[section], dict):
-                merged[section][field] = winner_value
-
-        # Mark the winner so conflicts_to_flags knows it's resolved.
-        winner["auto_resolved"] = True
-
-        # Move resolved conflict data to `conflict_history` instead of
-        # `conflict`. All existing UI code checks `conflict` to show
-        # red badges / Resolve buttons / conflict counters — keeping
-        # the data there defeated the auto-resolve because the UI
-        # didn't know it was resolved. `conflict_history` preserves
-        # the audit trail without triggering the conflict UI.
-        p = dict(prov.get(path) or {})
-        p["source_doc_id"] = winner.get("doc_id")
-        p["source_doc_name"] = winner.get("doc_name")
-        p.pop("conflict", None)  # clear the active conflict
-        p["conflict_history"] = entries  # audit trail
-        p["conflict_resolution"] = "auto_newer_doc"
-        prov[path] = p
-
-        resolved += 1
-
-    merged["_provenance"] = prov
-    return resolved
-
 
 # ----------------------- verification persistence ----------------------- #
 
@@ -550,6 +487,10 @@ def stamp_verification(
         if status in v_summary["totals"]:
             v_summary["totals"][status] += 1
     metrics["_verification"] = v_summary
+    if documents is not None:
+        from app.services.analysis_store import document_manifest
+        from app.services.analysis import digest
+        metrics["_verified_document_set"] = digest(document_manifest(documents))
     if challenged_paths:
         _invalidate_review_resolutions(metrics, challenged_paths)
     return metrics

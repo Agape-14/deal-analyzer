@@ -60,6 +60,23 @@ class Deal(Base):
     investments = relationship("Investment", back_populates="deal", cascade="all, delete-orphan")
     ai_usage_events = relationship("AIUsageEvent", back_populates="deal", cascade="all, delete-orphan")
     analysis_history = relationship("AnalysisSnapshot", back_populates="deal", cascade="all, delete-orphan")
+    review_job = relationship("ReviewJob", back_populates="deal", cascade="all, delete-orphan", uselist=False, lazy="selectin")
+
+
+class ReviewJob(Base):
+    __tablename__ = "review_jobs"
+    deal_id = Column(Integer, ForeignKey("deals.id"), primary_key=True)
+    request_seq = Column(Integer, nullable=False, default=1)
+    mode = Column(String(20), nullable=False, default="review")
+    status = Column(String(20), nullable=False, default="queued", index=True)
+    attempts = Column(Integer, nullable=False, default=0)
+    auto_correct = Column(Integer, nullable=False, default=1)
+    lease_token = Column(String(64), nullable=True)
+    lease_until = Column(DateTime, nullable=True)
+    next_attempt_at = Column(DateTime, nullable=False)
+    updated_at = Column(DateTime, nullable=False)
+    error = Column(Text, nullable=True)
+    deal = relationship("Deal", back_populates="review_job")
 
 
 class AnalysisSnapshot(Base):

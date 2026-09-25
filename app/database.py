@@ -119,7 +119,7 @@ def _apply_schema_patches(sync_conn) -> None:
     insp = inspect(sync_conn)
     for table in Base.metadata.sorted_tables:
         if not insp.has_table(table.name):
-            if table.name in {"ai_usage_events", "analysis_snapshots"}:
+            if table.name in {"ai_usage_events", "analysis_snapshots", "review_jobs"}:
                 table.create(sync_conn, checkfirst=True)
             continue
         existing = {c["name"] for c in insp.get_columns(table.name)}

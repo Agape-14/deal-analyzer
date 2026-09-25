@@ -91,12 +91,16 @@ class CompareRequest(BaseModel):
     deal_ids: list[int] = Field(..., min_length=1, max_length=8)
 
 
-def _deal_to_dict(deal: Deal, developer_name: str = None) -> dict:
+def _deal_to_dict(deal: Deal, developer_name: str = None, *, accepted_only=False) -> dict:
     metrics = dict(deal.metrics or {})
     analysis = analysis_for_deal(deal)
+    if accepted_only:
+        metrics = dict(analysis["accepted_metrics"])
     scores = effective_scores(deal)
     return_summary = analysis["returns"]
     metrics["_canonical_returns"] = return_summary
+    from app.services.review_jobs import public_pipeline
+    metrics["_pipeline"] = public_pipeline(deal)
     deal_structure = metrics.get("deal_structure", {}) or {}
 
     return {
@@ -544,7 +548,7 @@ async def compare_deals(data: CompareRequest, db: AsyncSession = Depends(get_db)
 
     comparison = []
     for deal in deals:
-        comparison.append(_deal_to_dict(deal, deal.developer.name if deal.developer else ""))
+        comparison.append(_deal_to_dict(deal, deal.developer.name if deal.developer else "", accepted_only=True))
 
     return {"deals": comparison}
 
@@ -587,62 +591,62 @@ async def export_comparison(data: CompareRequest, db: AsyncSession = Depends(get
     # Define metric rows by section
     sections = [
         ("SCORES", [
-            ("Overall Score", lambda d: (d.scores or {}).get("overall")),
-            ("Returns Score", lambda d: ((d.scores or {}).get("returns") or {}).get("score")),
-            ("Market Score", lambda d: ((d.scores or {}).get("market") or {}).get("score")),
-            ("Structure Score", lambda d: ((d.scores or {}).get("structure") or {}).get("score")),
-            ("Risk Score", lambda d: ((d.scores or {}).get("risk") or {}).get("score")),
-            ("Financials Score", lambda d: ((d.scores or {}).get("financials") or {}).get("score")),
+            ("Overall Score", lambda d: effective_scores(d).get("overall")),
+            ("Returns Score", lambda d: (effective_scores(d).get("returns") or {}).get("score")),
+            ("Market Score", lambda d: (effective_scores(d).get("market") or {}).get("score")),
+            ("Structure Score", lambda d: (effective_scores(d).get("structure") or {}).get("score")),
+            ("Risk Score", lambda d: (effective_scores(d).get("risk") or {}).get("score")),
+            ("Financials Score", lambda d: (effective_scores(d).get("financials") or {}).get("score")),
         ]),
         ("DEAL STRUCTURE", [
-            ("Investment Class", lambda d: ((d.metrics or {}).get("deal_structure") or {}).get("investment_class")),
-            ("Minimum Investment", lambda d: ((d.metrics or {}).get("deal_structure") or {}).get("minimum_investment")),
-            ("Total Project Cost", lambda d: ((d.metrics or {}).get("deal_structure") or {}).get("total_project_cost")),
-            ("Total Equity", lambda d: ((d.metrics or {}).get("deal_structure") or {}).get("total_equity_required")),
-            ("Debt Amount", lambda d: ((d.metrics or {}).get("deal_structure") or {}).get("debt_amount")),
-            ("LTV", lambda d: ((d.metrics or {}).get("deal_structure") or {}).get("ltv")),
-            ("Interest Rate", lambda d: ((d.metrics or {}).get("deal_structure") or {}).get("interest_rate")),
-            ("Hold Period (yrs)", lambda d: ((d.metrics or {}).get("deal_structure") or {}).get("hold_period_years")),
-            ("Preferred Return", lambda d: ((d.metrics or {}).get("deal_structure") or {}).get("preferred_return")),
-            ("GP Co-Invest", lambda d: ((d.metrics or {}).get("deal_structure") or {}).get("gp_coinvest")),
-            ("Asset Mgmt Fee", lambda d: ((d.metrics or {}).get("deal_structure") or {}).get("fees_asset_mgmt")),
+            ("Investment Class", lambda d: (analysis_for_deal(d)["accepted_metrics"].get("deal_structure") or {}).get("investment_class")),
+            ("Minimum Investment", lambda d: (analysis_for_deal(d)["accepted_metrics"].get("deal_structure") or {}).get("minimum_investment")),
+            ("Total Project Cost", lambda d: (analysis_for_deal(d)["accepted_metrics"].get("deal_structure") or {}).get("total_project_cost")),
+            ("Total Equity", lambda d: (analysis_for_deal(d)["accepted_metrics"].get("deal_structure") or {}).get("total_equity_required")),
+            ("Debt Amount", lambda d: (analysis_for_deal(d)["accepted_metrics"].get("deal_structure") or {}).get("debt_amount")),
+            ("LTV", lambda d: (analysis_for_deal(d)["accepted_metrics"].get("deal_structure") or {}).get("ltv")),
+            ("Interest Rate", lambda d: (analysis_for_deal(d)["accepted_metrics"].get("deal_structure") or {}).get("interest_rate")),
+            ("Hold Period (yrs)", lambda d: (analysis_for_deal(d)["accepted_metrics"].get("deal_structure") or {}).get("hold_period_years")),
+            ("Preferred Return", lambda d: (analysis_for_deal(d)["accepted_metrics"].get("deal_structure") or {}).get("preferred_return")),
+            ("GP Co-Invest", lambda d: (analysis_for_deal(d)["accepted_metrics"].get("deal_structure") or {}).get("gp_coinvest")),
+            ("Asset Mgmt Fee", lambda d: (analysis_for_deal(d)["accepted_metrics"].get("deal_structure") or {}).get("fees_asset_mgmt")),
         ]),
         ("TARGET RETURNS", [
             ("Target IRR", lambda d: analysis_for_deal(d)["returns"].get("target_irr")),
             ("Equity Multiple", lambda d: analysis_for_deal(d)["returns"].get("target_equity_multiple")),
             ("Cash-on-Cash", lambda d: analysis_for_deal(d)["returns"].get("cash_on_cash")),
-            ("Avg Annual Return", lambda d: ((d.metrics or {}).get("target_returns") or {}).get("target_avg_annual_return")),
-            ("Projected Profit", lambda d: ((d.metrics or {}).get("target_returns") or {}).get("projected_profit")),
+            ("Avg Annual Return", lambda d: (analysis_for_deal(d)["accepted_metrics"].get("target_returns") or {}).get("target_avg_annual_return")),
+            ("Projected Profit", lambda d: (analysis_for_deal(d)["accepted_metrics"].get("target_returns") or {}).get("projected_profit")),
         ]),
         ("PROJECT DETAILS", [
-            ("Unit Count", lambda d: ((d.metrics or {}).get("project_details") or {}).get("unit_count")),
-            ("Total SqFt", lambda d: ((d.metrics or {}).get("project_details") or {}).get("total_sqft")),
-            ("Price/Unit", lambda d: ((d.metrics or {}).get("project_details") or {}).get("price_per_unit")),
-            ("Price/SqFt", lambda d: ((d.metrics or {}).get("project_details") or {}).get("price_per_sqft")),
-            ("Construction Type", lambda d: ((d.metrics or {}).get("project_details") or {}).get("construction_type")),
-            ("Entitlement Status", lambda d: ((d.metrics or {}).get("project_details") or {}).get("entitlement_status")),
+            ("Unit Count", lambda d: (analysis_for_deal(d)["accepted_metrics"].get("project_details") or {}).get("unit_count")),
+            ("Total SqFt", lambda d: (analysis_for_deal(d)["accepted_metrics"].get("project_details") or {}).get("total_sqft")),
+            ("Price/Unit", lambda d: (analysis_for_deal(d)["accepted_metrics"].get("project_details") or {}).get("price_per_unit")),
+            ("Price/SqFt", lambda d: (analysis_for_deal(d)["accepted_metrics"].get("project_details") or {}).get("price_per_sqft")),
+            ("Construction Type", lambda d: (analysis_for_deal(d)["accepted_metrics"].get("project_details") or {}).get("construction_type")),
+            ("Entitlement Status", lambda d: (analysis_for_deal(d)["accepted_metrics"].get("project_details") or {}).get("entitlement_status")),
         ]),
         ("CONSTRUCTION COSTS", [
-            ("Total Project Cost", lambda d: ((d.metrics or {}).get("construction_costs") or {}).get("total_project_cost")),
-            ("Total Cost/Unit", lambda d: ((d.metrics or {}).get("construction_costs") or {}).get("total_project_cost_per_unit")),
-            ("Hard Costs Total", lambda d: ((d.metrics or {}).get("construction_costs") or {}).get("hard_costs_total")),
-            ("Hard Costs/Unit", lambda d: ((d.metrics or {}).get("construction_costs") or {}).get("hard_costs_per_unit")),
-            ("Hard Costs/SqFt", lambda d: ((d.metrics or {}).get("construction_costs") or {}).get("hard_costs_per_sqft")),
-            ("Land Cost", lambda d: ((d.metrics or {}).get("construction_costs") or {}).get("land_cost_total")),
-            ("Land Cost/Unit", lambda d: ((d.metrics or {}).get("construction_costs") or {}).get("land_cost_per_unit")),
-            ("Soft Costs", lambda d: ((d.metrics or {}).get("construction_costs") or {}).get("soft_costs_total")),
-            ("Contingency", lambda d: ((d.metrics or {}).get("construction_costs") or {}).get("contingency_total")),
-            ("Contingency %", lambda d: ((d.metrics or {}).get("construction_costs") or {}).get("contingency_pct")),
-            ("Financing Costs", lambda d: ((d.metrics or {}).get("construction_costs") or {}).get("financing_costs_total")),
-            ("Developer Fee", lambda d: ((d.metrics or {}).get("construction_costs") or {}).get("developer_fee_total")),
+            ("Total Project Cost", lambda d: (analysis_for_deal(d)["accepted_metrics"].get("construction_costs") or {}).get("total_project_cost")),
+            ("Total Cost/Unit", lambda d: (analysis_for_deal(d)["accepted_metrics"].get("construction_costs") or {}).get("total_project_cost_per_unit")),
+            ("Hard Costs Total", lambda d: (analysis_for_deal(d)["accepted_metrics"].get("construction_costs") or {}).get("hard_costs_total")),
+            ("Hard Costs/Unit", lambda d: (analysis_for_deal(d)["accepted_metrics"].get("construction_costs") or {}).get("hard_costs_per_unit")),
+            ("Hard Costs/SqFt", lambda d: (analysis_for_deal(d)["accepted_metrics"].get("construction_costs") or {}).get("hard_costs_per_sqft")),
+            ("Land Cost", lambda d: (analysis_for_deal(d)["accepted_metrics"].get("construction_costs") or {}).get("land_cost_total")),
+            ("Land Cost/Unit", lambda d: (analysis_for_deal(d)["accepted_metrics"].get("construction_costs") or {}).get("land_cost_per_unit")),
+            ("Soft Costs", lambda d: (analysis_for_deal(d)["accepted_metrics"].get("construction_costs") or {}).get("soft_costs_total")),
+            ("Contingency", lambda d: (analysis_for_deal(d)["accepted_metrics"].get("construction_costs") or {}).get("contingency_total")),
+            ("Contingency %", lambda d: (analysis_for_deal(d)["accepted_metrics"].get("construction_costs") or {}).get("contingency_pct")),
+            ("Financing Costs", lambda d: (analysis_for_deal(d)["accepted_metrics"].get("construction_costs") or {}).get("financing_costs_total")),
+            ("Developer Fee", lambda d: (analysis_for_deal(d)["accepted_metrics"].get("construction_costs") or {}).get("developer_fee_total")),
         ]),
         ("FINANCIAL PROJECTIONS", [
-            ("Stabilized NOI", lambda d: ((d.metrics or {}).get("financial_projections") or {}).get("stabilized_noi")),
-            ("Entry Cap Rate", lambda d: ((d.metrics or {}).get("financial_projections") or {}).get("entry_cap_rate")),
-            ("Exit Cap Rate", lambda d: ((d.metrics or {}).get("financial_projections") or {}).get("exit_cap_rate")),
-            ("Avg Rent/Unit", lambda d: ((d.metrics or {}).get("financial_projections") or {}).get("avg_rent_per_unit")),
-            ("Rent Growth", lambda d: ((d.metrics or {}).get("financial_projections") or {}).get("rent_growth_assumption")),
-            ("Occupancy", lambda d: ((d.metrics or {}).get("financial_projections") or {}).get("occupancy_assumption")),
+            ("Stabilized NOI", lambda d: (analysis_for_deal(d)["accepted_metrics"].get("financial_projections") or {}).get("stabilized_noi")),
+            ("Entry Cap Rate", lambda d: (analysis_for_deal(d)["accepted_metrics"].get("financial_projections") or {}).get("entry_cap_rate")),
+            ("Exit Cap Rate", lambda d: (analysis_for_deal(d)["accepted_metrics"].get("financial_projections") or {}).get("exit_cap_rate")),
+            ("Avg Rent/Unit", lambda d: (analysis_for_deal(d)["accepted_metrics"].get("financial_projections") or {}).get("avg_rent_per_unit")),
+            ("Rent Growth", lambda d: (analysis_for_deal(d)["accepted_metrics"].get("financial_projections") or {}).get("rent_growth_assumption")),
+            ("Occupancy", lambda d: (analysis_for_deal(d)["accepted_metrics"].get("financial_projections") or {}).get("occupancy_assumption")),
         ]),
     ]
 

@@ -196,6 +196,11 @@ async def create_investment(data: InvestmentCreate, db: AsyncSession = Depends(g
             ds = m.get('deal_structure', {}) or {}
             from app.services.canonical_metrics import canonical_return_summary
             returns = analysis["returns"]
+            selected_class = analysis.get("investor_class", "unspecified")
+            if data.investment_class and data.investment_class != selected_class:
+                returns = {}  # Another class's returns cannot become this position's defaults.
+            elif not data.investment_class and selected_class != "unspecified":
+                data.investment_class = selected_class
             if data.preferred_return is None and ds.get('preferred_return') is not None:
                 data.preferred_return = ds['preferred_return']
             if data.projected_irr is None:

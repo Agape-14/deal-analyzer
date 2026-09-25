@@ -142,7 +142,12 @@ async def upload_document(
             href=f"/deals/{deal_id}?tab=documents",
             payload={"deal_id": deal_id, "doc_id": doc.id, "queued": True},
         )
-        background_tasks.add_task(_extract_document_background, doc.id, file_path, ext)
+        if AUTO_REVIEW_AFTER_UPLOAD:
+            from app.services.review_jobs import enqueue_review
+            await enqueue_review(db, deal_id)
+            await db.commit()
+        else:
+            background_tasks.add_task(_extract_document_background, doc.id, file_path, ext)
 
         return {
             "id": doc.id,
@@ -442,7 +447,7 @@ async def _mark_extraction_failed(db: AsyncSession, doc_id: int, ext: str, exc: 
         log.exception("Could not persist background extraction failure for doc_id=%s", doc_id)
 
 
-async def _extract_document_background(doc_id: int, file_path: str, ext: str) -> None:
+async def _extract_document_background(doc_id: int, file_path: str, ext: str, *, handoff=True) -> None:
     async with async_session() as db:
         result = await db.execute(select(DealDocument).where(DealDocument.id == doc_id))
         doc = result.scalar_one_or_none()
@@ -461,7 +466,7 @@ async def _extract_document_background(doc_id: int, file_path: str, ext: str) ->
             }
             await _commit_with_retry(db, "marking document extracting")
 
-            extraction, quality, extracted_text, page_count = _extract_uploaded_file(file_path, ext)
+            extraction, quality, extracted_text, page_count = await asyncio.to_thread(_extract_uploaded_file, file_path, ext)
             result = await db.execute(select(DealDocument).where(DealDocument.id == doc_id))
             doc = result.scalar_one_or_none()
             if not doc:
@@ -486,13 +491,13 @@ async def _extract_document_background(doc_id: int, file_path: str, ext: str) ->
             else:
                 # Progress is visible on the document. Notify once for upload,
                 # then for a completed review or failure, not every sub-step.
-                if AUTO_REVIEW_AFTER_UPLOAD:
+                if AUTO_REVIEW_AFTER_UPLOAD and handoff:
                     asyncio.create_task(_auto_review_after_upload(doc.deal_id, doc.id))
         except Exception as exc:
             await db.rollback()
             log.exception("Background extraction failed for doc_id=%s", doc_id)
             await _mark_extraction_failed(db, doc_id, ext, exc)
-            if AUTO_REVIEW_AFTER_UPLOAD:
+            if AUTO_REVIEW_AFTER_UPLOAD and handoff:
                 try:
                     asyncio.create_task(_auto_review_after_upload(doc.deal_id, doc.id))
                 except Exception:
@@ -506,57 +511,8 @@ def _document_extraction_pending(doc: DealDocument) -> bool:
 
 
 async def _auto_review_after_upload(deal_id: int, source_doc_id: int) -> None:
-    """Debounced handoff from text extraction to full document review.
-
-    Upload extraction is per-file. Full review should start only after the
-    current upload burst is done so every uploaded document is included in the
-    same extraction, verification, math-check, and scoring run.
-    """
-    try:
-        await asyncio.sleep(max(0, AUTO_REVIEW_DELAY_SECONDS))
-        async with async_session() as db:
-            from app.routers import deal_pipeline
-
-            result = await db.execute(
-                select(Deal).options(selectinload(Deal.documents)).where(Deal.id == deal_id)
-            )
-            deal = result.scalar_one_or_none()
-            if not deal:
-                return
-
-            if any(_document_extraction_pending(doc) for doc in deal.documents or []):
-                log.info("Auto review delayed: deal_id=%s still has documents extracting", deal_id)
-                return
-
-            metrics = deal_pipeline._ensure_metrics_dict(deal.metrics, "Stored deal metrics")
-            current = metrics.get("_pipeline") if isinstance(metrics.get("_pipeline"), dict) else {}
-            if str(current.get("status") or "").lower() == "running":
-                log.info("Auto review skipped: deal_id=%s already has document review running", deal_id)
-                return
-
-            usable_docs = deal_pipeline._usable_text_docs(deal)
-            usable_pdfs = deal_pipeline._pdf_docs(deal)
-            if not usable_docs and not usable_pdfs:
-                log.info("Auto review skipped: deal_id=%s has no readable text or PDF file", deal_id)
-                return
-
-            deal.metrics = deal_pipeline._set_pipeline_status(
-                metrics,
-                deal_pipeline._pipeline_status(
-                    "running",
-                    "extract",
-                    "Document review started automatically after upload extraction finished.",
-                    progress_pct=10,
-                    estimated_total_seconds=deal_pipeline._estimate_review_seconds(deal),
-                ),
-            )
-            await db.commit()
-
-        asyncio.create_task(deal_pipeline._run_document_review_background(deal_id))
-        log.info(
-            "Auto document review started for deal_id=%s after doc_id=%s extracted",
-            deal_id,
-            source_doc_id,
-        )
-    except Exception:
-        log.exception("Auto document review handoff failed for deal_id=%s doc_id=%s", deal_id, source_doc_id)
+    """Persist the handoff; queue coalescing replaces an in-memory debounce."""
+    from app.services.review_jobs import enqueue_review
+    async with async_session() as db:
+        await enqueue_review(db, deal_id)
+        await db.commit()

@@ -31,6 +31,7 @@ from app.services.deal_validator import validate_deal_metrics
 from app.services.deal_verifier import verify_with_corrections
 from app.services.document_context import documents_fingerprint
 from app.services.math_checker import run_math_checks
+from app.services.review_jobs import enqueue_review, public_pipeline
 
 router = APIRouter()
 log = logging.getLogger("kenyon.deal_pipeline")
@@ -262,7 +263,7 @@ async def deal_quality(deal_id: int, db: AsyncSession = Depends(get_db)):
     return {
         "summary": quality_summary(metrics),
         "stale_flags": staleness_flags(metrics, deal.documents or []),
-        "pipeline": metrics.get("_pipeline"),
+        "pipeline": public_pipeline(deal),
     }
 
 
@@ -296,8 +297,8 @@ async def extract_deal_metrics(deal_id: int, db: AsyncSession = Depends(get_db))
             estimated_total_seconds=_estimate_review_seconds(deal),
         ),
     )
+    await enqueue_review(db, deal_id, mode="extract")
     await db.commit()
-    asyncio.ensure_future(_run_extract_background(deal_id))
     return {"message": "Document review started", "status": "started", "deal_id": deal_id}
 
 
@@ -331,8 +332,8 @@ async def review_deal_documents(deal_id: int, db: AsyncSession = Depends(get_db)
             estimated_total_seconds=_estimate_review_seconds(deal),
         ),
     )
+    await enqueue_review(db, deal_id)
     await db.commit()
-    asyncio.ensure_future(_run_document_review_background(deal_id))
     return {"message": "Document review started", "status": "started", "deal_id": deal_id}
 
 
@@ -562,8 +563,8 @@ async def verify_deal_endpoint(deal_id: int, auto_correct: bool = True, db: Asyn
         deal.metrics,
         _pipeline_status("running", "verify", "Source verification started. Checking extracted values against source documents."),
     )
+    await enqueue_review(db, deal_id, mode="verify", auto_correct=auto_correct)
     await db.commit()
-    asyncio.ensure_future(_run_verify_background(deal_id, auto_correct))
     return {"message": "Source verification started", "status": "started", "deal_id": deal_id}
 
 

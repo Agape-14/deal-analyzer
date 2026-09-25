@@ -9,7 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
 from app.models import AnalysisSnapshot, Deal
-from app.services.analysis import REGISTRY, analysis_for_deal, number
+from app.services.analysis import REGISTRY, analysis_for_deal, valid_number
 from app.services.data_integrity import mark_manual_edit, now_iso
 from app.routers.field_edits import _append_field_history, _refresh_integrity
 
@@ -72,7 +72,7 @@ async def resolve(deal_id: int, data: Resolution, db: AsyncSession = Depends(get
             raise HTTPException(422, "This field has no defined metric and unit.")
         value = edit.value
         if spec[0] != "text":
-            value = number(value, spec[0])
+            value = valid_number(edit.path, value, spec[0])
             if value is None:
                 raise HTTPException(422, f"{spec[1]} needs a finite {spec[0]} value.")
         elif not isinstance(value, str) or not value.strip():

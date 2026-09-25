@@ -22,6 +22,14 @@ export function NeedsReviewPanel({ deals }: { deals: DealSummary[] }) {
 
   const issues = deals
     .map((deal): ReviewIssue | null => {
+      if (deal.analysis) {
+        const questions = deal.analysis.questions;
+        if (questions.length === 0) return null;
+        return { deal, gate: deal.scores?.data_quality ?? { stage: "questions", can_score: false, confidence_score: 0 },
+          reason: `${questions.length} questions: ${questions.map(q => q.area.toLowerCase()).join(", ")}`,
+          nextAction: "Add the missing evidence or resolve the material questions.",
+          severity: questions.some(q => q.issues.some(i => i.state === "disputed")) ? "critical" : "warning" };
+      }
       const gate = getQualityGate(deal);
       if (!gate || gate.stage === "verified" || gate.can_score) return null;
       return {
@@ -76,7 +84,7 @@ export function NeedsReviewPanel({ deals }: { deals: DealSummary[] }) {
           {issues.slice(0, 6).map(({ deal, gate, reason, nextAction, severity }) => (
             <Link
               key={deal.id}
-              href={`/deals/${deal.id}`}
+              href={`/deals/${deal.id}?tab=questions`}
               className="group flex min-h-[104px] flex-col justify-between rounded-lg border border-border/70 bg-background/35 p-3.5 transition-colors hover:border-primary/30 hover:bg-muted/20"
             >
               <div className="flex items-start justify-between gap-3">
@@ -90,7 +98,7 @@ export function NeedsReviewPanel({ deals }: { deals: DealSummary[] }) {
               </div>
               <div className="mt-3 space-y-2">
                 <div className="flex min-h-6 flex-wrap items-center gap-2">
-                  <ScoreQualityBadge gate={gate} size="sm" />
+                  {!deal.analysis && <ScoreQualityBadge gate={gate} size="sm" />}
                   <span
                     className={cn(
                       "inline-flex min-w-0 items-center gap-1 text-xs leading-relaxed",

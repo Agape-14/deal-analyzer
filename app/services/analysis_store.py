@@ -12,6 +12,8 @@ from app.services.analysis import build_analysis
 
 
 def collect_changes(session):
+    from app.services.review_jobs import assert_lease
+    assert_lease(session)
     pending = session.info.setdefault("analysis_pending", {})
     doc_deals = set()
     for obj in list(session.new) + list(session.dirty) + list(session.deleted):

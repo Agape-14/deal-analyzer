@@ -94,7 +94,7 @@ def input_fingerprint(metrics, documents, property_type):
     # Progress, counters and heuristic confidence do not create new facts.
     metrics = metrics if isinstance(metrics, dict) else {}
     keys = {k: v for k, v in metrics.items() if not k.startswith("_") and k != "validation_flags"}
-    for key in ("_provenance", "_locks", "_fact_context", "_analysis_context"):
+    for key in ("_provenance", "_locks", "_fact_context", "_analysis_context", "_verified_document_set"):
         keys[key] = metrics.get(key)
     if isinstance(keys.get("_provenance"), dict):
         keys["_provenance"] = {p: {k: v for k, v in meta.items() if k not in {"confidence", "extracted_at", "verified_at"}} for p, meta in keys["_provenance"].items() if isinstance(meta, dict)}
@@ -142,6 +142,21 @@ def number(value, unit):
         return parsed if math.isfinite(parsed) else None
     except (TypeError, ValueError):
         return None
+
+
+def valid_number(path, value, unit):
+    parsed = number(value, unit)
+    if parsed is None:
+        return None
+    if unit in {"currency", "count", "multiple", "years", "months"} and parsed < 0:
+        return None
+    if unit == "count" and not parsed.is_integer():
+        return None
+    if unit == "percent":
+        lower, upper = (-100, 1000) if path.endswith("irr") or path.endswith("rent_growth_assumption") else (0, 100)
+        if not lower <= parsed <= upper:
+            return None
+    return parsed
 
 
 def identity(path, unit, context):
@@ -204,7 +219,7 @@ def build_analysis(metrics, documents=None, property_type="multifamily"):
         unit, label = spec
         prov = provenance.get(path) if isinstance(provenance.get(path), dict) else {}
         context = contexts.get(path) if isinstance(contexts.get(path), dict) else {}
-        value = values[0] if unit == "text" and isinstance(values[0], str) else number(values[0], unit)
+        value = values[0] if unit == "text" and isinstance(values[0], str) else valid_number(path, values[0], unit)
         fact = Fact(path=path, label=label, identity=identity(path, unit, context), value=value,
                     state="reported", locked=bool(prov.get("locked") or (metrics.get("_locks") or {}).get(path)),
                     dependencies=[p for p in prov.get("dependencies", []) if isinstance(p, str)])
@@ -218,7 +233,9 @@ def build_analysis(metrics, documents=None, property_type="multifamily"):
         elif status in BAD:
             fact.state, fact.reason = "disputed", str(prov.get("verification_note") or "The source check remains unresolved.")
         elif status == "manual":
-            fact.state, fact.reason = "manual", "Resolved by an analyst; this is not an independent source check."
+            fact.state, fact.reason = "manual", "Analyst decision: " + str(prov.get("verification_note") or "Manually resolved; not an independent source check.")
+        elif metrics.get("_verified_document_set") and metrics["_verified_document_set"] != digest(documents):
+            fact.state, fact.reason = "reported", "The document package changed and is awaiting another source check."
         elif status == "confirmed" and not reason:
             fact.state = "checked"
         else:
@@ -334,5 +351,8 @@ def effective_scores(deal):
     if not can_score:
         scores["provisional_overall"] = scores.get("overall") or scores.get("provisional_overall")
         scores["overall"] = None
+        for key in ("returns", "market", "structure", "risk", "financials", "underwriting", "sponsor"):
+            if isinstance(scores.get(key), dict):
+                scores[key] = {**scores[key], "score": None}
     scores["data_quality"] = gate
     return scores

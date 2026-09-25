@@ -41,6 +41,7 @@ from app.services.json_parser_guard import install_deal_verifier_json_guard
 from app.services.pipeline_runner import start_pipeline_runner, stop_pipeline_runner
 from app.routers import analysis as analysis_router
 from sqlalchemy.orm.exc import StaleDataError
+from app.services.review_jobs import start_review_worker, stop_review_worker
 
 
 # ----------------------------- logging setup ----------------------------- #
@@ -80,9 +81,11 @@ async def lifespan(app: FastAPI):
     else:
         log.warning("[auth] %s", auth.get("message"))
     pipeline_task = start_pipeline_runner()
+    review_task = start_review_worker()
     try:
         yield
     finally:
+        await stop_review_worker(review_task)
         await stop_pipeline_runner(pipeline_task)
 
 
