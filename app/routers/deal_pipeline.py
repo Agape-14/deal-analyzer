@@ -314,10 +314,8 @@ async def review_deal_documents(deal_id: int, db: AsyncSession = Depends(get_db)
     if not deal.documents:
         raise HTTPException(status_code=400, detail="No documents uploaded yet")
 
-    usable_docs = _usable_text_docs(deal)
-    usable_pdfs = _pdf_docs(deal)
-    if not usable_docs and not usable_pdfs:
-        raise HTTPException(status_code=400, detail="No extracted text or PDF files available")
+    # The durable worker reads pending/failed files before extracting metrics.
+    # A spreadsheet with a failed first read must be retryable from Documents.
 
     active_pipeline = _active_pipeline_status(deal.metrics)
     if active_pipeline:

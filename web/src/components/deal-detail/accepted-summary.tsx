@@ -8,6 +8,7 @@ import { fmtMoney, fmtPct, fmtMultiple } from "@/lib/utils";
 export function factValue(fact?: AnalysisFact, reported = false): string {
   if (!fact || fact.value == null || (!reported && !["checked", "calculated", "manual"].includes(fact.state))) return "Awaiting evidence";
   const v = fact.value;
+  if (Array.isArray(v)) return v.map(t => `${t.threshold}% hurdle: ${t.lp_split}% LP / ${t.gp_split}% GP`).join("; ");
   if (typeof v === "string") return v;
   if (fact.identity.unit === "currency") return fmtMoney(v);
   if (fact.identity.unit === "percent") return fmtPct(v);

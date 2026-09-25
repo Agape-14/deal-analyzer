@@ -281,8 +281,8 @@ async def test_legacy_preview_is_read_only_and_adoption_checks_revision(client):
     saved = await client.post(f"/api/deals/{deal_id}/analysis/adopt", json=payload)
     assert saved.status_code == 200, saved.text
     assert saved.json()["analysis"]["version"] == 1
-    actual = (await client.get(f"/api/deals/{deal_id}")).json()
-    assert actual["metrics"] == manual_metrics()
+    async with async_session() as db:
+        assert (await db.get(Deal, deal_id)).metrics == manual_metrics()
 
 
 @pytest.mark.asyncio
@@ -317,3 +317,30 @@ async def test_restore_creates_new_revision_preserves_history_and_rechecks_curre
     assert analysis["returns"]["cash_on_cash"] is None  # deleted evidence stays unavailable
     assert (await client.get(f"/api/deals/{deal_id}/analysis/{version}")).json() == previous
     assert (await client.post(f"/api/deals/{deal_id}/analysis/{version}/restore", json=request)).status_code == 409
+
+
+def test_empty_optional_scenario_does_not_change_strategy_and_unknown_labels_need_review():
+    metrics = manual_metrics()
+    metrics["target_returns"]["sale_scenario"] = {}
+    analysis = build_analysis(metrics)
+    assert analysis["primary_strategy"] == analysis["returns"]["primary_strategy"] == "hold"
+    metrics["target_returns"]["primary_strategy"] = "unrecognized strategy"
+    analysis = build_analysis(metrics)
+    assert analysis["primary_strategy"] == "unknown"
+    assert analysis["returns"]["cash_on_cash"] is None
+
+
+def test_explicit_source_supported_waterfall_terms_survive_the_accepted_projection():
+    from app.services.waterfall_calculator import waterfall_from_deal
+    metrics = manual_metrics()
+    metrics["deal_structure"].update(gp_equity_coinvest_pct=10, preferred_return=8, hold_period_years=5,
+        waterfall_hurdle_basis="simple_annual_return", preferred_return_allocation="pro_rata",
+        promote_tiers=[{"threshold": 8, "lp_split": 80, "gp_split": 20}])
+    metrics["target_returns"]["total_project_profit"] = 400000
+    metrics["_provenance"] = {path: {"status": "manual"} for path in flatten(metrics)}
+    analysis = build_analysis(metrics)
+    result = waterfall_from_deal(analysis["accepted_metrics"])
+    assert result["status"] == "illustrative"
+    assert result["totals"]["lp_total"] + result["totals"]["gp_total"] == 800000
+    metrics["deal_structure"]["promote_tiers"][0]["gp_split"] = 50
+    assert waterfall_from_deal(build_analysis(metrics)["accepted_metrics"])["status"] == "unavailable"

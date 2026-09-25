@@ -27,7 +27,7 @@ def present(value: Any) -> bool:
         return False
     if isinstance(value, str):
         return bool(value.strip())
-    return value != []
+    return value not in ([], {})
 
 
 def bad_source(provenance: Optional[Dict[str, Any]]) -> bool:
@@ -134,7 +134,7 @@ def primary_strategy(metrics: Dict[str, Any] | None) -> str:
         )
     )
 
-    if hold_is_stated and (sale_is_hypothetical or present(sale)):
+    if raw == "hold_with_sale_option" or (hold_is_stated and (sale_is_hypothetical or present(sale))):
         return "hold_with_sale_option"
     if raw in HOLD_STRATEGIES or hold_is_stated:
         return "hold"
@@ -142,8 +142,6 @@ def primary_strategy(metrics: Dict[str, Any] | None) -> str:
         return "sale"
     if sale_is_hypothetical and present(hold):
         return "hold_with_sale_option"
-    if raw:
-        return raw
     return "unknown"
 
 

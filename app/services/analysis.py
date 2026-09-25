@@ -24,7 +24,7 @@ BAD = {"wrong", "missing", "unverifiable", "stale", "math_failed"}
 class FactIdentity(BaseModel):
     model_config = ConfigDict(extra="forbid")
     metric: str
-    unit: Literal["currency", "percent", "multiple", "count", "years", "months", "text"]
+    unit: Literal["currency", "percent", "multiple", "count", "years", "months", "text", "waterfall_tiers"]
     scenario: str = "unspecified"
     investor_class: str = "unspecified"
     basis: str = "unspecified"
@@ -37,7 +37,7 @@ class Fact(BaseModel):
     path: str
     label: str
     identity: FactIdentity
-    value: float | str | None = None
+    value: float | str | list[dict[str, float]] | None = None
     state: Literal["reported", "checked", "calculated", "disputed", "missing", "manual", "unclassified"]
     reason: str = ""
     evidence: list[dict[str, Any]] = Field(default_factory=list)
@@ -61,6 +61,7 @@ _register("deal_structure", "percent", "ltv loan_to_cost interest_rate preferred
 _register("deal_structure", "years", "hold_period_years investment_term_years amortization_years")
 _register("deal_structure", "months", "loan_term_months construction_loan_term_months amortization_months")
 _register("deal_structure", "text", "business_plan investment_strategy exit_strategies promote_structure waterfall_hurdle_basis preferred_return_allocation")
+_register("deal_structure", "waterfall_tiers", "promote_tiers")
 _register("project_details", "count", "unit_count total_sqft")
 _register("project_details", "text", "unit_mix construction_type project_type")
 _register("financial_projections", "currency", "stabilized_noi annual_debt_service avg_rent_per_unit revenue_per_unit hard_costs soft_costs land_cost contingency purchase_price")
@@ -159,6 +160,23 @@ def valid_number(path, value, unit):
     return parsed
 
 
+def valid_tiers(value):
+    if not isinstance(value, list) or not 1 <= len(value) <= 20:
+        return None
+    result, previous = [], -1
+    for tier in value:
+        if not isinstance(tier, dict) or set(tier) != {"threshold", "lp_split", "gp_split"}:
+            return None
+        parsed = {key: number(tier[key], "percent") for key in tier}
+        if any(v is None or v < 0 or v > 100 for v in parsed.values()):
+            return None
+        if parsed["threshold"] < previous or abs(parsed["lp_split"] + parsed["gp_split"] - 100) > .01:
+            return None
+        previous = parsed["threshold"]
+        result.append(parsed)
+    return result
+
+
 def identity(path, unit, context):
     key = path.split(".")[-1]
     scenario = "hold" if ".hold_scenario." in path else "sale" if ".sale_scenario." in path else "unspecified"
@@ -220,7 +238,7 @@ def build_analysis(metrics, documents=None, property_type="multifamily"):
         unit, label = spec
         prov = provenance.get(path) if isinstance(provenance.get(path), dict) else {}
         context = contexts.get(path) if isinstance(contexts.get(path), dict) else {}
-        value = values[0] if unit == "text" and isinstance(values[0], str) else valid_number(path, values[0], unit)
+        value = (values[0] if isinstance(values[0], str) else None) if unit == "text" else valid_tiers(values[0]) if unit == "waterfall_tiers" else valid_number(path, values[0], unit)
         fact = Fact(path=path, label=label, identity=identity(path, unit, context), value=value,
                     state="reported", locked=bool(prov.get("locked") or (metrics.get("_locks") or {}).get(path)),
                     dependencies=[p for p in prov.get("dependencies", []) if isinstance(p, str)])

@@ -139,6 +139,14 @@ async def test_upload_and_queue_are_saved_together_without_browser_handoff(clien
         assert doc.extraction_quality["status"] == "queued"
         assert job.status == "queued"
         assert job.request_seq == 1
+        doc.extracted_text = "Error extracting text: temporary reader failure"
+        doc.extraction_quality = {"status": "error"}
+        job.status = "failed"
+        await db.commit()
+    retry = await client.post(f"/api/deals/{deal_id}/review")
+    assert retry.status_code == 200, retry.text
+    async with async_session() as db:
+        assert (await db.get(ReviewJob, deal_id)).status == "queued"
 
 
 async def test_queue_runs_real_pipeline_with_controlled_provider_replies(client, monkeypatch):

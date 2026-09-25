@@ -26,7 +26,7 @@ export interface DealSummary {
 export interface AnalysisFact {
   path: string;
   label: string;
-  value: number | string | null;
+  value: number | string | Array<{ threshold: number; lp_split: number; gp_split: number }> | null;
   state: "reported" | "checked" | "calculated" | "disputed" | "missing" | "manual" | "unclassified";
   reason: string;
   identity: { metric: string; unit: string; scenario: string; investor_class: string; basis: string; debt_phase: string; period: string; currency: string };

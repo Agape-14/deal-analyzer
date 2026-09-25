@@ -10,7 +10,7 @@ from sqlalchemy.orm.attributes import flag_modified
 
 from app.database import get_db
 from app.models import AnalysisSnapshot, Deal, DealDocument
-from app.services.analysis import REGISTRY, analysis_for_deal, build_analysis, valid_number
+from app.services.analysis import REGISTRY, analysis_for_deal, build_analysis, valid_number, valid_tiers
 from app.services.analysis_store import document_manifest
 from app.services.data_integrity import mark_manual_edit, now_iso
 from app.routers.field_edits import _append_field_history, _refresh_integrity
@@ -122,7 +122,11 @@ async def resolve(deal_id: int, data: Resolution, db: AsyncSession = Depends(get
         if not spec:
             raise HTTPException(422, "This field has no defined metric and unit.")
         value = edit.value
-        if spec[0] != "text":
+        if spec[0] == "waterfall_tiers":
+            value = valid_tiers(value)
+            if value is None:
+                raise HTTPException(422, "Tiers need ordered thresholds and LP/GP percentages totaling 100.")
+        elif spec[0] != "text":
             value = valid_number(edit.path, value, spec[0])
             if value is None:
                 raise HTTPException(422, f"{spec[1]} needs a finite {spec[0]} value.")

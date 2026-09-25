@@ -2,6 +2,8 @@
 
 Review date: 2026-09-25. Draft changes: https://github.com/Agape-14/deal-analyzer/pull/2
 
+The approved follow-on rebuild is now implemented in the same draft. See [implementation and release checks](REBUILD_IMPLEMENTATION_2026-09-25.md) for the delivered workflow, migrations, validation and remaining release requirements. The sequence below records the original plan.
+
 ## Recommendation
 
 Keep the Next.js/FastAPI application, authentication, document storage, portfolio ledger and working screens. Rebuild the facts and review engine in stages. Cosmetic simplification alone cannot resolve the current disagreements.

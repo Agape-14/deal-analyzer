@@ -64,6 +64,7 @@ META_KEYS = {
     "_fact_context",
     "_analysis_context",
     "_analysis_resolution",
+    "_analysis_restore",
     "_verified_document_set",
     "validation_flags",
 }
