@@ -15,12 +15,21 @@ export function DocumentVersionControls({ dealId, revision, document, documents 
   const [replacement, setReplacement] = React.useState(String(document.superseded_by_id ?? ""));
   const [reason, setReason] = React.useState("");
   const [saving, setSaving] = React.useState(false);
+  const [editingRevision, setEditingRevision] = React.useState(revision);
+  function toggle() {
+    if (!open) {
+      setRole(document.source_role ?? "active");
+      setReplacement(String(document.superseded_by_id ?? ""));
+      setReason(""); setEditingRevision(revision);
+    }
+    setOpen(!open);
+  }
   async function save() {
     setSaving(true);
     try {
       const response = await fetch(`/api/deals/${dealId}/documents/${document.id}/version`, {
         method: "PUT", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ expected_revision: revision, source_role: role,
+        body: JSON.stringify({ expected_revision: editingRevision, source_role: role,
           superseded_by_id: role === "superseded" ? Number(replacement) : null, reason }),
       });
       const body = await response.json();
@@ -35,9 +44,9 @@ export function DocumentVersionControls({ dealId, revision, document, documents 
     {document.same_name_different_content && <p className="text-warning">Same filename, different contents. Check which version applies.</p>}
     {document.source_role === "superseded" && <p className="text-muted-foreground">Replaced by document #{document.superseded_by_id}; original retained.</p>}
     {document.source_role === "alternative" && <p className="text-muted-foreground">Alternate scenario; excluded from primary review.</p>}
-    <button className="mt-1 text-primary underline" onClick={() => setOpen(!open)} aria-expanded={open}>Change document use</button>
+    <button className="mt-1 text-primary underline" onClick={toggle} aria-expanded={open}>Change document use</button>
     {open && <div className="mt-2 space-y-2 rounded-md border p-3">
-      <p>Keep supporting amendments active. Only mark a file replaced when the newer document replaces it in full.</p>
+      <p>This choice applies to identical copies too. Keep supporting amendments active. Only mark a file replaced when the newer document replaces it in full.</p>
       <label className="block">Use for this deal
         <select className="block w-full rounded border bg-background p-2" value={role} onChange={e => setRole(e.target.value as typeof role)}>
           <option value="active">Current source / supporting amendment</option>
@@ -48,7 +57,7 @@ export function DocumentVersionControls({ dealId, revision, document, documents 
       {role === "superseded" && <label className="block">Replacement document
         <select className="block w-full rounded border bg-background p-2" value={replacement} onChange={e => setReplacement(e.target.value)}>
           <option value="">Choose a current document</option>
-          {documents.filter(d => d.id !== document.id && (!d.source_role || d.source_role === "active")).map(d => <option key={d.id} value={d.id}>{d.filename} (#{d.id})</option>)}
+          {documents.filter(d => (d.duplicate_of_id ?? d.id) !== (document.duplicate_of_id ?? document.id) && (!d.source_role || d.source_role === "active")).map(d => <option key={d.id} value={d.id}>{d.filename} (#{d.id})</option>)}
         </select>
       </label>}
       <label className="block">Reason

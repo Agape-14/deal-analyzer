@@ -95,22 +95,28 @@ async def choose_document_version(deal_id: int, doc_id: int, data: DocumentVersi
     doc = by_id.get(doc_id)
     if not doc:
         raise HTTPException(404, "Document not found")
+    if len(data.reason.strip()) < 3:
+        raise HTTPException(422, "Record a short reason for this document choice.")
+    digest = file_hash(doc)
+    copies = [d for d in docs if d.id == doc.id or (digest and file_hash(d) == digest)]
+    copy_ids = {d.id for d in copies}
     replacement = by_id.get(data.superseded_by_id)
     if data.source_role == "superseded":
-        if not replacement or replacement.id == doc.id or replacement.source_role not in {None, "active"}:
+        if not replacement or replacement.id in copy_ids or replacement.source_role not in {None, "active"}:
             raise HTTPException(422, "Choose a different active replacement document on this deal.")
-        if any(d.superseded_by_id == doc.id for d in docs):
+        if any(d.superseded_by_id in copy_ids for d in docs):
             raise HTTPException(422, "This document replaces an earlier version. Point that earlier version to the new replacement first.")
     elif data.superseded_by_id is not None:
         raise HTTPException(422, "Only a superseded document can have a replacement.")
-    if data.source_role != "active" and any(d.superseded_by_id == doc.id for d in docs):
+    if data.source_role != "active" and any(d.superseded_by_id in copy_ids for d in docs):
         raise HTTPException(422, "An earlier document still uses this one as its current replacement.")
-    previous = {"source_role": doc.source_role, "superseded_by_id": doc.superseded_by_id}
-    doc.source_role, doc.superseded_by_id, doc.version_note = data.source_role, data.superseded_by_id, data.reason.strip()
+    previous = [{"document_id": d.id, "source_role": d.source_role, "superseded_by_id": d.superseded_by_id} for d in copies]
+    for copy_doc in copies:
+        copy_doc.source_role, copy_doc.superseded_by_id, copy_doc.version_note = data.source_role, data.superseded_by_id, data.reason.strip()
     from app.services.data_integrity import now_iso
     metrics = dict(deal.metrics or {})
     metrics["_document_version_history"] = [*(metrics.get("_document_version_history") or []), {
-        "document_id": doc.id, "previous": previous, "source_role": data.source_role,
+        "document_id": doc.id, "identical_copy_ids": sorted(copy_ids), "previous": previous, "source_role": data.source_role,
         "superseded_by_id": data.superseded_by_id, "reason": data.reason.strip(), "at": now_iso(),
     }]
     deal.metrics = metrics

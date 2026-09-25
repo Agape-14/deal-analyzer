@@ -98,3 +98,37 @@ async def test_replacement_cannot_reference_another_deal(client):
     detail = (await client.get(f"/api/deals/{deals[0]}")).json()
     response = await client.put(f"/api/deals/{deals[0]}/documents/{ids[0]}/version", json={"expected_revision": detail["revision"], "source_role": "superseded", "superseded_by_id": ids[1], "reason": "Cross deal reference"})
     assert response.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_version_choice_applies_to_all_legacy_byte_identical_copies(client):
+    from app.database import async_session
+    from app.models import DealDocument
+    deal = (await client.post("/api/deals", json={"project_name": "Duplicate version choices"})).json()["id"]
+    async with async_session() as session:
+        for digest in ("a", "a", "b"):
+            session.add(DealDocument(deal_id=deal, filename="Memo.pdf", file_path="/synthetic/missing.pdf", file_sha256=digest, extracted_text="Synthetic", page_count=1))
+        await session.commit()
+    detail = (await client.get(f"/api/deals/{deal}")).json()
+    docs = sorted(detail["documents"], key=lambda d: d["id"])
+    url = f"/api/deals/{deal}/documents/{docs[0]['id']}/version"
+    choice = {"expected_revision": detail["revision"], "source_role": "superseded", "superseded_by_id": docs[1]["id"], "reason": "Same-byte replacement is invalid"}
+    assert (await client.put(url, json=choice)).status_code == 422
+    choice.update(superseded_by_id=docs[2]["id"], reason="Entire earlier package replaced")
+    response = await client.put(url, json=choice)
+    assert response.status_code == 200
+    rows = response.json()["documents"]
+    assert sum(d["source_role"] == "superseded" for d in rows) == 2
+    assert sum(d["included_in_review"] for d in rows) == 1
+
+
+@pytest.mark.asyncio
+async def test_simultaneous_identical_uploads_are_serialized(client):
+    import asyncio
+    deal = (await client.post("/api/deals", json={"project_name": "Parallel upload"})).json()["id"]
+    async def upload(name):
+        return await client.post(f"/api/deals/{deal}/documents/upload", files={"file": (name, b"metric,value\nunits,4\n", "text/csv")})
+    responses = await asyncio.gather(upload("a.csv"), upload("b.csv"))
+    assert all(r.status_code == 200 for r in responses), [r.text for r in responses]
+    assert len({r.json()["id"] for r in responses}) == 1
+    assert sum(bool(r.json().get("duplicate")) for r in responses) == 1

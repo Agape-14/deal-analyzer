@@ -34,6 +34,7 @@ type UploadState = {
   tables?: number;
   images?: number;
   error?: string;
+  reused?: boolean;
 };
 
 type UploadResult = {
@@ -116,6 +117,7 @@ export function DocumentsPanel({
               ? {
                   ...u,
                   docId: result.id,
+                  reused: result.duplicate,
                   status: queued ? "extracting" : "done",
                   progress: 100,
                   ocr_pages: result.extraction?.ocr_pages ?? 0,
@@ -497,7 +499,7 @@ function UploadRow({ upload }: { upload: UploadState }) {
       <div className="flex-1 min-w-0">
         <div className="text-sm font-medium truncate">{upload.filename}</div>
         {upload.status === "done" ? (
-          <div className="text-[11px] text-success mt-0.5">Extraction complete</div>
+          <div className="text-[11px] text-success mt-0.5">{upload.reused ? "Existing file reused; current review status is shown above" : "Extraction complete"}</div>
         ) : upload.status === "error" ? (
           <div className="text-xs text-destructive mt-0.5">{upload.error}</div>
         ) : upload.status === "reviewing" ? (
