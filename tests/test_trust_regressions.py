@@ -155,3 +155,56 @@ def test_unsure_is_not_resolved():
     metrics = {}
     _mark_review_resolved(metrics, "source:deal_structure.ltv", "unsure")
     assert metrics["_review_resolutions"]["source:deal_structure.ltv"]["resolved"] is False
+
+
+def test_manual_nested_edit_preserves_scenario_description():
+    from app.services.data_integrity import mark_manual_edit
+    metrics = {"target_returns": {"hold_scenario": "Long-term rental hold"}}
+    mark_manual_edit(metrics, "target_returns.hold_scenario.cash_on_cash_return", 8)
+    assert metrics["target_returns"]["hold_scenario"] == {"description": "Long-term rental hold", "cash_on_cash_return": 8}
+    assert "hold_scenario.cash_on_cash_return" not in metrics["target_returns"]
+
+
+def test_nested_lock_survives_reextraction_and_parent_correction():
+    from app.services.data_integrity import smart_merge, mark_manual_edit
+    metrics = mark_manual_edit({}, "target_returns.hold_scenario.cash_on_cash_return", 8)
+    incoming = {"target_returns": {"hold_scenario": {"cash_on_cash_return": 12}}}
+    merged, _ = smart_merge(metrics, incoming)
+    assert merged["target_returns"]["hold_scenario"]["cash_on_cash_return"] == 8
+    corrected, changes = apply_corrections(merged, {"audit_results": [{
+        "section": "target_returns", "field": "hold_scenario", "status": "wrong",
+        "correct_value": {"cash_on_cash_return": 12}, "source": "Memo Page 4",
+    }]})
+    assert corrected["target_returns"]["hold_scenario"]["cash_on_cash_return"] == 8
+    assert changes == []
+
+
+def test_partial_year_cashflow_is_not_silently_shortened():
+    metrics = {
+        "project_details": {"unit_count": 10},
+        "financial_projections": {"avg_rent_per_unit": 1000, "occupancy_assumption": 100,
+            "operating_expense_ratio": 50, "rent_growth_assumption": 0, "exit_cap_rate": 5},
+        "deal_structure": {"debt_amount": 0, "hold_period_years": 2.5, "total_equity_required": 1000000},
+    }
+    projection = project_cash_flows(metrics)
+    assert projection["status"] == "unavailable"
+    assert "partial-year" in projection["message"]
+    assert metrics["deal_structure"]["hold_period_years"] == 2.5
+
+
+def test_waterfall_never_invents_missing_terms():
+    from app.services.waterfall_calculator import waterfall_from_deal
+    result = waterfall_from_deal({})
+    assert result["status"] == "unavailable"
+    assert result["tiers"] == []
+
+
+def test_waterfall_with_explicit_terms_conserves_total_cash():
+    from app.services.waterfall_calculator import waterfall_from_deal
+    metrics = {"deal_structure": {"total_equity_required": 1000000,
+        "gp_equity_coinvest_pct": 10, "preferred_return": 8, "hold_period_years": 5,
+        "promote_tiers": [{"threshold": 15, "lp_split": 80, "gp_split": 20}]},
+        "target_returns": {"total_project_profit": 1000000}}
+    result = waterfall_from_deal(metrics)
+    assert result["status"] == "illustrative"
+    assert result["totals"]["lp_total"] + result["totals"]["gp_total"] == 2000000

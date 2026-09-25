@@ -68,6 +68,10 @@ async def test_document_csv_upload_read_reprocess_and_delete(client):
     assert any(d["id"] == doc_id for d in docs.json())
     file = await client.get(f"/api/deals/documents/{doc_id}/file")
     assert file.status_code == 200 and b"Units,120" in file.content
+    assert file.headers["x-frame-options"] == "SAMEORIGIN"
+    assert file.headers["content-security-policy"] == "frame-ancestors 'self'"
+    # Ordinary application responses still cannot be framed.
+    assert docs.headers["x-frame-options"] == "DENY"
     reprocessed = await client.post(f"/api/deals/documents/{doc_id}/reprocess")
     assert reprocessed.status_code == 200
     assert reprocessed.json()["text_length_after"] > 0
@@ -103,3 +107,29 @@ async def test_portfolio_exports_and_chat_history(client):
     csv = await client.get("/api/reports/export/csv")
     assert csv.status_code == 200
     assert zipfile.ZipFile(io.BytesIO(csv.content)).namelist()
+
+
+async def test_linked_investment_loads_sponsor_and_uses_accepted_returns(client):
+    developer = (await client.post("/api/developers", json={"name": "Synthetic Sponsor"})).json()["id"]
+    deal = (await client.post("/api/deals", json={"project_name": "Linked", "developer_id": developer})).json()["id"]
+    await client.put(f"/api/deals/{deal}", json={"metrics": {
+        "target_returns": {"primary_strategy": "hold", "target_irr": 20,
+            "sale_scenario": {"sale_irr": 20, "sale_equity_multiple": 2, "is_hypothetical": True},
+            "hold_scenario": {"cash_on_cash_return": 8}},
+    }})
+    response = await client.post("/api/investments/", json={"deal_id": deal, "amount_invested": 1000})
+    assert response.status_code == 200, response.text
+    position = (await client.get(f"/api/investments/{response.json()['id']}")).json()
+    assert position["sponsor_name"] == "Synthetic Sponsor"
+    assert position["projected_irr"] is None
+    assert position["projected_equity_multiple"] is None
+
+
+async def test_nested_field_edit_updates_actual_value_and_preserves_lock(client):
+    deal = await new_deal(client, "Nested values")
+    path = "target_returns.hold_scenario.cash_on_cash_return"
+    response = await client.post(f"/api/deals/{deal}/fields/edit", json={"path": path, "value": 8, "lock": True})
+    assert response.status_code == 200
+    metrics = (await client.get(f"/api/deals/{deal}")).json()["metrics"]
+    assert metrics["target_returns"]["hold_scenario"]["cash_on_cash_return"] == 8
+    assert metrics["_locks"][path] is True

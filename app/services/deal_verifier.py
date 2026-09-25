@@ -470,7 +470,7 @@ def apply_corrections(metrics: dict, verification: dict) -> tuple[dict, list[str
     Corrections are provisional until the automatic follow-up source check.
     """
     from app.services.canonical_metrics import get_path
-    from app.services.data_integrity import METRIC_SECTIONS, _invalidate_review_resolutions
+    from app.services.data_integrity import METRIC_SECTIONS, _invalidate_review_resolutions, is_path_locked
 
     metrics = _coerce_json_object(metrics, _json_preview(metrics), "Metrics corrections input")
     verification = _coerce_json_object(verification, _json_preview(verification), "Verification corrections input")
@@ -490,7 +490,7 @@ def apply_corrections(metrics: dict, verification: dict) -> tuple[dict, list[str
             return
         path = f"{section}.{field}"
         p = dict(prov.get(path) or {})
-        if locks.get(path) or p.get("locked") or not str(row.get("source") or "").strip():
+        if is_path_locked(metrics, path) or not str(row.get("source") or "").strip():
             return
         previous = get_path(metrics, path)
         if previous == value or (missing_only and previous not in (None, "")):
@@ -499,7 +499,9 @@ def apply_corrections(metrics: dict, verification: dict) -> tuple[dict, list[str
         for part in parts[:-1]:
             if not isinstance(block, dict):
                 return
-            block = block.setdefault(part, {})
+            child = block.get(part)
+            block[part] = dict(child) if isinstance(child, dict) else ({"description": child} if isinstance(child, str) else {})
+            block = block[part]
         if not isinstance(block, dict):
             return
         block[parts[-1]] = value

@@ -229,6 +229,8 @@ async def get_document_file(doc_id: int, db: AsyncSession = Depends(get_db)):
         headers={
             "Content-Disposition": f'{disposition}; filename="{doc.filename or "document"}"',
             "Cache-Control": "private, max-age=60",
+            "X-Frame-Options": "SAMEORIGIN",
+            "Content-Security-Policy": "frame-ancestors 'self'",
         },
     )
 

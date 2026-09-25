@@ -114,35 +114,10 @@ const TARGET_RETURN_ORDER = [
   "sale_scenario",
 ] as const;
 
-function getDisplayEntries(sectionKey: string | undefined, data: Record<string, unknown>): DisplayEntry[] {
-  if (sectionKey !== "target_returns") {
-    return Object.entries(data).map(([name, value]) => ({ name, value }));
-  }
-
-  const entries = new Map<string, DisplayEntry>();
-  Object.entries(data).forEach(([name, value]) => entries.set(name, { name, value }));
-
-  const netIrr = data.net_irr;
-  if (netIrr !== null && netIrr !== undefined && netIrr !== "") {
-    // In extracted packages, `target_irr` can be polluted by distribution yield
-    // or cash-on-cash language. The true investor IRR is the net IRR, so render
-    // it once under the business-facing "Target IRR" label and keep provenance
-    // tied to the canonical field that supplied the value.
-    entries.set("target_irr", { name: "target_irr", value: netIrr, sourceName: "net_irr" });
-    entries.delete("net_irr");
-  }
-
-  const netMultiple = data.net_equity_multiple;
-  if (netMultiple !== null && netMultiple !== undefined && netMultiple !== "") {
-    entries.set("target_equity_multiple", {
-      name: "target_equity_multiple",
-      value: netMultiple,
-      sourceName: "net_equity_multiple",
-    });
-    entries.delete("net_equity_multiple");
-  }
-
-  return Array.from(entries.values());
+function getDisplayEntries(_sectionKey: string | undefined, data: Record<string, unknown>): DisplayEntry[] {
+  // This is the raw source-field view. Never rename net IRR as target IRR:
+  // the accepted headline is selected separately by the canonical summary.
+  return Object.entries(data).map(([name, value]) => ({ name, value }));
 }
 
 function MetricRow({
@@ -220,7 +195,7 @@ function humanize(key: string): string {
     .replace(/\bSqft\b/, "Sqft");
 }
 
-function formatValue(name: string, value: unknown): string {
+export function formatValue(name: string, value: unknown): string {
   if (value == null) return "—";
   if (typeof value === "boolean") return value ? "Yes" : "No";
   if (Array.isArray(value)) return value.join(", ") || "—";
@@ -240,7 +215,9 @@ function formatValue(name: string, value: unknown): string {
 
   if (typeof value === "number") {
     const n = name.toLowerCase();
-    if (/(pct|percent|rate|yield|growth|margin|occupancy|ltv|return|coc|irr|dscr)/.test(n)) {
+    if (/(months|years)$/.test(n)) return `${value} ${n.endsWith("months") ? "months" : "years"}`;
+    if (/(dscr|multiple)/.test(n)) return `${value.toFixed(2)}x`;
+    if (/(pct|percent|rate|yield|growth|margin|occupancy|ltv|loan_to_cost|return|coc|irr|cash_on_cash|expense_ratio|loan_points)/.test(n)) {
       return fmtPct(value, 1);
     }
     if (/(multiple)/.test(n)) return `${value.toFixed(2)}x`;

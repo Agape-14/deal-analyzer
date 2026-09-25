@@ -53,7 +53,7 @@ export function DealHero({ deal }: { deal: DealDetail }) {
   );
   const mountedRef = React.useRef(true);
   const locationBits = [deal.city, deal.state].filter(Boolean).join(", ") || deal.location;
-  const visibleScore = deal.overall_score ?? deal.scores?.provisional_overall ?? null;
+  const visibleScore = deal.scores?.data_quality?.can_score === true ? deal.overall_score : null;
   const { headlineMultiple, primaryReturnLabel, primaryReturnValue } = getHeadlineReturnMetrics(deal);
   const gate = deal.scores?.data_quality;
   const reviewSummary = dealReviewSummary(gate);

@@ -489,6 +489,7 @@ def _post_process_metrics(metrics: dict):
     A calculated value remains provisional until its inputs are verified.
     """
     from app.services.canonical_metrics import get_path, bad_source
+    from app.services.data_integrity import is_path_locked
 
     prov = dict(metrics.get("_provenance") or {})
     locks = metrics.get("_locks") or {}
@@ -499,7 +500,7 @@ def _post_process_metrics(metrics: dict):
         if not isinstance(block, dict):
             return
         existing = prov.get(path) or {}
-        if locks.get(path) or existing.get("locked") or block.get(field) is not None:
+        if is_path_locked(metrics, path) or block.get(field) is not None:
             return
         values = [_safe_num(get_path(metrics, key)) for key in inputs]
         if any(value is None for value in values):

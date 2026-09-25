@@ -219,46 +219,50 @@ def calculate_waterfall(
 
 
 def waterfall_from_deal(metrics: dict, investment_amount: float = None) -> dict:
-    """Build waterfall from deal metrics, parsing promote structure as needed."""
-    ds = metrics.get("deal_structure", {}) or {}
-    tr = metrics.get("target_returns", {}) or {}
-    fp = metrics.get("financial_projections", {}) or {}
+    """Use explicit structured terms; never invent or guess a sponsor waterfall."""
+    import math
+    from app.services.canonical_metrics import get_path, bad_source
 
-    total_equity = _safe_float(ds.get("total_equity_required"), 10000000)
+    def unavailable(message):
+        return {"status": "unavailable", "message": message, "tiers": [], "totals": {}}
 
-    # GP equity split: if the "GP co-invest" is actually rolled-over LP
-    # equity from a prior phase, it's LP capital — the GP's promote
-    # comes through the waterfall tiers, not the capital stack.
-    gp_is_rollover = ds.get("gp_coinvest_is_rollover")
-    if gp_is_rollover is True:
-        gp_coinvest_pct = 0.0
-    else:
-        gp_coinvest_pct = _safe_float(ds.get("gp_equity_coinvest_pct"), 5) / 100.0
-
-    gp_equity = total_equity * gp_coinvest_pct
-    lp_equity = total_equity - gp_equity
-
-    preferred_return = _safe_float(ds.get("preferred_return"), 8.0)
-    hold_years = _safe_float(ds.get("hold_period_years") or ds.get("investment_term_years"), 5)
-
-    # Parse promote tiers
-    promote_text = tr.get("profit_split_above_pref", "") or ""
-    tier2_text = tr.get("profit_split_above_tier2", "") or ""
-    combined_text = f"{promote_text} {tier2_text}".strip()
-    promote_tiers = parse_promote_tiers(combined_text)
-
-    # Estimate total profit from equity multiple
-    equity_multiple = _safe_float(tr.get("target_equity_multiple"), 2.0)
-    total_return = total_equity * equity_multiple
-    total_profit = total_return - total_equity  # Profit above return of capital
-
-    return calculate_waterfall(
-        total_equity=total_equity,
-        lp_equity=lp_equity,
-        gp_equity=gp_equity,
-        preferred_return=preferred_return,
-        promote_tiers=promote_tiers,
-        hold_years=hold_years,
-        total_profit=total_profit,
+    required = {
+        "deal_structure.total_equity_required": (1, float("inf")),
+        "deal_structure.gp_equity_coinvest_pct": (0, 100),
+        "deal_structure.preferred_return": (0, 100),
+        "deal_structure.hold_period_years": (0.01, 50),
+        "target_returns.total_project_profit": (0, float("inf")),
+    }
+    values = {}
+    for path, (lower, upper) in required.items():
+        value = _safe_float(get_path(metrics, path), None)
+        if (value is None or not math.isfinite(value) or not lower <= value <= upper
+                or bad_source((metrics.get("_provenance") or {}).get(path))):
+            return unavailable("Waterfall unavailable: explicit project profit, capitalization and distribution terms are required. No default splits or returns were assumed.")
+        values[path] = value
+    tiers = get_path(metrics, "deal_structure.promote_tiers")
+    if not isinstance(tiers, list) or not tiers:
+        return unavailable("Waterfall unavailable: the source terms have not been mapped to structured LP/GP tiers. Free-text terms are not reliable enough to calculate investor distributions.")
+    previous = values["deal_structure.preferred_return"]
+    for tier in tiers:
+        if not isinstance(tier, dict):
+            return unavailable("Waterfall tiers need source review.")
+        numbers = [_safe_float(tier.get(key), None) for key in ("threshold", "lp_split", "gp_split")]
+        if any(v is None or not math.isfinite(v) for v in numbers):
+            return unavailable("Waterfall tiers need source review.")
+        threshold, lp, gp = numbers
+        if threshold < previous or not (0 <= lp <= 100 and 0 <= gp <= 100) or abs(lp + gp - 100) > 0.01:
+            return unavailable("Waterfall tiers need source review.")
+        previous = threshold
+    equity = values["deal_structure.total_equity_required"]
+    gp_equity = equity * values["deal_structure.gp_equity_coinvest_pct"] / 100
+    result = calculate_waterfall(
+        total_equity=equity, lp_equity=equity - gp_equity, gp_equity=gp_equity,
+        preferred_return=values["deal_structure.preferred_return"], promote_tiers=tiers,
+        hold_years=values["deal_structure.hold_period_years"],
+        total_profit=values["target_returns.total_project_profit"],
         investment_amount=investment_amount,
     )
+    result["status"] = "illustrative"
+    result["message"] = "Illustrative end-of-hold allocation from explicit tiers. This simplified model excludes interim timing, compounding, catch-up provisions and tax allocations."
+    return result

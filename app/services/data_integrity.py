@@ -228,7 +228,7 @@ def smart_merge(
             old_v = (old_section or {}).get(key)
             new_v = new_section.get(key)
 
-            if locks.get(path):
+            if preserve_locks and is_path_locked(existing, path):
                 # User-locked field: keep old value, record that we honored the lock
                 out[key] = old_v
                 continue
@@ -546,6 +546,15 @@ def _extract_page_number(s: str) -> int | None:
 
 # ----------------------------- field locks ----------------------------- #
 
+def is_path_locked(metrics: dict[str, Any], path: str) -> bool:
+    """Protect a locked value when a parent or child object is replaced too."""
+    locked_paths = {p for p, locked in (metrics.get("_locks") or {}).items() if locked}
+    locked_paths.update(p for p, meta in (metrics.get("_provenance") or {}).items()
+                        if isinstance(meta, dict) and meta.get("locked"))
+    return any(path == locked or path.startswith(locked + ".") or locked.startswith(path + ".")
+               for locked in locked_paths)
+
+
 def set_lock(metrics: dict[str, Any], path: str, locked: bool) -> dict[str, Any]:
     """Toggle the user-lock on a single dotted field path."""
     locks = dict(metrics.get("_locks") or {})
@@ -574,8 +583,14 @@ def mark_manual_edit(
     if not section or not field_name:
         return metrics
     block = dict(metrics.get(section) or {})
-    block[field_name] = value
     metrics[section] = block
+    parts = field_name.split(".")
+    for part in parts[:-1]:
+        child = block.get(part)
+        # Preserve existing scenario text when adding a structured field.
+        block[part] = dict(child) if isinstance(child, dict) else ({"description": child} if isinstance(child, str) else {})
+        block = block[part]
+    block[parts[-1]] = value
 
     prov = dict(metrics.get("_provenance") or {})
     prov[path] = {

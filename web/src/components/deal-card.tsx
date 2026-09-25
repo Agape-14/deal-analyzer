@@ -70,7 +70,7 @@ export function DealCard({ deal }: { deal: DealSummary }) {
   const { isAnalyst } = useCurrentUser();
   const locationBits = [deal.city, deal.state].filter(Boolean).join(", ") || deal.location || "";
   const qualityGate = getQualityGate(deal.quality) || deal.scores?.data_quality;
-  const visibleScore = deal.overall_score ?? deal.scores?.provisional_overall ?? null;
+  const visibleScore = qualityGate?.can_score === true ? deal.overall_score : null;
   const { headlineMultiple, primaryReturnLabel, primaryReturnValue } = getHeadlineReturnMetrics(deal);
 
   return (

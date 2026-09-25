@@ -70,6 +70,12 @@ def project_cash_flows(metrics: dict, investment_amount: float = None) -> dict:
             "message": "Projection needs source-supported assumptions. Missing or disputed inputs have not been filled with defaults.",
             "project_level": [], "lp_level": [], "summary": {}, "assumptions": {},
         }
+    if not float(ds["hold_period_years"]).is_integer():
+        return {
+            "status": "unavailable", "missing_inputs": [],
+            "message": "This annual model does not yet support partial-year holding periods. The source hold period has been preserved; no shortened projection is shown.",
+            "project_level": [], "lp_level": [], "summary": {}, "assumptions": {},
+        }
 
     # Core inputs
     unit_count = _safe_float(pd.get("unit_count"), 100)

@@ -391,6 +391,8 @@ export interface WaterfallTier {
 }
 
 export interface WaterfallResponse {
+  status?: "unavailable" | "illustrative";
+  message?: string;
   tiers: WaterfallTier[];
   totals: {
     total_distributed: number;

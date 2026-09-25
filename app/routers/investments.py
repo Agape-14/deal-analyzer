@@ -180,28 +180,26 @@ async def create_investment(data: InvestmentCreate, db: AsyncSession = Depends(g
     """Create a new investment."""
     # If deal_id provided, auto-populate from deal
     if data.deal_id:
-        deal_result = await db.execute(select(Deal).where(Deal.id == data.deal_id))
+        deal_result = await db.execute(select(Deal).options(selectinload(Deal.developer)).where(Deal.id == data.deal_id, Deal.deleted_at.is_(None)))
         deal = deal_result.scalar_one_or_none()
+        if not deal:
+            raise HTTPException(status_code=404, detail="Selected deal is unavailable")
         if deal:
             if not data.project_name:
                 data.project_name = deal.project_name
             if not data.sponsor_name and deal.developer:
-                deal_result2 = await db.execute(
-                    select(Deal).options(selectinload(Deal.developer)).where(Deal.id == data.deal_id)
-                )
-                deal2 = deal_result2.scalar_one_or_none()
-                if deal2 and deal2.developer:
-                    data.sponsor_name = deal2.developer.name
+                data.sponsor_name = deal.developer.name
             # Pull from metrics
             m = deal.metrics or {}
             ds = m.get('deal_structure', {}) or {}
-            tr = m.get('target_returns', {}) or {}
-            if not data.preferred_return and ds.get('preferred_return'):
+            from app.services.canonical_metrics import canonical_return_summary
+            returns = canonical_return_summary(m)
+            if data.preferred_return is None and ds.get('preferred_return') is not None:
                 data.preferred_return = ds['preferred_return']
-            if not data.projected_irr:
-                data.projected_irr = tr.get('net_irr') or tr.get('target_irr')
-            if not data.projected_equity_multiple:
-                data.projected_equity_multiple = tr.get('net_equity_multiple') or tr.get('target_equity_multiple')
+            if data.projected_irr is None:
+                data.projected_irr = returns.get('target_irr')
+            if data.projected_equity_multiple is None:
+                data.projected_equity_multiple = returns.get('target_equity_multiple')
             if not data.investment_class and ds.get('investment_class'):
                 data.investment_class = ds['investment_class']
             if not data.hold_period_years and ds.get('hold_period_years'):
