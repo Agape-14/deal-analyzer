@@ -48,11 +48,14 @@ async def chat_with_deal(data: ChatMessage, db: AsyncSession = Depends(get_db)):
     history = history_result.scalars().all()
 
     # Build system prompt with deal context
-    doc_context = ""
-    for doc in deal.documents:
-        if doc.extracted_text:
-            doc_context += f"\n\n--- {doc.filename} ({doc.doc_type}) ---\n"
-            doc_context += doc.extracted_text[:20000]
+    from app.services.document_versions import review_documents
+    from app.services.document_context import select_context_for_sections
+    doc_context, _ = select_context_for_sections(
+        [{"filename": doc.filename, "text": doc.extracted_text}
+         for doc in review_documents(deal.documents) if doc.extracted_text],
+        ["target_returns", "deal_structure", "financial_projections"],
+        {"question": data.message}, max_chars=60000,
+    )
 
     metrics_str = ""
     analysis = analysis_for_deal(deal)

@@ -134,3 +134,29 @@ async def test_nested_field_edit_updates_actual_value_and_preserves_lock(client)
     metrics = (await client.get(f"/api/deals/{deal}")).json()["metrics"]
     assert metrics["target_returns"]["hold_scenario"]["cash_on_cash_return"] == 8
     assert metrics["_locks"][path] is True
+
+
+async def test_chat_uses_current_sources_and_persists_provider_reply(client, monkeypatch):
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+    from app.database import async_session
+    from app.models import DealDocument
+    from app.routers import chat
+    deal = await new_deal(client, "Current chat evidence")
+    async with async_session() as db:
+        for role, name, text in [("active", "Current.pdf", "CURRENT INVESTOR TERMS"),
+                                 ("superseded", "Old.pdf", "OBSOLETE SOURCE NUMBER"),
+                                 ("alternative", "Other.pdf", "ALTERNATE SOURCE NUMBER")]:
+            db.add(DealDocument(deal_id=deal, filename=name, file_path=name, source_role=role,
+                                extracted_text="--- Page 1 ---\n" + text, page_count=1))
+        await db.commit()
+    create = AsyncMock(return_value=SimpleNamespace(content=[SimpleNamespace(text="The headline is unavailable until source questions are resolved.")]))
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "synthetic-test-key")
+    monkeypatch.setattr(chat.anthropic, "AsyncAnthropic", lambda **kwargs: SimpleNamespace(messages=SimpleNamespace(create=create)))
+    response = await client.post("/api/chat", json={"deal_id": deal, "message": "What return is accepted?"})
+    assert response.status_code == 200
+    prompt = create.call_args.kwargs["system"]
+    assert "CURRENT INVESTOR TERMS" in prompt
+    assert "OBSOLETE SOURCE NUMBER" not in prompt and "ALTERNATE SOURCE NUMBER" not in prompt
+    history = (await client.get(f"/api/chat/history/{deal}")).json()
+    assert history[-1]["content"] == response.json()["response"]

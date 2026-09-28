@@ -168,9 +168,11 @@ async def test_queue_runs_real_pipeline_with_controlled_provider_replies(client,
     }
     async with async_session() as db:
         db.add(DealDocument(deal_id=deal_id, filename="Synthetic.csv", file_path="synthetic.csv", file_sha256="source-a",
-            extracted_text="Synthetic capital terms and return", page_count=1, extraction_quality={"status": "extracted"}))
+            extracted_text="--- Sheet: Terms ---\n" + "\n".join(f"A{i + 1}={path} | B{i + 1}={values[0]}" for i, (path, values) in enumerate(flatten(metrics).items())),
+            page_count=1, extraction_quality={"status": "extracted", "text_format_version": 2}))
         await db.commit()
-    audit = [{"section": path.split(".")[0], "field": path.partition(".")[2], "status": "confirmed", "source_doc_name": "Synthetic.csv", "source_sheet": "Terms", "source_cell": f"B{i + 1}"} for i, path in enumerate(flatten(metrics))]
+    audit = [{"section": path.split(".")[0], "field": path.partition(".")[2], "status": "confirmed", "source_doc_name": "Synthetic.csv", "source_sheet": "Terms", "source_cell": f"B{i + 1}",
+              "source_excerpt": f"A{i + 1}={path} | B{i + 1}={values[0]}"} for i, (path, values) in enumerate(flatten(metrics).items())]
     extractor = AsyncMock(return_value=metrics)
     verifier = AsyncMock(return_value={"audit_results": audit, "summary": {"confidence_score": 99}})
     monkeypatch.setattr(deal_pipeline, "extract_metrics_from_docs", extractor)
