@@ -99,7 +99,7 @@ Rules:
 7. For risk scores assigned by analysis rather than stated by the document, mark as "calculated" with a note explaining the basis.
 8. If evidence conflicts, mark the field wrong or unverifiable and explain the conflict.
 9. Do not silently correct investor-level return metrics from a sponsor/GP column. Investor/LP returns should come from Investor, LP, Class A/B, or new-money investor columns.
-10. On each audit row include source_doc_name exactly as supplied, source_excerpt containing the short supporting quote, and either source_page (PDF) or source_sheet plus source_cell/source_range (workbook). A filename by itself is insufficient. For nested values use a dotted field path; audit distinct scenarios and investor classes separately. Include fact_context with scenario, investor_class, basis (gross/net), debt_phase, period and currency only when the source explicitly states them. Never guess missing dimensions.
+10. On each audit row include source_doc_name exactly as supplied, source_excerpt containing a VERBATIM CONTIGUOUS quote from the supplied extracted text, and either source_page (PDF) or source_sheet plus source_cell/source_range (workbook). For workbooks the excerpt must include the cited cell address and value, e.g. B12=0.13. Include the row/column label in the excerpt when possible. Do not paraphrase, insert ellipses, or invent a locator; the app checks quotes against that exact page/sheet. A filename by itself is insufficient. For nested values use a dotted field path; audit distinct scenarios and investor classes separately. Include fact_context with scenario, investor_class, basis (gross/net), debt_phase, period and currency only when the source explicitly states them. Never guess missing dimensions. A cash-flow allocation percentage is not cash-on-cash yield; a preferred investor return is not the common investor return. If a value is only shown in an image and cannot be quoted from the extracted text, mark it unverifiable and explain the required visual review.
 
 HERE ARE THE EXTRACTED METRICS TO VERIFY:
 """
@@ -124,7 +124,7 @@ VERIFY_MAX_CONTEXT_CHARS = _env_int("VERIFY_MAX_CONTEXT_CHARS", 65000)
 VERIFY_FULL_TEXT_THRESHOLD_CHARS = _env_int("VERIFY_FULL_TEXT_THRESHOLD_CHARS", 50000)
 VERIFY_MAX_OUTPUT_TOKENS = _env_int("VERIFY_MAX_OUTPUT_TOKENS", 16000)
 VERIFY_CONCURRENCY = max(1, _env_int("VERIFY_CONCURRENCY", 2))
-VERIFICATION_CACHE_VERSION = 2
+VERIFICATION_CACHE_VERSION = 3
 
 
 def _coerce_json_object(parsed: Any, raw: str, context: str) -> dict:
@@ -370,6 +370,14 @@ async def verify_deal_metrics(deal, db, *, sections: set[str] | None = None) -> 
     ]
     doc_texts = []
     for doc in active_docs:
+        if str(doc.filename).lower().endswith((".xlsx", ".xlsm", ".xls", ".csv")) and (doc.extraction_quality or {}).get("text_format_version", 0) < 2:
+            from app.services.spreadsheet_extractor import extract_spreadsheet
+            refreshed = extract_spreadsheet(doc.file_path)
+            if refreshed.quality_score and refreshed.text:
+                doc.extracted_text = refreshed.text
+                doc.page_count = refreshed.page_count
+                doc.extraction_quality = {**(doc.extraction_quality or {}), "text_format_version": 2,
+                                          "page_diagnostics": refreshed.page_diagnostics}
         text = (doc.extracted_text or "").strip()
         quality = doc.extraction_quality or {}
         if text and not text.startswith("Error extracting text:") and not (isinstance(quality, dict) and quality.get("error")):
@@ -498,9 +506,15 @@ def apply_corrections(metrics: dict, verification: dict) -> tuple[dict, list[str
         if is_path_locked(metrics, path) or not str(row.get("source") or "").strip():
             return
         previous = get_path(metrics, path)
-        if previous == value or (missing_only and previous not in (None, "")):
+        section_values = metrics.get(section)
+        has_alias = len(parts) > 1 and isinstance(section_values, dict) and field in section_values
+        if (previous == value and not has_alias) or (missing_only and previous not in (None, "")):
             return
         block = metrics.setdefault(section, {})
+        # Early records stored both dotted and nested versions of scenario
+        # values. Updating only the nested copy leaves a permanent conflict.
+        if len(parts) > 1 and isinstance(block, dict):
+            block.pop(field, None)
         for part in parts[:-1]:
             if not isinstance(block, dict):
                 return

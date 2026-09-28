@@ -22,7 +22,7 @@ Return a JSON object with EXACTLY these keys (use null for any field not found i
     "construction_loan_amount": "construction/bridge loan amount as number — this is the INITIAL loan used during construction or renovation. If only one loan exists, put it here.",
     "permanent_loan_amount": "permanent/takeout loan amount as number — this is the LONG-TERM loan that replaces the construction loan after stabilization. May be larger than construction loan. null if not mentioned or same as construction loan.",
     "debt_amount": "the PRIMARY current loan amount as number — use construction_loan_amount if project is in development/construction phase, or permanent_loan_amount if already stabilized",
-    "ltv": "loan-to-value ratio as percentage number (e.g. 65 for 65%) — calculate using debt_amount / total_project_cost",
+    "ltv": "loan-to-value ratio as percentage number (e.g. 65 for 65%); requires an explicitly stated property valuation, not project cost",
     "loan_type": "construction/bridge/perm/agency/HUD/CMBS etc — describe the full loan strategy (e.g. 'construction-to-perm' or 'bridge with perm takeout')",
     "interest_rate": "loan interest rate as percentage number — if construction and perm rates differ, use construction rate and note perm rate in loan_type",
     "hold_period_years": "expected hold period in years as number",
@@ -196,13 +196,13 @@ IMPORTANT RULES:
 6. Risk scores should be integers 1-10 where 10 = lowest risk / best
 7. Be thorough — search every page of EVERY document for relevant data. Check the full text AND every page image. Financial tables with critical numbers often appear on pages 15-30+.
 8. If multiple documents are provided, COMBINE all information into a single unified extraction. Different docs may contain different pieces (e.g., offering memo has deal terms, proforma has financials, market study has comps). Merge everything.
-9. If a metric appears in multiple documents, use the most recent/prominent value
+9. When current documents disagree, preserve the competing values with source, scenario, period and investor class. Do not choose by prominence or assume a newer date supersedes a different scenario. Leave the primary value null when the conflict cannot be resolved from explicit source instructions.
 10. For IRR and equity multiples, ALWAYS try to identify if they are gross or net. If the document only shows one number without specifying, put it in target_irr/target_equity_multiple AND note in the description fields
 11. Calculate yield_on_cost (stabilized NOI / total project cost) and break_even_occupancy if you have enough data
 12. DSCR = NOI / annual debt service — calculate if possible
 13. CROSS-CHECK YOUR WORK: After extracting, verify internal consistency:
     - total_project_cost should ≈ total_equity_required + debt_amount
-    - ltv should = debt_amount / total_project_cost × 100
+    - loan-to-cost (LTC), not loan-to-value (LTV), = debt_amount / total_project_cost × 100. LTV requires a property valuation.
     - price_per_unit should = total_project_cost / unit_count
     - If any of these don't reconcile, re-examine which numbers you pulled
 14. For description/text fields (waterfall_structure, sources_and_uses, etc.), be SPECIFIC and quote actual numbers from the document rather than paraphrasing vaguely
@@ -226,8 +226,8 @@ these rules strictly:
        - Column header is the sponsor's brand/entity name
          (e.g. "Ambient", "Greenfield Partners", "JV Waterfall")
          rather than "Investor" / "LP" / a share class letter.
-       - An adjacent "GP" / "Manager" / "Sponsor" column has
-         materially lower returns (that's the LP column).
+       - Do not infer a column's identity from higher or lower returns.
+         Read its exact header; distinguish common and preferred investors.
        - Label says "Gross", "Partnership", "Deal-Level", or
          "Project-Level" — those are before-fees / not LP.
 

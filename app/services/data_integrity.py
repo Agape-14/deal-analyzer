@@ -419,6 +419,11 @@ def stamp_verification(
 
     verified_at = now_iso()
     challenged_paths: set[str] = set()
+    from app.services.source_evidence import fresh_audit_evidence, numeric_quote_error
+    from app.services.canonical_metrics import get_path
+    from app.services.analysis_store import document_manifest
+    manifest = document_manifest(documents) if documents is not None else []
+    effective_statuses = []
 
     for row in verification.get("audit_results", []) or []:
         if not isinstance(row, dict):
@@ -430,11 +435,23 @@ def stamp_verification(
         path = f"{section}.{field_name}"
         p = dict(prov.get(path) or {})
         status = str(row.get("status") or "").lower() or "extracted"
+        citation, citation_error = fresh_audit_evidence(row, documents, manifest)
+        if documents is not None and status == "confirmed" and not citation_error:
+            value = get_path(metrics, path)
+            if "extracted_value" in row and row["extracted_value"] != value:
+                citation_error = "The source check audited a different value. Recheck the current field."
+            else:
+                citation_error = numeric_quote_error(value, citation)
+        note = row.get("note")
+        if status == "confirmed" and citation_error:
+            status, note = "unverifiable", citation_error
+        effective_statuses.append(status)
         if p.get("source") == "manual" and is_path_locked(metrics, path):
             # A source check may challenge a decision, but cannot erase its
             # identity, reason or lock or relabel it as independently checked.
-            p["last_source_check"] = {"status": status, "note": row.get("note"), "source": row.get("source"), "at": verified_at}
-            p["source_challenge"] = str(row.get("note") or "The source check challenges this analyst decision.") if status in {"wrong", "missing", "unverifiable", "math_failed"} else None
+            p["status"] = "manual"
+            p["last_source_check"] = {"status": status, "note": note, "source": row.get("source"), "at": verified_at, "citation": citation}
+            p["source_challenge"] = str(note or "The source check challenges this analyst decision.") if status in {"wrong", "missing", "unverifiable", "math_failed"} else None
             prov[path] = p
             if p["source_challenge"]:
                 challenged_paths.add(path)
@@ -446,36 +463,20 @@ def stamp_verification(
         # Overall model confidence is not field-level evidence.
         p.pop("confidence", None)
 
-        # Parse "Page N" out of the free-text source so the UI can link
-        # to a specific PDF page.
-        src = row.get("source")
-        if isinstance(src, str) and src.strip():
-            p["verification_source"] = src.strip()
-            page = _extract_page_number(src)
-            if page is not None:
-                p["source_page"] = page
+        # A fresh audit owns its citation. Never combine a new filename with
+        # an old document ID, page, cell, excerpt, hash or context.
+        for key in ("source_doc_id", "source_doc_name", "source_page", "source_sheet", "source_cell", "source_range", "source_excerpt", "source_document_hash", "verification_source"):
+            p.pop(key, None)
+        contexts = dict(metrics.get("_fact_context") or {})
+        contexts.pop(path, None)
+        metrics["_fact_context"] = contexts
 
-        note = row.get("note")
-        if note:
-            p["verification_note"] = str(note)
-        for key in ("source_doc_name", "source_sheet", "source_cell", "source_range", "source_excerpt"):
-            if isinstance(row.get(key), str) and row[key].strip():
-                p[key] = row[key].strip()
-        if isinstance(row.get("source_page"), int) and row["source_page"] > 0:
-            p["source_page"] = row["source_page"]
+        p.update(citation)
+        p["verification_note"] = str(note or "")
         if isinstance(row.get("fact_context"), dict):
             contexts = dict(metrics.get("_fact_context") or {})
             contexts[path] = {key: value for key, value in row["fact_context"].items() if key in {"scenario", "investor_class", "basis", "debt_phase", "period", "currency"} and isinstance(value, str)}
             metrics["_fact_context"] = contexts
-        if documents:
-            from app.services.analysis_store import document_manifest
-            from app.services.analysis import evidence_for
-            evidence, _ = evidence_for({k: v for k, v in p.items() if k != "source_document_hash"}, document_manifest(documents))
-            if len(evidence) == 1:
-                p["source_doc_id"] = evidence[0]["document_id"]
-                p["source_doc_name"] = evidence[0]["document_name"]
-                p["source_document_hash"] = evidence[0]["content_hash"]
-
         prov[path] = p
 
     metrics["_provenance"] = prov
@@ -492,15 +493,14 @@ def stamp_verification(
             "missing": 0,
         },
     }
-    for row in verification.get("audit_results", []) or []:
-        status = str((row or {}).get("status") or "").lower()
+    for status in effective_statuses:
         if status in v_summary["totals"]:
             v_summary["totals"][status] += 1
     metrics["_verification"] = v_summary
     if documents is not None:
         from app.services.analysis_store import document_manifest
         from app.services.analysis import digest
-        metrics["_verified_document_set"] = digest(document_manifest(documents))
+        metrics["_verified_document_set"] = digest(manifest)
     if challenged_paths:
         _invalidate_review_resolutions(metrics, challenged_paths)
     return metrics
