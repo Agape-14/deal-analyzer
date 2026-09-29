@@ -346,6 +346,9 @@ export function DocumentsPanel({
                       {d.filename}
                     </button>
                     <DocumentVersionControls dealId={dealId} revision={revision} document={d} documents={documents} />
+                    {d.extraction_quality?.warnings?.map((warning) => (
+                      <p key={warning} className="mt-1 text-xs text-warning">{warning}</p>
+                    ))}
                     <div className="text-[11px] text-muted-foreground mt-0.5 flex items-center gap-2 flex-wrap">
                       <span className="uppercase tracking-wider">{d.doc_type.replace(/_/g, " ")}</span>
                       <span className="opacity-40">-</span>

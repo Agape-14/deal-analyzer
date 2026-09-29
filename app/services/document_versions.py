@@ -55,13 +55,23 @@ def document_payloads(documents):
     result = []
     for doc in documents:
         quality = doc.extraction_quality or {}
+        warnings = []
+        diagnostics = quality.get("page_diagnostics") or []
+        links = max((d.get("external_workbook_links", 0) for d in diagnostics), default=0)
+        if links:
+            warnings.append(f"Uses {links} external workbook links. Saved values can be checked, but formulas cannot be fully recalculated without the linked workbooks.")
+        if any(d.get("truncated") for d in diagnostics):
+            warnings.append("Some spreadsheet rows or columns exceed the reading limit. Review the original before relying on an omitted value.")
+        omitted = max((d.get("omitted_sheets", 0) for d in diagnostics), default=0)
+        if omitted:
+            warnings.append(f"{omitted} spreadsheet sheets exceed the reading limit and were not read. Review the original file.")
         result.append({
             "id": doc.id, "filename": doc.filename, "doc_type": doc.doc_type,
             "page_count": doc.page_count, "upload_date": doc.upload_date.isoformat() if doc.upload_date else None,
             "has_text": bool(doc.extracted_text), "file_sha256": file_hash(doc),
             **inventory[doc.id],
-            "extraction_quality": {key: quality.get(key) for key in (
-                "status", "error", "document_kind", "quality_score", "ocr_pages", "empty_pages")}
+            "extraction_quality": {**{key: quality.get(key) for key in (
+                "status", "error", "document_kind", "quality_score", "ocr_pages", "empty_pages")}, "warnings": warnings}
                 if quality else None,
         })
     return result

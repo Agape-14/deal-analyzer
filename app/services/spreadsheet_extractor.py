@@ -106,6 +106,7 @@ def _extract_xlsx(file_path: str) -> SpreadsheetExtractionResult:
             result.page_diagnostics.append(
                 {"page": sheet_index, "source": "spreadsheet", "chars": sum(len(r) for r in rows),
                  "external_workbook_links": external_links,
+                 "omitted_sheets": max(0, len(wb.sheetnames) - MAX_SHEETS),
                  "truncated": bool((ws.max_row or 0) > MAX_ROWS_PER_SHEET or (ws.max_column or 0) > MAX_COLS_PER_SHEET)}
             )
             if table_rows:
@@ -167,9 +168,15 @@ def _extract_xls(file_path: str) -> SpreadsheetExtractionResult:
         if table_rows:
             result.tables.append({"sheet": sheet.name, "rows": table_rows})
         result.page_diagnostics.append(
-            {"page": sheet_index + 1, "source": "spreadsheet", "chars": sum(len(r) for r in rows)}
+            {"page": sheet_index + 1, "source": "spreadsheet", "chars": sum(len(r) for r in rows),
+             "truncated": sheet.nrows > max_rows or sheet.ncols > max_cols,
+             "omitted_sheets": max(0, book.nsheets - MAX_SHEETS)}
         )
         text_parts.append(_render_sheet(sheet.name, rows))
+        if result.page_diagnostics[-1]["truncated"]:
+            text_parts[-1] += "\n[INCOMPLETE SHEET: reading limit reached; review the original file.]"
+    if book.nsheets > MAX_SHEETS:
+        text_parts.append(f"[INCOMPLETE WORKBOOK: {book.nsheets - MAX_SHEETS} sheets omitted; review the original file.]")
 
     result.key_rows = result.key_rows[:MAX_KEY_ROWS]
     result.page_count = sheet_count
@@ -183,11 +190,14 @@ def _extract_csv(file_path: str) -> SpreadsheetExtractionResult:
     result = SpreadsheetExtractionResult(page_count=1)
     rows: list[str] = []
     table_rows: list[list[str]] = []
+    truncated = False
     with open(file_path, newline="", encoding="utf-8-sig", errors="replace") as fh:
         reader = csv.reader(fh)
         for idx, row in enumerate(reader):
             if idx >= MAX_ROWS_PER_SHEET:
+                truncated = True
                 break
+            truncated = truncated or len(row) > MAX_COLS_PER_SHEET
             trimmed = row[:MAX_COLS_PER_SHEET]
             rendered = [_render_cell(cell) for cell in trimmed]
             if not any(cell.strip() for cell in rendered):
@@ -205,8 +215,10 @@ def _extract_csv(file_path: str) -> SpreadsheetExtractionResult:
     if table_rows:
         result.tables.append({"sheet": "CSV", "rows": table_rows})
     result.key_rows = result.key_rows[:MAX_KEY_ROWS]
-    result.page_diagnostics.append({"page": 1, "source": "spreadsheet", "chars": sum(len(r) for r in rows)})
+    result.page_diagnostics.append({"page": 1, "source": "spreadsheet", "chars": sum(len(r) for r in rows), "truncated": truncated})
     body = _render_sheet("CSV", rows)
+    if truncated:
+        body += "\n[INCOMPLETE SHEET: reading limit reached; review the original file.]"
     result.text = _render_key_rows(result.key_rows) + ("\n\n" if body else "") + body
     result.quality_score = 100 if result.text.strip() else 0
     return result

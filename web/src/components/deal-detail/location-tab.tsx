@@ -288,7 +288,7 @@ export function LocationTab({
   // moment on suburban deals.
   const autoWidenedRef = React.useRef(false);
   React.useEffect(() => {
-    if (!bundle || autoWidenedRef.current) return;
+    if (!bundle || autoWidenedRef.current || Object.keys(bundle.category_errors ?? {}).length) return;
     const anyPois = Object.values(bundle.categories ?? {}).some((v) => (v?.length ?? 0) > 0);
     if (!anyPois && radiusM < 3219 && hasCoords) {
       autoWidenedRef.current = true;
@@ -470,6 +470,11 @@ export function LocationTab({
 
       {/* ============== SIDE PANEL ============== */}
       <div className="flex flex-col gap-4 min-h-0">
+        {!!Object.keys(bundle?.category_errors ?? {}).length && (
+          <p role="status" className="rounded-lg border border-warning/30 bg-warning/10 p-3 text-xs text-warning">
+            Nearby places are incomplete for {Object.keys(bundle?.category_errors ?? {}).join(", ")}. The map provider did not respond. Refresh to try again; an empty layer does not mean there are no nearby places.
+          </p>
+        )}
         <Card elevated className="p-4">
           <div className="flex items-center gap-2 mb-3">
             <Layers className="h-4 w-4 text-muted-foreground" />

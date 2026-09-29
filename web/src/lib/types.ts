@@ -172,6 +172,7 @@ export interface DealDocument {
   upload_date: string;
   has_text: boolean;
   extraction_quality?: {
+    warnings?: string[];
     quality_score: number | null;
     ocr_pages: number;
     empty_pages: number[];
@@ -513,6 +514,7 @@ export interface LocationBundle {
   lng: number | null;
   radius_m: number;
   categories: Partial<Record<PoiCategory | string, Poi[]>>;
+  category_errors?: Record<string, string>;
   fmr: HudFmr | null;
   display_name: string | null;
   fetched_at: number;

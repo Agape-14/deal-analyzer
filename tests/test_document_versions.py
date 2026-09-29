@@ -31,6 +31,20 @@ def test_failed_legacy_duplicate_does_not_hide_successful_copy():
     assert [d.id for d in review_documents(docs)] == [2]
 
 
+def test_workbook_limitations_are_exposed_once_in_document_details():
+    from app.services.document_versions import document_payloads
+    source = doc(1, "a", name="Model.xlsx")
+    source.doc_type, source.page_count, source.upload_date = "proforma", 2, None
+    source.extraction_quality = {"page_diagnostics": [
+        {"external_workbook_links": 3, "truncated": False},
+        {"external_workbook_links": 3, "truncated": True},
+    ]}
+    warnings = document_payloads([source])[0]["extraction_quality"]["warnings"]
+    assert len(warnings) == 2
+    assert "3 external workbook links" in warnings[0]
+    assert "reading limit" in warnings[1]
+
+
 def test_exact_citation_identity_and_hash_deduplication():
     docs = [{"id": n, "filename": "Memo.pdf", "file_sha256": digest,
              "content_hash": digest, "page_count": 3} for n, digest in [(1, "a"), (2, "a")]]

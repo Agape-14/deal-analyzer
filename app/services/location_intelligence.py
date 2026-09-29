@@ -176,6 +176,7 @@ async def fetch_amenities(
     radius_m: int = 1600,   # ~1 mile default
     categories: list[str] | None = None,
     per_category_cap: int = 80,
+    errors: dict[str, str] | None = None,
 ) -> dict[str, list[dict]]:
     """Fetch POIs per category from Overpass, centered at (lat,lng).
 
@@ -200,7 +201,9 @@ async def fetch_amenities(
         async with sem:
             try:
                 elements = await overpass_query(body)
-            except httpx.HTTPError:
+            except (httpx.HTTPError, ValueError):
+                if errors is not None:
+                    errors[cat] = "Provider unavailable; nearby places have not been checked."
                 return
         points: list[dict] = []
         for el in elements:
@@ -333,11 +336,11 @@ async def build_location_bundle(
     if isinstance(cached, dict) and cached.get("radius_m") == radius_m:
         fetched_at = cached.get("fetched_at") or 0
         age = time.time() - float(fetched_at or 0)
-        if age < 7 * 86400 and cached.get("categories"):
+        if age < 7 * 86400 and cached.get("categories") and cached.get("coverage_version") == 1 and not cached.get("category_errors"):
             return cached
 
     # Need coords — try stored first, then geocode.
-    lat, lng = (deal.lat or None), (deal.lng or None)
+    lat, lng = deal.lat, deal.lng
     display = None
     if lat is None or lng is None:
         query = _compose_address(deal)
@@ -357,7 +360,8 @@ async def build_location_bundle(
         display = geo["display_name"]
 
     # Kick off Overpass + HUD in parallel
-    amenities_task = fetch_amenities(lat, lng, radius_m)
+    category_errors: dict[str, str] = {}
+    amenities_task = fetch_amenities(lat, lng, radius_m, errors=category_errors)
     fmr_task = _fmr_from_deal(deal)
     categories, fmr = await asyncio.gather(amenities_task, fmr_task)
 
@@ -366,6 +370,8 @@ async def build_location_bundle(
         "lng": lng,
         "radius_m": radius_m,
         "categories": categories,
+        "category_errors": category_errors,
+        "coverage_version": 1,
         "fmr": fmr,
         "display_name": display or _compose_address(deal),
         "fetched_at": time.time(),
