@@ -103,7 +103,7 @@ export function ChatPanel({ dealId }: { dealId: number }) {
           <div>
             <div className="text-sm font-semibold tracking-tight">Deal Analyst</div>
             <div className="text-[10px] text-muted-foreground">
-              Claude, grounded on this deal&apos;s metrics and uploaded docs.
+              AI explanations. Use Summary for accepted facts and Questions for unresolved evidence.
             </div>
           </div>
         </div>

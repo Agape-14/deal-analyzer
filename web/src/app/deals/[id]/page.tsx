@@ -8,7 +8,6 @@ import { AnalysisQuestions } from "@/components/deal-detail/analysis-questions";
 import { AnalysisHistory } from "@/components/deal-detail/analysis-history";
 import { SourceCitations } from "@/components/deal-detail/source-citations";
 import { AuditTrail } from "@/components/deal-detail/audit-trail";
-import { PipelineTimeline } from "@/components/deal-detail/pipeline-timeline";
 import { MetricsTab } from "@/components/deal-detail/metrics-tab";
 import { CashflowTab } from "@/components/deal-detail/cashflow-tab";
 import { DocumentsPanel } from "@/components/deal-detail/documents-panel";
@@ -49,7 +48,7 @@ export default async function DealDetailPage({
           defaultTab={tab}
           overview={<AcceptedSummary deal={deal} />}
           questions={<AnalysisQuestions deal={deal} />}
-          audit={<div className="space-y-6"><AnalysisHistory dealId={deal.id} revision={deal.revision} analysisVersion={deal.analysis?.version} /><SourceCitations deal={deal} /><PipelineTimeline deal={deal} /><AuditTrail deal={deal} /></div>}
+          audit={<div className="space-y-6"><AnalysisHistory dealId={deal.id} revision={deal.revision} analysisVersion={deal.analysis?.version} /><SourceCitations deal={deal} /><AuditTrail deal={deal} /></div>}
           metrics={<MetricsTab deal={deal} />}
           cashflow={<CashflowTab dealId={deal.id} projectedIrr={deal.target_irr} />}
           location={
