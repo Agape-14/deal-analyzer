@@ -1,12 +1,19 @@
 const { test: base, expect } = require('@playwright/test');
 const fs = require('node:fs/promises');
 
+async function handleWelcomeTour(page) {
+  await page.addLocatorHandler(page.getByRole('dialog', { name: 'Welcome to Kenyon', exact: true }), async () => {
+    await page.getByRole('button', { name: 'Skip tour', exact: true }).click();
+  });
+}
+
 // These tests run against the real local API and compiled Next frontend.
 // Only the optional upstream outage case is mocked. No private data is imported.
 const test = base.extend({
   page: async ({ page, context }, use) => {
     const errors = [];
     page.on('pageerror', error => errors.push(error.message));
+    await handleWelcomeTour(page);
     await context.route('**/*', route => {
       const url = new URL(route.request().url());
       return ['127.0.0.1', 'localhost'].includes(url.hostname) ? route.continue() : route.abort();
@@ -22,7 +29,7 @@ async function dealPage(page, id = 1, tab) {
 }
 
 test('real sign-in rejects bad credentials and refreshes authenticated controls', async ({ browser }) => {
-  const context = await browser.newContext();
+  const context = await browser.newContext({ storageState: { cookies: [], origins: [] } });
   const page = await context.newPage();
   await page.goto('http://127.0.0.1:3000/deals/1');
   await expect(page).toHaveURL(/\/login\?next=/);
@@ -33,6 +40,8 @@ test('real sign-in rejects bad credentials and refreshes authenticated controls'
   await page.getByLabel('Password', { exact: true }).fill('synthetic-browser-password');
   await page.getByRole('button', { name: 'Sign in', exact: true }).click();
   await expect(page).toHaveURL(/\/deals\/1$/);
+  await expect(page.getByRole('dialog', { name: 'Welcome to Kenyon', exact: true })).toBeVisible();
+  await page.getByRole('button', { name: 'Skip tour', exact: true }).click();
   await expect(page.getByRole('tab', { name: 'Analyst', exact: true })).toBeVisible();
   await context.close();
 });
@@ -204,6 +213,7 @@ test('optional location outage leaves deal summary and navigation available', as
 test('viewer can read accepted facts but cannot mutate deal records', async ({ browser }) => {
   const context = await browser.newContext({ storageState: '.browser-auth/viewer.json', baseURL: 'http://127.0.0.1:3000' });
   const page = await context.newPage();
+  await handleWelcomeTour(page);
   await dealPage(page, 1, 'questions');
   await expect(page.getByRole('tab', { name: 'Analyst', exact: true })).toHaveCount(0);
   await expect(page.getByRole('button', { name: 'Resolve with an analyst decision', exact: true })).toHaveCount(0);
