@@ -1,7 +1,6 @@
 "use client";
 
 import * as React from "react";
-import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -19,7 +18,6 @@ export function AnalysisQuestions({ deal }: { deal: DealDetail }) {
 }
 
 function QuestionCard({ question, deal }: { question: AnalysisQuestion; deal: DealDetail }) {
-  const router = useRouter();
   const { isAnalyst, loading } = useCurrentUser();
   const [values, setValues] = React.useState<Record<string, string>>(() => Object.fromEntries(question.issues.map(i => [i.path, String(deal.analysis?.facts[i.path]?.value ?? "")])));
   const [reason, setReason] = React.useState("");
@@ -31,10 +29,13 @@ function QuestionCard({ question, deal }: { question: AnalysisQuestion; deal: De
     setSaving(true); setError("");
     try {
       await api.post(`/api/deals/${deal.id}/analysis/resolve`, { expected_revision: deal.revision, reason, fields: question.issues.map(i => ({ path: i.path, value: values[i.path] })) });
-      router.refresh();
+      // Reload the current tab after the committed save so the server-rendered
+      // summary and question list cannot retain different analysis revisions.
+      window.location.reload();
     } catch (err) {
       setError((err as { detail?: string }).detail ?? (err instanceof Error ? err.message : "The decisions could not be saved. Reload and try again."));
-    } finally { setSaving(false); }
+      setSaving(false);
+    }
   }
   return <Card className="p-5 md:p-6"><h3 className="text-base font-semibold">{question.title}</h3><p className="mt-1 text-sm text-muted-foreground">{question.impact}</p>
     <form onSubmit={save} className="mt-4 space-y-4">

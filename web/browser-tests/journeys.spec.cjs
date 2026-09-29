@@ -72,6 +72,7 @@ test('hold summary withholds unrelated exit returns and stale status claims', as
   await expect(main.getByRole('heading', { name: 'Investment considerations' })).toHaveCount(0);
   await page.getByRole('tab', { name: 'Questions', exact: true }).click();
   await expect(page.getByText(/No material questions remain/)).toBeVisible();
+  await expect(page.getByText('$30K', { exact: true })).toBeVisible();
   await page.getByRole('tab', { name: 'Analysis', exact: true }).click();
   await page.getByRole('tab', { name: 'Evidence and history', exact: true }).click();
   await expect(page.getByRole('heading', { name: 'Analysis history', exact: true })).toBeVisible();
