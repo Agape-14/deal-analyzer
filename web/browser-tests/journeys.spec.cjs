@@ -42,7 +42,7 @@ test('real sign-in rejects bad credentials and refreshes authenticated controls'
   await expect(page).toHaveURL(/\/deals\/1$/);
   await expect(page.getByRole('dialog', { name: 'Welcome to Kenyon', exact: true })).toBeVisible();
   await page.getByRole('button', { name: 'Skip tour', exact: true }).click();
-  await expect(page.getByRole('tab', { name: 'Analyst', exact: true })).toBeVisible();
+  await expect(page.getByRole('tab', { name: 'Assistant', exact: true })).toBeVisible();
   await context.close();
 });
 
@@ -163,7 +163,7 @@ test('unsupported models show reasons and assistant works without provider credi
   await expect(page.getByText(/Missing or disputed assumptions: avg rent per unit/)).toBeVisible();
   await expect(page.getByRole('status').filter({ hasText: 'Waterfall unavailable: Refinancing distributions require' })).toBeVisible();
   await expect(page.getByText(/Multiple equity classes require/)).toBeVisible();
-  await page.getByRole('tab', { name: 'Analyst', exact: true }).click();
+  await page.getByRole('tab', { name: 'Assistant', exact: true }).click();
   await expect(page.getByText(/Answers from the current reviewed facts/)).toBeVisible();
   await expect(page.getByText('Earlier analysis · open archived reply', { exact: true })).toBeVisible();
   await expect(page.getByText('Synthetic saved conversation. Summary holds the accepted figures.')).not.toBeVisible();
@@ -228,7 +228,7 @@ test('viewer can read accepted facts but cannot mutate deal records', async ({ b
   const page = await context.newPage();
   await handleWelcomeTour(page);
   await dealPage(page, 1, 'questions');
-  await expect(page.getByRole('tab', { name: 'Analyst', exact: true })).toHaveCount(0);
+  await expect(page.getByRole('tab', { name: 'Assistant', exact: true })).toHaveCount(0);
   await expect(page.getByRole('button', { name: 'Resolve with an analyst decision', exact: true })).toHaveCount(0);
   const denied = await page.request.put('/api/deals/1', { data: { notes: 'Viewer must not write' } });
   expect(denied.status()).toBe(403);
@@ -278,7 +278,7 @@ test('upload-first intake creates a deal from two documents without manual detai
 
 test('failed assistant request retains question and can be retried', async ({ page }) => {
   await dealPage(page, 1, 'chat');
-  await page.getByRole('tab', { name: 'Analyst', exact: true }).click();
+  await page.getByRole('tab', { name: 'Assistant', exact: true }).click();
   const input = page.getByPlaceholder('Ask about accepted returns, terms or missing evidence…');
   await page.route('**/api/chat', route => route.fulfill({ status: 503, contentType: 'application/json', body: JSON.stringify({ detail: 'Synthetic temporary interruption' }) }), { times: 1 });
   await input.fill('Show investment terms');
@@ -287,4 +287,127 @@ test('failed assistant request retains question and can be retried', async ({ pa
   await expect(page.getByText("Couldn't send message", { exact: true })).toBeVisible();
   await page.getByRole('button', { name: 'Send', exact: true }).click();
   await expect(page.getByText(/Minimum investment: unspecified 25,000/).last()).toBeVisible();
+});
+
+test('manual deal details persist and financial locks remain unchanged', async ({ page }) => {
+  await page.goto('/');
+  await page.getByRole('button', { name: 'New Deal', exact: true }).click();
+  const drawer = page.getByRole('dialog', { name: 'New deal', exact: true });
+  await drawer.getByRole('button', { name: 'Enter details', exact: true }).click();
+  await drawer.getByLabel('Project name').fill('Manual browser draft');
+  await drawer.getByRole('button', { name: 'Create deal', exact: true }).click();
+  await expect(page.getByRole('heading', { name: 'Manual browser draft', exact: true })).toBeVisible();
+  const id = Number(new URL(page.url()).pathname.split('/').pop());
+  await page.request.post(`/api/deals/${id}/fields/edit`, { data: { path: 'deal_structure.minimum_investment', value: 25000, lock: true } });
+  await page.reload();
+  await page.getByRole('tab', { name: 'Analysis', exact: true }).click();
+  await page.getByText('Edit deal details', { exact: true }).click();
+  await page.getByLabel('Deal name', { exact: true }).fill('Updated browser draft');
+  await page.getByLabel('Decision status', { exact: true }).selectOption('interested');
+  await page.getByLabel('Deal notes', { exact: true }).fill('Browser evidence follow-up');
+  await page.getByRole('button', { name: 'Save deal details', exact: true }).click();
+  await expect(page.getByRole('heading', { name: 'Updated browser draft', exact: true })).toBeVisible();
+  const detail = await (await page.request.get(`/api/deals/${id}`)).json();
+  expect(detail.notes).toBe('Browser evidence follow-up');
+  expect(detail.status).toBe('interested');
+  expect(detail.minimum_investment).toBe(25000);
+  expect(detail.metrics._locks['deal_structure.minimum_investment']).toBe(true);
+});
+
+test('sponsor notes can be edited and remain saved', async ({ page }) => {
+  await page.goto('/developers/1');
+  await page.getByRole('button', { name: 'Edit', exact: true }).click();
+  const drawer = page.getByRole('dialog', { name: 'Edit developer', exact: true });
+  await drawer.getByLabel('Sponsor notes', { exact: true }).fill('Browser-reviewed sponsor note');
+  await drawer.getByRole('button', { name: 'Save', exact: true }).click();
+  await expect(drawer).not.toBeVisible();
+  expect((await (await page.request.get('/api/developers/1')).json()).notes).toBe('Browser-reviewed sponsor note');
+  await page.reload();
+  await page.getByRole('button', { name: 'Edit', exact: true }).click();
+  await expect(page.getByLabel('Sponsor notes', { exact: true })).toHaveValue('Browser-reviewed sponsor note');
+});
+
+test('portfolio creation, editing, distribution, exit and undo work together', async ({ page }) => {
+  await page.goto('/portfolio');
+  await page.getByRole('button', { name: 'Add investment', exact: true }).first().click();
+  let drawer = page.getByRole('dialog', { name: 'Add investment', exact: true });
+  await drawer.getByLabel('Project name').fill('Browser Position');
+  await drawer.getByLabel('Amount invested').fill('1000');
+  await drawer.getByLabel('Investment date').fill('2025-01-01');
+  await drawer.getByRole('button', { name: 'Add investment', exact: true }).click();
+  await expect(page.getByRole('heading', { name: 'Browser Position', exact: true })).toBeVisible();
+  const investments = await (await page.request.get('/api/investments/')).json();
+  const id = investments.find(position => position.project_name === 'Browser Position').id;
+  const card = page.getByTestId(`investment-${id}`);
+  await card.getByRole('button', { name: 'Position actions', exact: true }).click();
+  await card.getByRole('button', { name: 'Edit investment', exact: true }).click();
+  drawer = page.getByRole('dialog', { name: 'Edit investment', exact: true });
+  await drawer.getByLabel('Amount invested').fill('2000');
+  await drawer.getByRole('button', { name: 'Save investment', exact: true }).click();
+  await expect(drawer).not.toBeVisible();
+  await card.getByRole('button', { name: 'Position actions', exact: true }).click();
+  await card.getByRole('button', { name: 'Add distribution', exact: true }).click();
+  const distribution = page.getByRole('dialog', { name: 'Add distribution', exact: true });
+  await distribution.getByLabel('Amount', { exact: true }).fill('100');
+  await distribution.getByRole('button', { name: 'Add distribution', exact: true }).click();
+  await expect(distribution).not.toBeVisible();
+  await card.getByRole('button', { name: 'Position actions', exact: true }).click();
+  await card.getByRole('button', { name: 'Mark exited…', exact: true }).click();
+  const exit = page.getByRole('dialog', { name: 'Mark as exited', exact: true });
+  await exit.getByLabel('Exit amount', { exact: true }).fill('3000');
+  await exit.getByRole('button', { name: 'Mark exited', exact: true }).click();
+  await expect(exit).not.toBeVisible();
+  const actual = await (await page.request.get(`/api/investments/${id}`)).json();
+  expect(actual.amount_invested).toBe(2000);
+  expect(actual.total_distributions).toBe(100);
+  expect(actual.exit_amount).toBe(3000);
+  expect(actual.actual_multiple).toBe(1.55);
+  page.once('dialog', dialog => dialog.accept());
+  await card.getByRole('button', { name: 'Position actions', exact: true }).click();
+  await card.getByRole('button', { name: 'Delete', exact: true }).click();
+  await expect(card).not.toBeVisible();
+  await page.getByRole('button', { name: 'Undo', exact: true }).click();
+  await expect(card).toBeVisible();
+  expect((await page.request.get(`/api/investments/${id}`)).status()).toBe(200);
+});
+
+test('comparison presets, custom rows and incompatible modes remain usable', async ({ page }) => {
+  await page.goto('/compare?ids=1,2,3');
+  await expect(page.getByText(/3 deals ·/)).toBeVisible();
+  for (const [label, preset] of [['Returns', 'returns'], ['Leverage & structure', 'structure'], ['Risk profile', 'risk'], ['Market & location', 'market'], ['Sponsor quality', 'sponsor'], ['Underwriting conservatism', 'underwriting'], ['All', 'all']]) {
+    await page.getByRole('button', { name: label, exact: true }).click();
+    await expect(page).toHaveURL(new RegExp(`preset=${preset}`));
+  }
+  await page.getByRole('button', { name: 'Build your own', exact: true }).click();
+  const drawer = page.getByRole('dialog', { name: 'Build your own preset', exact: true });
+  await drawer.getByRole('button', { name: 'Clear', exact: true }).click();
+  await drawer.getByRole('button', { name: /^Cash-on-Cash/ }).click();
+  await drawer.getByRole('button', { name: 'Save preset', exact: true }).click();
+  const row = page.getByTestId('compare-row-cash_on_cash');
+  await expect(row).toBeVisible();
+  await page.getByRole('button', { name: 'Normalized', exact: true }).click();
+  await expect(row.getByRole('progressbar')).toHaveCount(0);
+  await expect(row.getByText('Different or unspecified context · values only')).toBeVisible();
+  await page.getByRole('button', { name: 'Deltas', exact: true }).click();
+  await page.getByRole('button', { name: /^Baseline:/ }).click();
+  await page.getByRole('button', { name: 'Sample Questions', exact: true }).click();
+  await expect(page).toHaveURL(/baseline=2/);
+  await page.reload();
+  await expect(page.getByTestId('compare-row-cash_on_cash')).toBeVisible();
+});
+
+test('sign-out and an expired session return to sign-in', async ({ browser }) => {
+  const context = await browser.newContext({ storageState: '.browser-auth/admin.json', baseURL: 'http://127.0.0.1:3000' });
+  const page = await context.newPage();
+  await handleWelcomeTour(page);
+  await page.goto('/');
+  await page.getByRole('button', { name: 'Sign out', exact: true }).click();
+  await expect(page).toHaveURL(/\/login$/);
+  await page.goto('/deals/1');
+  await expect(page).toHaveURL(/\/login\?next=/);
+  await context.addCookies([{ name: 'kenyon_session', value: 'synthetic-expired-session', domain: '127.0.0.1', path: '/' }]);
+  await page.goto('/deals/1');
+  await expect(page).toHaveURL(/\/login\?next=/);
+  await expect(page.getByLabel('Username', { exact: true })).toBeVisible();
+  await context.close();
 });

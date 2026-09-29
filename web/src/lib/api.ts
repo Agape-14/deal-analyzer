@@ -97,6 +97,7 @@ async function request<T>(
     });
 
     if (!res.ok) {
+      if (!path.startsWith("/api/auth/")) handleAuthError({ status: res.status });
       let detail = res.statusText;
       try {
         const body = await res.json();

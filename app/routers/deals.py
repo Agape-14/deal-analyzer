@@ -11,7 +11,7 @@ from sqlalchemy.orm import selectinload
 from pydantic import BaseModel, Field, field_validator
 from typing import Optional
 from app.database import get_db
-from app.models import Deal, DealDocument
+from app.models import Deal, DealDocument, Developer
 from app.services.deal_validator import validate_deal_metrics
 from app.services.math_checker import run_math_checks
 from app.services.market_data import fetch_market_data
@@ -64,6 +64,7 @@ class DealCreate(BaseModel):
 
 
 class DealUpdate(BaseModel):
+    expected_revision: Optional[int] = Field(None, ge=1)
     developer_id: Optional[int] = Field(None, ge=1)
     project_name: Optional[str] = Field(None, min_length=1, max_length=255)
     location: Optional[str] = Field(None, max_length=500)
@@ -204,12 +205,29 @@ async def get_deal(deal_id: int, db: AsyncSession = Depends(get_db)):
 async def update_deal(deal_id: int, data: DealUpdate, db: AsyncSession = Depends(get_db)):
     result = await db.execute(select(Deal).where(Deal.id == deal_id))
     deal = result.scalar_one_or_none()
-    if not deal:
+    if not deal or deal.deleted_at is not None:
         raise HTTPException(status_code=404, detail="Deal not found")
+    if data.expected_revision is not None and data.expected_revision != deal.revision:
+        raise HTTPException(409, "The deal changed. Reload before saving your edits.")
 
     update_data = data.model_dump(exclude_unset=True)
+    update_data.pop("expected_revision", None)
+    if "developer_id" in update_data and update_data["developer_id"] is not None:
+        sponsor = await db.get(Developer, update_data["developer_id"])
+        if not sponsor or sponsor.deleted_at is not None:
+            raise HTTPException(422, "Choose an active sponsor")
+    intake = dict((deal.metrics or {}).get("_intake") or {})
+    if intake:
+        automatic = dict(intake.get("auto_fields") or {})
+        for key in update_data:
+            automatic.pop("sponsor" if key == "developer_id" else key, None)
+        intake["auto_fields"] = automatic
+        if "project_name" in update_data:
+            intake["name_origin"] = "manual"
+        if "metrics" not in update_data:
+            deal.metrics = {**(deal.metrics or {}), "_intake": intake}
     for key, value in update_data.items():
-        if value is not None:
+        if value is not None or key == "developer_id":
             setattr(deal, key, value)
     await db.commit()
     await db.refresh(deal)

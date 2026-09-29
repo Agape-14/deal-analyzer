@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/button";
 import { NeedsReviewPanel } from "@/components/needs-review-panel";
 import { PipelineWidgets, type PipelineSummary } from "@/components/pipeline-widgets";
 import Link from "next/link";
+import { redirect } from "next/navigation";
 import { LayoutDashboard } from "lucide-react";
 
 export const dynamic = "force-dynamic";
@@ -22,6 +23,7 @@ export default async function Home() {
       api.get<PipelineSummary>("/api/deals/pipeline/summary").catch(() => null),
     ]);
   } catch (e) {
+    if ((e as { status?: number }).status === 401) redirect("/login?next=%2F");
     error = (e as { detail?: string }).detail ?? "Failed to load deals";
   }
 

@@ -77,7 +77,7 @@ async def intake_documents(background_tasks: BackgroundTasks, files: list[Upload
         raise HTTPException(422, "Invalid upload request id")
     if not 1 <= len(files) <= 10:
         raise HTTPException(422, "Choose between 1 and 10 documents")
-    if len(project_name.strip()) > 500:
+    if len(project_name.strip()) > 255:
         raise HTTPException(422, "Deal name is too long")
     for file in files:
         if _upload_extension(file) not in ALLOWED_EXTS:
@@ -89,7 +89,7 @@ async def intake_documents(background_tasks: BackgroundTasks, files: list[Upload
         raise HTTPException(409, "This upload belongs to a deleted deal. Start a new upload.")
     if not deal:
         filename = os.path.basename((files[0].filename or "New deal").replace("\\", "/"))
-        title = project_name.strip() or os.path.splitext(filename)[0].replace("_", " ")[:500] or "New deal"
+        title = project_name.strip() or os.path.splitext(filename)[0].replace("_", " ")[:255] or "New deal"
         deal = Deal(project_name=title, intake_token=token, property_type="other",
                     metrics={"_intake": {"name_origin": "manual" if project_name.strip() else "filename", "initial_name": title}})
         db.add(deal)

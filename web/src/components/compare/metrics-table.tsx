@@ -112,6 +112,7 @@ function RowLine({
 
   return (
     <motion.div
+      data-testid={`compare-row-${row.key}`}
       initial={{ opacity: 0, y: 2 }}
       animate={{ opacity: 1, y: 0 }}
       transition={{ duration: 0.22, delay: Math.min(delayStep, 0.2) }}
@@ -184,7 +185,7 @@ function Cell({
     return (
       <div className="min-w-0">
         <div className="text-sm text-right tabular-nums font-medium">{formatValue(cell.raw, row.format)}</div>
-        <div className="mt-1 h-1 rounded-full bg-muted overflow-hidden">
+        <div className="mt-1 h-1 rounded-full bg-muted overflow-hidden" role="progressbar" aria-label={`Relative comparison for ${row.label}`} aria-valuenow={pct} aria-valuemin={0} aria-valuemax={100}>
           <motion.div
             className={cn(
               "h-full rounded-full",

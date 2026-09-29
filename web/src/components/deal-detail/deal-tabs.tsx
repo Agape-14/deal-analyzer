@@ -19,7 +19,7 @@ const TABS = [
   { key: "questions", label: "Questions", icon: CircleHelp },
   { key: "documents", label: "Documents", icon: FileText },
   { key: "analysis", label: "Analysis", icon: Waves },
-  { key: "chat", label: "Analyst", icon: MessageSquare },
+  { key: "chat", label: "Assistant", icon: MessageSquare },
 ] as const;
 
 export type DealTabKey = (typeof TABS)[number]["key"] | "metrics" | "cashflow" | "location" | "audit";

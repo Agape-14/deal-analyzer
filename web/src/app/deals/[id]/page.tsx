@@ -1,4 +1,4 @@
-import { notFound } from "next/navigation";
+import { notFound, redirect } from "next/navigation";
 import { api } from "@/lib/api";
 import type { DealDetail } from "@/lib/types";
 import { DealHero } from "@/components/deal-detail/hero";
@@ -13,6 +13,7 @@ import { CashflowTab } from "@/components/deal-detail/cashflow-tab";
 import { DocumentsPanel } from "@/components/deal-detail/documents-panel";
 import { ChatPanel } from "@/components/deal-detail/chat-panel";
 import { LocationTab } from "@/components/deal-detail/location-tab";
+import { DealDetails } from "@/components/deal-detail/deal-details";
 
 export const dynamic = "force-dynamic";
 
@@ -33,6 +34,7 @@ export default async function DealDetailPage({
     deal = await api.get<DealDetail>(`/api/deals/${dealId}`);
   } catch (e) {
     const err = e as { status?: number; detail?: string };
+    if (err.status === 401) redirect(`/login?next=${encodeURIComponent(`/deals/${dealId}`)}`);
     if (err.status === 404) notFound();
     throw e;
   }
@@ -49,7 +51,7 @@ export default async function DealDetailPage({
           overview={<AcceptedSummary deal={deal} />}
           questions={<AnalysisQuestions deal={deal} />}
           audit={<div className="space-y-6"><AnalysisHistory dealId={deal.id} revision={deal.revision} analysisVersion={deal.analysis?.version} /><SourceCitations deal={deal} /><AuditTrail deal={deal} /></div>}
-          metrics={<MetricsTab deal={deal} />}
+          metrics={<><DealDetails deal={deal} /><MetricsTab deal={deal} /></>}
           cashflow={<CashflowTab dealId={deal.id} projectedIrr={deal.target_irr} />}
           location={
             <LocationTab

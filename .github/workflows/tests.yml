@@ -21,11 +21,14 @@ jobs:
       - run: python -m pytest --junitxml=test-results.xml
         env:
           AUTH_DISABLED: "1"
+      - run: python scripts/evaluate_analysis.py --output analysis-benchmark.json
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: backend-test-results
-          path: test-results.xml
+          path: |
+            test-results.xml
+            analysis-benchmark.json
   frontend:
     runs-on: ubuntu-latest
     timeout-minutes: 15
