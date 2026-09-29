@@ -27,6 +27,18 @@ def test_unknown_fields_never_enter_accepted_inputs_and_optional_fields_are_not_
     assert result["coverage"]["manual"] > 0
 
 
+def test_hold_questions_exclude_optional_irr_and_duplicate_yield_aliases():
+    metrics = manual_metrics()
+    metrics["target_returns"].update(gross_irr=24, net_irr=None, target_equity_multiple=None, distribution_yield=None)
+    metrics["_provenance"]["target_returns.gross_irr"] = {"status": "wrong"}
+    analysis = build_analysis(metrics)
+    assert analysis["questions"] == []
+    assert analysis["facts"]["target_returns.gross_irr"]["state"] == "disputed"
+    metrics["_provenance"]["target_returns.hold_scenario.cash_on_cash_return"] = {"status": "wrong"}
+    issues = [i for q in build_analysis(metrics)["questions"] for i in q["issues"]]
+    assert [i["path"] for i in issues] == ["target_returns.hold_scenario.cash_on_cash_return"]
+
+
 def test_confirmed_without_a_real_locator_is_still_reported():
     metrics = manual_metrics()
     path = "target_returns.hold_scenario.cash_on_cash_return"

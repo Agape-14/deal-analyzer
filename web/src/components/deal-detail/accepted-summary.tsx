@@ -39,7 +39,6 @@ export function AcceptedSummary({ deal }: { deal: DealDetail }) {
   if (!analysis) return <Card className="p-6">Analysis is unavailable. Reload after document review completes.</Card>;
   const facts = analysis.facts;
   const paths = ["deal_structure.total_project_cost", "deal_structure.total_equity_required", "deal_structure.debt_amount", "deal_structure.minimum_investment", "deal_structure.hold_period_years", "project_details.unit_count", "financial_projections.stabilized_noi", "underwriting_checks.dscr"];
-  const cautions = (deal.metrics.validation_flags ?? []).filter(f => ["red", "yellow"].includes(f.severity) && !/data (integrity|conflict)|staleness/i.test(f.category));
   return <div className="space-y-6">
     <Card className="p-5 md:p-6">
       <div className="flex flex-wrap items-start justify-between gap-4">
@@ -57,7 +56,6 @@ export function AcceptedSummary({ deal }: { deal: DealDetail }) {
         return <div key={path}><div className="text-xs text-muted-foreground">{fact?.label ?? path.split(".").pop()?.replaceAll("_", " ")}</div><div className="mt-1 text-lg font-semibold">{factValue(fact)}</div><FactEvidence fact={fact} /></div>;
       })}</div>
     </Card>
-    {cautions.length > 0 && <Card className="p-5 md:p-6"><h2 className="text-lg font-semibold">Investment considerations</h2><p className="mt-1 text-sm text-muted-foreground">These inform your decision and do not require confirmation clicks.</p><ul className="mt-4 space-y-3 text-sm">{cautions.map((f, i) => <li key={i}><strong>{f.category}:</strong> {f.message}</li>)}</ul></Card>}
     <p className="text-sm text-muted-foreground">Upload missing or newer evidence in <Link className="underline" href={`/deals/${deal.id}?tab=documents`}>Documents</Link>. Reported values, optional context, projections and audit details remain under Analysis.</p>
   </div>;
 }

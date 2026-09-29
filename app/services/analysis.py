@@ -358,6 +358,14 @@ def build_analysis(metrics, documents=None, property_type="multifamily"):
     material = required | {p for p in facts if p.startswith("target_returns.") and p.split(".")[-1] not in {"primary_strategy", "total_project_profit"}}
     # Optional alternate scenarios remain inspectable, not mandatory chores.
     material = {p for p in material if not (".sale_scenario." in p and strategy.startswith("hold")) and not (".hold_scenario." in p and strategy == "sale")}
+    if strategy in {"hold", "hold_with_sale_option"}:
+        # A hold summary needs a cash yield, not every historic IRR/multiple
+        # alias or an optional exit calculation. Keep those facts in Analysis.
+        material = {p for p in material if not p.startswith("target_returns.")}
+        if returns.get("cash_on_cash") is None:
+            candidates = ("target_returns.hold_scenario.cash_on_cash_return", "target_returns.target_cash_on_cash",
+                          "target_returns.hold_scenario.distribution_yield", "target_returns.distribution_yield")
+            material.add(next((p for p in candidates if p in facts and facts[p].value is not None), candidates[0]))
     grouped = defaultdict(list)
     for issue in reconciliation:
         grouped[issue.get("area", group_for(issue["path"]))].append({k: v for k, v in issue.items() if k != "area"})
