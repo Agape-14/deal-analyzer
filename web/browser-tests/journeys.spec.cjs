@@ -158,7 +158,9 @@ test('preview and adoption update history without losing manual values', async (
 
 test('unsupported models show reasons and chat failure remains recoverable', async ({ page }) => {
   await dealPage(page, 1, 'cashflow');
-  await expect(page.getByText(/Refinancing or cash-out terms require/)).toBeVisible();
+  await expect(page.getByRole('status').filter({ hasText: 'Projection needs source-supported assumptions.' })).toBeVisible();
+  await expect(page.getByText(/Missing or disputed assumptions: avg rent per unit/)).toBeVisible();
+  await expect(page.getByRole('status').filter({ hasText: 'Waterfall unavailable: Refinancing distributions require' })).toBeVisible();
   await expect(page.getByText(/Multiple equity classes require/)).toBeVisible();
   await page.getByRole('tab', { name: 'Analyst', exact: true }).click();
   await expect(page.getByText(/AI explanations. Use Summary for accepted facts/)).toBeVisible();
@@ -195,7 +197,7 @@ test('developer detail and populated portfolio load through real routes', async 
   await expect(page.getByRole('heading', { name: 'Synthetic Sponsor', exact: true })).toBeVisible();
   await expect(page.getByRole('link', { name: 'Sample Hold', exact: true })).toBeVisible();
   await page.getByRole('link', { name: 'Portfolio', exact: true }).click();
-  await expect(page.getByText('Synthetic Position', { exact: true })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Synthetic Position', exact: true })).toBeVisible();
   await expect(page.getByText('No positions yet', { exact: true })).toHaveCount(0);
   const pdf = await page.request.get('/api/reports/portfolio/quarterly/pdf');
   expect(pdf.ok()).toBeTruthy();
