@@ -83,8 +83,7 @@ export function NewDealDrawer() {
       .catch(() => setDevelopers([]));
   }, [open, mode, developers]);
 
-  function closeAndClear() {
-    if (submitting) return;
+  function clearDraft() {
     setOpen(false);
     setFiles([]);
     setMode("upload");
@@ -102,6 +101,11 @@ export function NewDealDrawer() {
         property_type: "multifamily",
       });
     }, 250);
+  }
+
+  function closeAndClear() {
+    if (submitting) return;
+    clearDraft();
     // clear ?new=1 from URL if present
     if (searchParams?.get("new")) {
       router.replace("/", { scroll: false });
@@ -133,9 +137,7 @@ export function NewDealDrawer() {
           setFiles(current => current.filter(file => failedNames.has(file.name)));
           throw new Error(result.errors.map((error: { filename: string; detail: string }) => `${error.filename}: ${error.detail}`).join(" · "));
         }
-        setOpen(false);
-        setFiles([]);
-        tokenRef.current = null;
+        clearDraft();
         toast.success("Documents saved", { description: "Your deal is ready for document review." });
         router.push(`/deals/${result.deal_id}?tab=documents`);
         router.refresh();
@@ -171,7 +173,7 @@ export function NewDealDrawer() {
       toast.success(`Created “${form.project_name.trim()}”`, {
         description: "Upload an offering memo to auto-populate metrics.",
       });
-      setOpen(false);
+      clearDraft();
       router.push(`/deals/${deal.id}?tab=documents`);
       router.refresh();
     } catch (err) {

@@ -87,6 +87,7 @@ class DistributionCreate(BaseModel):
 
 # ===== Investment Endpoints =====
 
+@router.get("", include_in_schema=False)
 @router.get("/")
 async def list_investments(
     trash: bool = False,
@@ -175,6 +176,7 @@ async def investment_performance_endpoint(
     return investment_performance(inv)
 
 
+@router.post("", include_in_schema=False)
 @router.post("/")
 async def create_investment(data: InvestmentCreate, db: AsyncSession = Depends(get_db)):
     """Create a new investment."""

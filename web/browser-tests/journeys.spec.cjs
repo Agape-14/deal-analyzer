@@ -12,7 +12,7 @@ async function handleWelcomeTour(page) {
 const test = base.extend({
   page: async ({ page, context }, use) => {
     const errors = [];
-    page.on('pageerror', error => errors.push(error.message));
+    page.on('pageerror', error => errors.push(error.stack || error.message));
     await handleWelcomeTour(page);
     await context.route('**/*', route => {
       const url = new URL(route.request().url());
@@ -155,6 +155,9 @@ test('preview and adoption update history without losing manual values', async (
   const deal = await (await page.request.get('/api/deals/1')).json();
   expect(deal.target_cash_on_cash).toBe(8.5);
   expect(deal.target_irr).toBeNull();
+  await page.getByRole('button', { name: 'New Deal', exact: true }).click();
+  await expect(drawer.getByLabel('Deal name (optional)')).toHaveValue('');
+  await expect(drawer.getByText('Browser_Offering.csv', { exact: true })).toHaveCount(0);
 });
 
 test('unsupported models show reasons and assistant works without provider credits', async ({ page }) => {

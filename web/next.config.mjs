@@ -52,6 +52,9 @@ const SECURITY_HEADERS = [
 const nextConfig = {
   reactStrictMode: true,
   poweredByHeader: false,
+  // Keep the incoming host in middleware redirects, including loopback hosts
+  // used by local deployments and browser verification.
+  skipMiddlewareUrlNormalize: true,
 
   async headers() {
     return [
