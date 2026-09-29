@@ -188,13 +188,15 @@ def _hold_target_irr(metrics: Dict[str, Any] | None) -> Dict[str, Any] | None:
     sale = tr.get("sale_scenario") if isinstance(tr.get("sale_scenario"), dict) else {}
     sale_irr = sale.get("sale_irr")
 
+    contexts = metrics.get("_fact_context") or {}
+    explicit = [path for path in ("target_returns.net_irr", "target_returns.target_irr")
+                if (contexts.get(path) or {}).get("scenario") == "hold"]
     picked = pick_metric_detail(
         metrics,
         (
             "target_returns.hold_scenario.net_irr",
             "target_returns.hold_scenario.target_irr",
-            "target_returns.net_irr",
-            "target_returns.target_irr",
+            *explicit,
         ),
     )
     if not picked:

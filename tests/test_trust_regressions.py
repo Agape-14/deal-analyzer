@@ -62,6 +62,19 @@ def test_generic_base_case_does_not_imply_hold():
     assert primary_strategy({"deal_structure": {"business_plan": "Base case is sell in year 3"}}) == "unknown"
 
 
+def test_hold_irr_requires_explicit_scenario_even_if_old_value_is_manual():
+    from app.services.analysis import build_analysis
+    metrics = {"target_returns": {"primary_strategy": "hold_with_sale_option", "target_irr": 11.7,
+        "target_cash_on_cash": 8}, "_provenance": {"target_returns.target_irr": {"status": "manual", "locked": True},
+        "target_returns.target_cash_on_cash": {"status": "manual"}}}
+    assert canonical_return_summary(metrics)["target_irr"] is None
+    assert build_analysis(metrics)["returns"]["target_irr"] is None
+    assert metrics["target_returns"]["target_irr"] == 11.7
+    assert build_analysis(metrics)["returns"]["cash_on_cash"] == 8
+    metrics["_fact_context"] = {"target_returns.target_irr": {"scenario": "hold"}}
+    assert build_analysis(metrics)["returns"]["target_irr"] == 11.7
+
+
 @pytest.mark.parametrize("lock", ["_locks", "_provenance"])
 def test_correction_respects_both_lock_formats(lock):
     metrics = {"deal_structure": {"ltv": 55}}

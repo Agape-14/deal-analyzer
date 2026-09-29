@@ -16,7 +16,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from app.services.canonical_metrics import canonical_return_summary, primary_strategy
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 ACCEPTED = {"checked", "calculated", "manual"}
 BAD = {"wrong", "missing", "unverifiable", "stale", "math_failed"}
 
@@ -331,6 +331,7 @@ def build_analysis(metrics, documents=None, property_type="multifamily"):
     accepted["_model_limits"] = model_limits(metrics)
     strategy = primary_strategy(metrics)
     accepted.setdefault("target_returns", {})["primary_strategy"] = strategy
+    accepted["_fact_context"] = contexts
     selection = metrics.get("_analysis_context") or {}
     selected_class = selection.get("investor_class", "unspecified")
     classes = {f.identity.investor_class for p, f in facts.items() if p.startswith("target_returns.") and f.identity.investor_class != "unspecified"}
