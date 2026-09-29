@@ -16,7 +16,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from app.services.canonical_metrics import canonical_return_summary, primary_strategy
 
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 ACCEPTED = {"checked", "calculated", "manual"}
 BAD = {"wrong", "missing", "unverifiable", "stale", "math_failed"}
 

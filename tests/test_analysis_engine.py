@@ -39,6 +39,28 @@ def test_hold_questions_exclude_optional_irr_and_duplicate_yield_aliases():
     assert [i["path"] for i in issues] == ["target_returns.hold_scenario.cash_on_cash_return"]
 
 
+def test_hold_multiple_requires_hold_context_even_when_legacy_value_is_manual():
+    metrics = manual_metrics()
+    path = "target_returns.target_equity_multiple"
+    metrics["target_returns"].update(target_equity_multiple=3.4,
+        sale_scenario={"sale_equity_multiple": 3.4, "is_hypothetical": True})
+    metrics["_provenance"][path] = {"status": "manual", "source": "manual"}
+    metrics["_locks"] = {path: True}
+    analysis = build_analysis(metrics)
+    assert analysis["returns"]["target_equity_multiple"] is None
+    assert analysis["facts"][path]["value"] == 3.4
+    assert analysis["facts"][path]["locked"] is True
+    assert analysis["questions"] == []
+    metrics["_fact_context"] = {path: {"scenario": "hold"}}
+    assert build_analysis(metrics)["returns"]["target_equity_multiple"] == 3.4
+    metrics["_fact_context"][path]["scenario"] = "sale"
+    assert build_analysis(metrics)["returns"]["target_equity_multiple"] is None
+    nested = "target_returns.hold_scenario.net_equity_multiple"
+    metrics["target_returns"]["hold_scenario"]["net_equity_multiple"] = 1.6
+    metrics["_provenance"][nested] = {"status": "manual"}
+    assert build_analysis(metrics)["returns"]["target_equity_multiple"] == 1.6
+
+
 def test_confirmed_without_a_real_locator_is_still_reported():
     metrics = manual_metrics()
     path = "target_returns.hold_scenario.cash_on_cash_return"

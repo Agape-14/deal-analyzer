@@ -55,7 +55,7 @@ def metrics(yield_value, *, missing_minimum=False, sale=False):
         "target_returns": {"primary_strategy": "sale" if sale else "hold_with_sale_option",
             "target_irr": 15.5 if sale else 27.5, "target_equity_multiple": 1.8 if sale else 4.25,
             "hold_scenario": {"cash_on_cash_return": yield_value},
-            "sale_scenario": {"sale_irr": 27.5, "sale_equity_multiple": 4.25, "is_hypothetical": True}},
+            "sale_scenario": {"sale_irr": 15.5 if sale else 27.5, "sale_equity_multiple": 1.8 if sale else 4.25, "is_hypothetical": not sale}},
     }
     provenance = {}
     def visit(obj, prefix=""):

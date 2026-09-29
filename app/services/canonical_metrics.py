@@ -215,6 +215,9 @@ def canonical_return_summary(metrics: Dict[str, Any] | None) -> Dict[str, Any]:
     strategy = primary_strategy(metrics)
 
     if strategy in {"hold", "hold_with_sale_option"}:
+        contexts = (metrics or {}).get("_fact_context") or {}
+        hold_multiple_paths = [path for path in ("target_returns.target_equity_multiple", "target_returns.net_equity_multiple")
+                               if (contexts.get(path) or {}).get("scenario") == "hold"]
         return _summary_from_picks(
             strategy,
             _hold_target_irr(metrics),
@@ -223,8 +226,7 @@ def canonical_return_summary(metrics: Dict[str, Any] | None) -> Dict[str, Any]:
                 (
                     "target_returns.hold_scenario.target_equity_multiple",
                     "target_returns.hold_scenario.net_equity_multiple",
-                    "target_returns.target_equity_multiple",
-                    "target_returns.net_equity_multiple",
+                    *hold_multiple_paths,
                 ),
             ),
             pick_metric_detail(

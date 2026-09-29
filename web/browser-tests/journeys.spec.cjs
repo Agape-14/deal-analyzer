@@ -54,9 +54,12 @@ test('dashboard filters and separates IRR from cash yield without fake exposure'
 test('hold summary withholds unrelated exit returns and stale status claims', async ({ page }, info) => {
   await dealPage(page);
   const main = page.getByRole('main');
+  const accepted = await (await page.request.get('/api/deals/1')).json();
+  expect(accepted.target_irr).toBeNull();
+  expect(accepted.target_equity_multiple).toBeNull();
   await expect(main.getByText('8.5%', { exact: true })).toBeVisible();
   await expect(main.getByText('27.5%', { exact: true })).toHaveCount(0);
-  await expect(main.getByText('4.25x', { exact: true })).toHaveCount(0);
+  await expect(main.getByText(/4\.(25|3)x/)).toHaveCount(0);
   await expect(main.getByRole('heading', { name: 'Investment considerations' })).toHaveCount(0);
   await page.getByRole('tab', { name: 'Questions', exact: true }).click();
   await expect(page.getByText(/No material questions remain/)).toBeVisible();
@@ -181,7 +184,7 @@ test('developer detail and populated portfolio load through real routes', async 
   await page.goto('/developers');
   await page.getByRole('link', { name: /^Synthetic Sponsor/ }).click();
   await expect(page.getByRole('heading', { name: 'Synthetic Sponsor', exact: true })).toBeVisible();
-  await expect(page.getByRole('heading', { name: 'Sample Hold', exact: true })).toBeVisible();
+  await expect(page.getByRole('link', { name: 'Sample Hold', exact: true })).toBeVisible();
   await page.getByRole('link', { name: 'Portfolio', exact: true }).click();
   await expect(page.getByText('Synthetic Position', { exact: true })).toBeVisible();
   await expect(page.getByText('No positions yet', { exact: true })).toHaveCount(0);

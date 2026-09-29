@@ -34,3 +34,11 @@ When moving the package to another host, retain the same absolute destination pa
 ## Completion evidence
 
 Keep the staging commit, database hash, document manifest, all-deal replay, source corrections, provider runs, export comparisons and recovery checks in private storage. Mark each deal passed only after checking its material accepted values against its originals. CI alone does not establish all-deal accuracy or justify production deployment.
+
+## Browser regression tests without a local Windows runtime
+
+The frontend CI job builds Next.js, then runs Chromium through `web/playwright.config.cjs`. It starts the real FastAPI app through `scripts/browser_test_server.py` with a new temporary SQLite database, synthetic PDFs/CSVs, and test-only admin/viewer accounts. Authentication remains enabled. Both servers bind to loopback and are stopped by the test runner. Existing data paths and provider credentials cause the fixture server to refuse startup; external backend connections are blocked. No production snapshot belongs in this job.
+
+The browser journeys cover sign-in, dashboard filtering/sorting, accepted hold returns, material decisions and locks, duplicate documents, uploads, source roles, revisions, model guardrails, missing-provider chat feedback, comparison/export, sponsor and portfolio views, viewer write denial, optional location failure, and mobile navigation. Screenshots and failure traces are retained as `synthetic-browser-results` for seven days. They contain only generated test data. Temporary session files are ignored and excluded from artifact uploads.
+
+The workflow installs pinned browser tooling in a separate temporary directory so it cannot update the application dependencies after the frontend build. Follow those workflow commands for an authorized local Linux run, supplying a temporary directory in place of RUNNER_TEMP. Do not set DB_DIR, UPLOADS_DIR, DATABASE_URL or provider credentials. A successful synthetic browser run verifies runtime behavior, not the accuracy of private source documents or live AI responses.
