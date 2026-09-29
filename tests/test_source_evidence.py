@@ -34,6 +34,7 @@ def test_new_citation_replaces_stale_id_page_context_and_note():
     result = stamp(audit(), metrics)
     evidence = result["_provenance"][path]
     assert evidence["status"] == "confirmed"
+    assert evidence["source_check_version"] == 1
     assert evidence["source_doc_id"] == 2 and evidence["source_page"] == 1
     assert "source_cell" not in evidence and "source_sheet" not in evidence
     assert evidence["verification_note"] == ""

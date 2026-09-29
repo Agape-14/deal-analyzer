@@ -459,6 +459,9 @@ def stamp_verification(
         if status in {"wrong", "missing", "unverifiable", "math_failed"}:
             challenged_paths.add(path)
         p["status"] = status
+        p.pop("source_check_version", None)
+        if documents is not None and status == "confirmed" and not citation_error:
+            p["source_check_version"] = 1
         p["verified_at"] = verified_at
         # Overall model confidence is not field-level evidence.
         p.pop("confidence", None)

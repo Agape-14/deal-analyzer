@@ -35,7 +35,7 @@ def test_confirmed_without_a_real_locator_is_still_reported():
     result = build_analysis(metrics, docs)
     assert result["facts"][path]["state"] == "reported"
     assert result["returns"]["cash_on_cash"] is None
-    metrics["_provenance"][path].update(source_page=3, source_document_hash="a")
+    metrics["_provenance"][path].update(source_page=3, source_document_hash="a", source_check_version=1)
     result = build_analysis(metrics, docs)
     assert result["facts"][path]["state"] == "checked"
     assert result["returns"]["cash_on_cash"] == 8
@@ -49,6 +49,18 @@ def test_dotted_and_nested_disagreement_is_not_silently_collapsed():
     metrics["target_returns"]["hold_scenario.cash_on_cash_return"] = 11
     result = build_analysis(metrics)
     assert result["facts"]["target_returns.hold_scenario.cash_on_cash_return"]["state"] == "disputed"
+    assert result["returns"]["cash_on_cash"] is None
+
+
+def test_legacy_confirmed_locator_does_not_certify_unchecked_quote():
+    metrics = manual_metrics()
+    path = "target_returns.hold_scenario.cash_on_cash_return"
+    metrics["_provenance"][path] = {"status": "confirmed", "source_doc_name": "Memo.pdf",
+        "source_page": 1, "source_document_hash": "a", "source_excerpt": "Plausible but never checked"}
+    docs = [{"id": 1, "filename": "Memo.pdf", "content_hash": "a", "page_count": 2}]
+    result = build_analysis(metrics, docs)
+    assert result["facts"][path]["state"] == "reported"
+    assert "fresh check" in result["facts"][path]["reason"]
     assert result["returns"]["cash_on_cash"] is None
 
 
@@ -148,7 +160,7 @@ async def test_document_deletion_invalidates_source_supported_returns(client):
         await db.flush()
         deal = await db.get(Deal, deal_id)
         metrics = manual_metrics()
-        metrics["_provenance"]["target_returns.hold_scenario.cash_on_cash_return"] = {"status": "confirmed", "source_doc_id": doc.id, "source_page": 2, "source_document_hash": "a"}
+        metrics["_provenance"]["target_returns.hold_scenario.cash_on_cash_return"] = {"status": "confirmed", "source_doc_id": doc.id, "source_page": 2, "source_document_hash": "a", "source_check_version": 1}
         deal.metrics = metrics
         await db.commit()
         assert deal.analysis_snapshot["returns"]["cash_on_cash"] == 8
@@ -162,7 +174,7 @@ def test_changed_document_package_rechecks_sources_without_erasing_manual_decisi
     metrics = manual_metrics()
     path = "target_returns.hold_scenario.cash_on_cash_return"
     docs = [{"id": 1, "filename": "Memo.pdf", "content_hash": "a", "page_count": 5}]
-    metrics["_provenance"][path] = {"status": "confirmed", "source_doc_id": 1, "source_page": 2, "source_document_hash": "a"}
+    metrics["_provenance"][path] = {"status": "confirmed", "source_doc_id": 1, "source_page": 2, "source_document_hash": "a", "source_check_version": 1}
     metrics["_verified_document_set"] = digest(docs)
     assert build_analysis(metrics, docs)["returns"]["cash_on_cash"] == 8
     docs.append({"id": 2, "filename": "Update.pdf", "content_hash": "b", "page_count": 3})
@@ -296,7 +308,7 @@ async def test_restore_creates_new_revision_preserves_history_and_rechecks_curre
         await db.flush()
         deal = await db.get(Deal, deal_id)
         metrics = manual_metrics()
-        metrics["_provenance"]["target_returns.hold_scenario.cash_on_cash_return"] = {"status": "confirmed", "source_doc_id": doc.id, "source_page": 2, "source_document_hash": "a"}
+        metrics["_provenance"]["target_returns.hold_scenario.cash_on_cash_return"] = {"status": "confirmed", "source_doc_id": doc.id, "source_page": 2, "source_document_hash": "a", "source_check_version": 1}
         deal.metrics = metrics
         await db.commit()
         previous = copy.deepcopy(deal.analysis_snapshot)

@@ -16,7 +16,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from app.services.canonical_metrics import canonical_return_summary, primary_strategy
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 ACCEPTED = {"checked", "calculated", "manual"}
 BAD = {"wrong", "missing", "unverifiable", "stale", "math_failed"}
 
@@ -267,6 +267,8 @@ def build_analysis(metrics, documents=None, property_type="multifamily"):
             fact.state, fact.reason = "manual", "Analyst decision: " + str(prov.get("verification_note") or "Manually resolved; not an independent source check.")
         elif metrics.get("_verified_document_set") and metrics["_verified_document_set"] != digest(documents):
             fact.state, fact.reason = "reported", "The document package changed and is awaiting another source check."
+        elif status == "confirmed" and prov.get("source_check_version") != 1:
+            fact.reason = "This older confirmation needs a fresh check of the quoted source text."
         elif status == "confirmed" and not reason:
             fact.state = "checked"
         else:
