@@ -124,7 +124,49 @@ VERIFY_MAX_CONTEXT_CHARS = _env_int("VERIFY_MAX_CONTEXT_CHARS", 65000)
 VERIFY_FULL_TEXT_THRESHOLD_CHARS = _env_int("VERIFY_FULL_TEXT_THRESHOLD_CHARS", 50000)
 VERIFY_MAX_OUTPUT_TOKENS = _env_int("VERIFY_MAX_OUTPUT_TOKENS", 16000)
 VERIFY_CONCURRENCY = max(1, _env_int("VERIFY_CONCURRENCY", 2))
-VERIFICATION_CACHE_VERSION = 3
+VERIFY_MAX_FIELDS_PER_CALL = max(1, min(24, _env_int("VERIFY_MAX_FIELDS_PER_CALL", 12)))
+VERIFICATION_CACHE_VERSION = 4
+
+
+class VerificationOutputLimit(ValueError):
+    """A bounded batch must be split before retrying, never parsed partially."""
+
+
+def verification_batches(metrics, sections, max_fields=VERIFY_MAX_FIELDS_PER_CALL):
+    """Bound output size by leaf fields, retaining explicit dotted identities."""
+    fields_by_path = {}
+    def walk(section, value, prefix=""):
+        if isinstance(value, dict):
+            for key, child in sorted(value.items(), key=lambda item: "." in str(item[0])):
+                if not str(key).startswith("_"):
+                    walk(section, child, f"{prefix}.{key}" if prefix else str(key))
+        elif prefix:
+            fields_by_path.setdefault((section, prefix), value)
+    for section in sections:
+        walk(section, metrics.get(section))
+    fields = [(section, path, value) for (section, path), value in fields_by_path.items()]
+    batches = []
+    for start in range(0, len(fields), max_fields):
+        batch = {}
+        for section, path, value in fields[start:start + max_fields]:
+            batch.setdefault(section, {})[path] = value
+        batches.append(batch)
+    return batches
+
+
+async def _verify_bounded_batch(subset, pdf_docs, doc_texts, api_key, deal_id):
+    """Retry only a truncated batch, with fewer fields and a finite split tree."""
+    try:
+        return await _verify_sections(list(subset), subset, pdf_docs, doc_texts, api_key, deal_id)
+    except VerificationOutputLimit:
+        count = sum(len(values) for values in subset.values())
+        if count <= 1:
+            raise
+        results = []
+        for smaller in verification_batches(subset, list(subset), max(1, count // 2)):
+            results.append(await _verify_bounded_batch(smaller, pdf_docs, doc_texts, api_key, deal_id))
+        return {key: [row for result in results for row in result.get(key, [])]
+                for key in ("audit_results", "missing_data", "calculation_checks")}
 
 
 def _coerce_json_object(parsed: Any, raw: str, context: str) -> dict:
@@ -265,7 +307,7 @@ async def _verify_sections(
             "type": "text",
             "text": (
                 VERIFY_PROMPT
-                + "\n\nFOCUS: only audit fields in these sections: "
+                + "\n\nThis is a bounded batch. Audit exactly the provided leaf fields, including dotted paths; do not add fields from other batches. Return one audit row per supplied field. Keep each supporting quote under 350 characters and each note under 180 characters. Do not repeat the full input JSON in notes or calculations.\n\nFOCUS: only audit fields in these sections: "
                 + ", ".join(sections)
                 + ".\n\n"
                 + json.dumps(subset_metrics, indent=2)
@@ -337,7 +379,7 @@ async def _verify_sections(
         op.output_tokens = output_tokens
         op.meta["stop_reason"] = stop_reason
         if stop_reason == "max_tokens":
-            raise ValueError(
+            raise VerificationOutputLimit(
                 f"Verification for {sections} hit max_tokens ceiling. "
                 "Try splitting the sections further or reducing pages."
             )
@@ -427,16 +469,30 @@ async def verify_deal_metrics(deal, db, *, sections: set[str] | None = None) -> 
     errors: list[str] = []
     semaphore = asyncio.Semaphore(VERIFY_CONCURRENCY)
 
-    async def _run_one(group: list[str]) -> tuple[list[str], dict | Exception]:
-        subset = {section: metrics.get(section) for section in group if metrics.get(section) is not None}
+    batches = [batch for group in groups_to_run for batch in verification_batches(metrics, group)]
+
+    async def _run_one(subset: dict) -> tuple[list[str], dict | Exception]:
+        group = list(subset)
         async with semaphore:
             try:
-                result = await _verify_sections(group, subset, pdf_docs, doc_texts, api_key, getattr(deal, "id", None))
+                result = await _verify_bounded_batch(subset, pdf_docs, doc_texts, api_key, getattr(deal, "id", None))
+                # Never carry an old confirmation through a silently omitted
+                # provider row. Omission is an unresolved source check.
+                expected = {(section, field) for section, values in subset.items() for field in values}
+                rows = [r for r in result.get("audit_results", []) if isinstance(r, dict) and (r.get("section"), r.get("field")) in expected]
+                result["audit_results"] = rows
+                result["missing_data"] = [r for r in result.get("missing_data", []) if isinstance(r, dict) and (r.get("section"), r.get("field")) in expected]
+                audited = {(r.get("section"), r.get("field")) for r in rows if isinstance(r, dict)}
+                for section, values in subset.items():
+                    for field, value in values.items():
+                        if (section, field) not in audited:
+                            rows.append({"section": section, "field": field, "extracted_value": value,
+                                         "status": "unverifiable", "note": "The provider omitted this field from its source check."})
                 return group, result
             except Exception as exc:
                 return group, exc
 
-    results = await asyncio.gather(*[_run_one(group) for group in groups_to_run])
+    results = await asyncio.gather(*[_run_one(batch) for batch in batches])
 
     for group, result in results:
         if isinstance(result, Exception):

@@ -113,3 +113,55 @@ def test_focused_context_keeps_late_investor_rows_and_later_documents():
     assert "B351=0.125" in result
     assert "Current investor terms." in result
     assert len(result) <= 4000
+
+
+def test_review_batches_bound_nested_field_count_without_losing_identity():
+    from app.services.deal_verifier import verification_batches
+    metrics = {"target_returns": {"hold_scenario": {f"field_{i}": i for i in range(29)}, "zero": 0, "missing": None}}
+    batches = verification_batches(metrics, ["target_returns"], 12)
+    assert [sum(len(values) for values in batch.values()) for batch in batches] == [12, 12, 7]
+    combined = {field: value for batch in batches for field, value in batch["target_returns"].items()}
+    assert combined["hold_scenario.field_28"] == 28
+    assert combined["zero"] == 0 and combined["missing"] is None
+
+
+@pytest.mark.asyncio
+async def test_truncated_review_retries_smaller_batches_without_using_partial_json(monkeypatch):
+    from app.services import deal_verifier as verifier
+    calls = []
+    async def reply(sections, subset, *args):
+        calls.append(list(subset["target_returns"]))
+        if len(calls[-1]) > 1:
+            raise verifier.VerificationOutputLimit("truncated")
+        return {"audit_results": [{"field": calls[-1][0]}]}
+    monkeypatch.setattr(verifier, "_verify_sections", reply)
+    result = await verifier._verify_bounded_batch({"target_returns": {"a": 1, "b": 2, "c": 3}}, [], [], "test", 1)
+    assert len(result["audit_results"]) == 3
+    assert calls == [["a", "b", "c"], ["a"], ["b"], ["c"]]
+
+
+@pytest.mark.asyncio
+async def test_single_field_output_limit_fails_without_an_infinite_retry(monkeypatch):
+    from app.services import deal_verifier as verifier
+    calls = []
+    async def reply(*args):
+        calls.append(1)
+        raise verifier.VerificationOutputLimit("truncated")
+    monkeypatch.setattr(verifier, "_verify_sections", reply)
+    with pytest.raises(verifier.VerificationOutputLimit):
+        await verifier._verify_bounded_batch({"target_returns": {"a": 1}}, [], [], "test", 1)
+    assert calls == [1]
+
+
+@pytest.mark.asyncio
+async def test_provider_omission_cannot_keep_an_old_confirmation_or_audit_other_fields(monkeypatch):
+    from app.services import deal_verifier as verifier
+    async def reply(*args):
+        return {"audit_results": [{"section": "target_returns", "field": "unrequested", "status": "confirmed"}]}
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "synthetic")
+    monkeypatch.setattr(verifier, "_verify_bounded_batch", reply)
+    deal = SimpleNamespace(id=1, documents=[document()], metrics={"target_returns": {"target_irr": 12.5}})
+    result = await verifier.verify_deal_metrics(deal, None)
+    assert len(result["audit_results"]) == 1
+    assert result["audit_results"][0]["field"] == "target_irr"
+    assert result["audit_results"][0]["status"] == "unverifiable"
