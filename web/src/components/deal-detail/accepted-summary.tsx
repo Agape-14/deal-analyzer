@@ -39,6 +39,9 @@ export function AcceptedSummary({ deal }: { deal: DealDetail }) {
   if (!analysis) return <Card className="p-6">Analysis is unavailable. Reload after document review completes.</Card>;
   const facts = analysis.facts;
   const paths = ["deal_structure.total_project_cost", "deal_structure.total_equity_required", "deal_structure.debt_amount", "deal_structure.minimum_investment", "deal_structure.hold_period_years", "project_details.unit_count", "financial_projections.stabilized_noi", "underwriting_checks.dscr"];
+  const acceptedPaths = paths.filter(path => facts[path] && ["checked", "calculated", "manual"].includes(facts[path].state));
+  const pendingPaths = paths.filter(path => !acceptedPaths.includes(path));
+  const intake = (deal.metrics as unknown as { _intake?: { name_origin?: string; auto_fields?: Record<string, { sources: Array<{ document_id: number; document_name: string; page?: number }> }>; identity_conflicts?: string[] } })._intake;
   return <div className="space-y-6">
     <Card className="p-5 md:p-6">
       <div className="flex flex-wrap items-start justify-between gap-4">
@@ -47,14 +50,19 @@ export function AcceptedSummary({ deal }: { deal: DealDetail }) {
         </div>
         <Link href={`/deals/${deal.id}?tab=questions`} className="rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground">{analysis.questions.length ? `${analysis.questions.length} question${analysis.questions.length === 1 ? "" : "s"}` : "No material questions"}</Link>
       </div>
-      <p className="mt-4 text-sm text-muted-foreground">{analysis.coverage.accepted} of {analysis.coverage.total} recognized facts accepted: {analysis.coverage.checked} source checked, {analysis.coverage.calculated} calculated, {analysis.coverage.manual} analyst resolved. This describes evidence coverage, not investment quality.</p>
+      <div className="mt-4 h-1.5 rounded-full bg-muted overflow-hidden" role="progressbar" aria-label="Accepted evidence coverage" aria-valuenow={analysis.coverage.accepted} aria-valuemin={0} aria-valuemax={analysis.coverage.total || 1}><div className="h-full bg-primary rounded-full" style={{ width: `${analysis.coverage.total ? analysis.coverage.accepted / analysis.coverage.total * 100 : 0}%` }} /></div>
+      <p className="mt-3 text-sm text-muted-foreground">{analysis.coverage.accepted} of {analysis.coverage.total} recognized facts accepted · {analysis.coverage.checked} source checked · {analysis.coverage.calculated} calculated · {analysis.coverage.manual} analyst resolved.</p>
+      <p className="mt-1 text-xs text-muted-foreground">Evidence coverage describes support for the numbers, not investment quality.</p>
       <p className="mt-2 text-xs text-muted-foreground">{analysis.version ? `Analysis revision ${analysis.version}` : "Preview of existing data"}{analysis.created_at ? ` · ${new Date(analysis.created_at).toLocaleString()}` : ""}. Missing or disputed facts remain withheld.</p>
+      {intake && <details className="mt-3 text-xs text-muted-foreground"><summary className="cursor-pointer">Deal details from your documents</summary><div className="mt-2 space-y-2">{intake.name_origin === "filename" && !intake.auto_fields?.project_name && <p>The deal title comes from the first filename. You can rename it in Analysis.</p>}{Object.entries(intake.auto_fields ?? {}).map(([key, meta]) => <p key={key}>{key.replaceAll("_", " ")}: {meta.sources.map((source, index) => <a key={index} className="underline mr-2" href={`/api/deals/documents/${source.document_id}/file${source.page ? `#page=${source.page}` : ""}`} target="_blank" rel="noreferrer">{source.document_name}{source.page ? ` · page ${source.page}` : ""}</a>)}</p>)}{!!intake.identity_conflicts?.length && <p className="text-warning">Conflicting document labels: {intake.identity_conflicts.map(key => key.replaceAll("_", " ")).join(", ")}. Check these details in Analysis.</p>}</div></details>}
     </Card>
     <Card className="p-5 md:p-6"><h2 className="text-lg font-semibold">Capital, terms and operations</h2>
-      <div className="mt-5 grid gap-5 sm:grid-cols-2 lg:grid-cols-4">{paths.map(path => {
+      {acceptedPaths.length === 0 && <p className="mt-3 text-sm text-muted-foreground">Add source documents to populate these terms. Open Questions for evidence that needs clarification.</p>}
+      <div className="mt-4 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">{acceptedPaths.map(path => {
         const fact = facts[path];
         return <div key={path}><div className="text-xs text-muted-foreground">{fact?.label ?? path.split(".").pop()?.replaceAll("_", " ")}</div><div className="mt-1 text-lg font-semibold">{factValue(fact)}</div><FactEvidence fact={fact} /></div>;
       })}</div>
+      {pendingPaths.length > 0 && <details className="mt-4 border-t border-border pt-3 text-sm"><summary className="cursor-pointer text-muted-foreground">{pendingPaths.length} terms awaiting evidence</summary><div className="mt-3 grid gap-3 sm:grid-cols-2">{pendingPaths.map(path => <div key={path}><span className="text-xs text-muted-foreground">{facts[path]?.label ?? path.split(".").pop()?.replaceAll("_", " ")}</span><FactEvidence fact={facts[path]} /></div>)}</div></details>}
     </Card>
     <p className="text-sm text-muted-foreground">Upload missing or newer evidence in <Link className="underline" href={`/deals/${deal.id}?tab=documents`}>Documents</Link>. Reported values, optional context, projections and audit details remain under Analysis.</p>
   </div>;

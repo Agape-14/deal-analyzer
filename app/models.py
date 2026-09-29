@@ -27,6 +27,7 @@ class Deal(Base):
     __tablename__ = "deals"
 
     id = Column(Integer, primary_key=True, index=True)
+    intake_token = Column(String(64), nullable=True, unique=True)
     revision = Column(Integer, nullable=False, default=1, server_default="1")
     analysis_version = Column(Integer, nullable=False, default=0, server_default="0")
     analysis_snapshot = Column(JSON, default=dict)
@@ -126,6 +127,10 @@ class DealChat(Base):
     deal_id = Column(Integer, ForeignKey("deals.id"), nullable=False, index=True)
     role = Column(String(20), nullable=False)
     content = Column(Text, nullable=False)
+    analysis_version = Column(Integer, nullable=True)
+    analysis_input_hash = Column(String(64), nullable=True)
+    answer_kind = Column(String(30), nullable=True)
+    references = Column(JSON, nullable=True)
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
 
     deal = relationship("Deal", back_populates="chats")

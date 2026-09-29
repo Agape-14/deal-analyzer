@@ -143,3 +143,5 @@ def _apply_schema_patches(sync_conn) -> None:
             sync_conn.execute(
                 text(f'ALTER TABLE "{table.name}" ADD COLUMN "{col.name}" {col_sql}{null_sql}{default}')
             )
+    if insp.has_table("deals"):
+        sync_conn.execute(text('CREATE UNIQUE INDEX IF NOT EXISTS uq_deals_intake_token ON deals (intake_token)'))

@@ -157,22 +157,22 @@ test('preview and adoption update history without losing manual values', async (
   expect(deal.target_irr).toBeNull();
 });
 
-test('unsupported models show reasons and chat failure remains recoverable', async ({ page }) => {
+test('unsupported models show reasons and assistant works without provider credits', async ({ page }) => {
   await dealPage(page, 1, 'cashflow');
   await expect(page.getByRole('status').filter({ hasText: 'Projection needs source-supported assumptions.' })).toBeVisible();
   await expect(page.getByText(/Missing or disputed assumptions: avg rent per unit/)).toBeVisible();
   await expect(page.getByRole('status').filter({ hasText: 'Waterfall unavailable: Refinancing distributions require' })).toBeVisible();
   await expect(page.getByText(/Multiple equity classes require/)).toBeVisible();
   await page.getByRole('tab', { name: 'Analyst', exact: true }).click();
-  await expect(page.getByText(/AI explanations. Use Summary for accepted facts/)).toBeVisible();
-  await expect(page.getByText('Synthetic saved conversation. Summary holds the accepted figures.')).toBeVisible();
-  await page.getByPlaceholder('Ask about IRR, leverage, sponsor quality, red flags…').fill('What is the accepted cash yield?');
+  await expect(page.getByText(/Answers from the current reviewed facts/)).toBeVisible();
+  await expect(page.getByText('Earlier analysis · open archived reply', { exact: true })).toBeVisible();
+  await expect(page.getByText('Synthetic saved conversation. Summary holds the accepted figures.')).not.toBeVisible();
+  await page.getByPlaceholder('Ask about accepted returns, terms or missing evidence…').fill('What is the accepted cash yield?');
   await page.getByRole('button', { name: 'Send', exact: true }).click();
-  await expect(page.getByText("Couldn't send message", { exact: true })).toBeVisible();
-  await expect(page.getByText(/AI chat is unavailable/)).toBeVisible();
-  await expect(page.getByPlaceholder('Ask about IRR, leverage, sponsor quality, red flags…')).toBeEnabled();
+  await expect(page.getByText(/Cash on cash return: 8.5%/)).toBeVisible();
+  await expect(page.getByText(/IRR: Unavailable in the current reviewed analysis/)).toBeVisible();
+  await expect(page.getByPlaceholder('Ask about accepted returns, terms or missing evidence…')).toBeEnabled();
 });
-
 test('all three deals compare with matching accepted returns and export', async ({ page }, info) => {
   await page.goto('/compare');
   await page.getByRole('button', { name: 'Pick deals', exact: true }).click();
@@ -189,6 +189,7 @@ test('all three deals compare with matching accepted returns and export', async 
   await expect(page).toHaveURL(/mode=winners/);
   await expect(page.getByText(/Best overall/)).toHaveCount(0);
   await expect(page.getByLabel('Leading value for this metric').first()).toBeVisible();
+  await expect(page.getByText('Different or unspecified context · values only').first()).toBeVisible();
   await page.getByRole('button', { name: 'Values', exact: true }).click();
   await expect(page).not.toHaveURL(/mode=/);
   await expect(page.getByLabel('Leading value for this metric')).toHaveCount(0);
@@ -246,4 +247,44 @@ test('mobile summary keeps the main workflow reachable', async ({ page }, info) 
   await expect(page.getByRole('button', { name: 'Choose files', exact: true })).toBeVisible();
   expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(390);
   await page.screenshot({ path: info.outputPath('mobile-documents.png'), fullPage: true });
+});
+
+test('legacy entry opens the current application', async ({ page }) => {
+  await page.goto('/legacy');
+  await expect(page).toHaveURL('http://127.0.0.1:3000/');
+  await expect(page.getByRole('heading', { name: 'Deal Pipeline', exact: true })).toBeVisible();
+  await expect(page.getByText('Switch to legacy UI →')).toHaveCount(0);
+});
+
+test('upload-first intake creates a deal from two documents without manual details', async ({ page }, info) => {
+  await page.goto('/');
+  await page.getByRole('button', { name: 'New Deal', exact: true }).click();
+  const drawer = page.getByRole('dialog', { name: 'New deal', exact: true });
+  await expect(drawer.getByText('Drop the deal documents here')).toBeVisible();
+  await drawer.getByLabel('Choose deal documents').setInputFiles([
+    { name: 'Browser_Offering.csv', mimeType: 'text/csv', buffer: Buffer.from('Metric,Value\nUnits,12\n') },
+    { name: 'Browser_Terms.csv', mimeType: 'text/csv', buffer: Buffer.from('Metric,Value\nMinimum investment,50000\n') },
+  ]);
+  await page.screenshot({ path: info.outputPath('upload-first.png'), fullPage: true });
+  await drawer.getByRole('button', { name: 'Upload and review', exact: true }).click();
+  await expect(page).toHaveURL(/\/deals\/\d+\?tab=documents$/);
+  await expect(page.getByRole('heading', { name: 'Browser Offering', exact: true })).toBeVisible();
+  const id = Number(new URL(page.url()).pathname.split('/').pop());
+  const deal = await (await page.request.get(`/api/deals/${id}`)).json();
+  expect(deal.developer_id).toBeNull();
+  expect(deal.documents).toHaveLength(2);
+  expect(deal.target_irr).toBeNull();
+});
+
+test('failed assistant request retains question and can be retried', async ({ page }) => {
+  await dealPage(page, 1, 'chat');
+  await page.getByRole('tab', { name: 'Analyst', exact: true }).click();
+  const input = page.getByPlaceholder('Ask about accepted returns, terms or missing evidence…');
+  await page.route('**/api/chat', route => route.fulfill({ status: 503, contentType: 'application/json', body: JSON.stringify({ detail: 'Synthetic temporary interruption' }) }), { times: 1 });
+  await input.fill('Show investment terms');
+  await page.getByRole('button', { name: 'Send', exact: true }).click();
+  await expect(input).toHaveValue('Show investment terms');
+  await expect(page.getByText("Couldn't send message", { exact: true })).toBeVisible();
+  await page.getByRole('button', { name: 'Send', exact: true }).click();
+  await expect(page.getByText(/Minimum investment: unspecified 25,000/).last()).toBeVisible();
 });

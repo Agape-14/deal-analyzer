@@ -156,7 +156,7 @@ export function DealHero({ deal }: { deal: DealDetail }) {
           </Link>
         </div>
 
-        <div className="grid gap-6 px-5 py-6 md:px-6 lg:grid-cols-[minmax(0,1fr)_340px] lg:items-start">
+        <div className="grid gap-4 px-5 py-4 md:px-6 lg:grid-cols-[minmax(0,1fr)_290px] lg:items-start">
           <div className="min-w-0 flex-1">
             <div className="flex items-center gap-2 text-[11px] uppercase tracking-[0.14em] text-muted-foreground mb-2">
               <span>{deal.property_type || "Investment"}</span>
@@ -171,7 +171,7 @@ export function DealHero({ deal }: { deal: DealDetail }) {
               </span>
             </div>
 
-            <h1 className="text-display-lg tracking-tight">{deal.project_name}</h1>
+            <h1 className="text-2xl md:text-3xl font-semibold tracking-tight break-words">{deal.project_name}</h1>
 
             <div className="mt-3 flex flex-wrap items-center gap-x-5 gap-y-2 text-sm text-muted-foreground">
               {locationBits && (
@@ -188,7 +188,7 @@ export function DealHero({ deal }: { deal: DealDetail }) {
               )}
             </div>
 
-            <div className="mt-7 overflow-hidden rounded-xl border border-border/80 bg-background/70">
+            <div className="mt-5 overflow-hidden rounded-xl border border-border/80 bg-background/70">
               <div className="grid grid-cols-2 divide-x divide-y divide-border/70 md:grid-cols-4 md:divide-y-0">
                 <Metric label={primaryReturnLabel} value={fmtPct(primaryReturnValue)} />
                 <Metric label="Equity Multiple" value={fmtMultiple(headlineMultiple)} />
@@ -207,9 +207,7 @@ export function DealHero({ deal }: { deal: DealDetail }) {
                 </div>
                 <p className="mt-3 text-xs leading-relaxed text-muted-foreground">{viewerSummary}</p>
               </div>
-              <div className="shrink-0">
-                <BigScoreRing value={visibleScore} size={100} />
-              </div>
+              {visibleScore != null && <div className="shrink-0"><BigScoreRing value={visibleScore} size={72} /></div>}
             </div>
 
             <div className="mt-4 grid gap-2">

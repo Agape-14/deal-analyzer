@@ -7,7 +7,7 @@ import uuid
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, UploadFile, File, Form
 from fastapi.responses import FileResponse
 from sqlalchemy import select, update
-from sqlalchemy.exc import OperationalError
+from sqlalchemy.exc import OperationalError, IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -64,6 +64,50 @@ MIMETYPE_EXTS = {
     "text/csv": ".csv",
     "application/csv": ".csv",
 }
+
+
+@router.post("/intake", dependencies=[Depends(limit("upload"))])
+async def intake_documents(background_tasks: BackgroundTasks, files: list[UploadFile] = File(...),
+                           intake_token: str = Form(...), project_name: str = Form(""),
+                           db: AsyncSession = Depends(get_db)):
+    """Start with evidence. Repeated requests reuse the deal and deduplicate files."""
+    try:
+        token = str(uuid.UUID(intake_token))
+    except ValueError:
+        raise HTTPException(422, "Invalid upload request id")
+    if not 1 <= len(files) <= 10:
+        raise HTTPException(422, "Choose between 1 and 10 documents")
+    if len(project_name.strip()) > 500:
+        raise HTTPException(422, "Deal name is too long")
+    for file in files:
+        if _upload_extension(file) not in ALLOWED_EXTS:
+            raise HTTPException(415, "Choose PDF, Excel or CSV documents")
+        if file.size is not None and (file.size <= 0 or file.size > MAX_UPLOAD_BYTES):
+            raise HTTPException(413, "Each document must be nonempty and no larger than 50 MB")
+    deal = (await db.execute(select(Deal).where(Deal.intake_token == token))).scalar_one_or_none()
+    if deal and deal.deleted_at is not None:
+        raise HTTPException(409, "This upload belongs to a deleted deal. Start a new upload.")
+    if not deal:
+        filename = os.path.basename((files[0].filename or "New deal").replace("\\", "/"))
+        title = project_name.strip() or os.path.splitext(filename)[0].replace("_", " ")[:500] or "New deal"
+        deal = Deal(project_name=title, intake_token=token, property_type="other",
+                    metrics={"_intake": {"name_origin": "manual" if project_name.strip() else "filename", "initial_name": title}})
+        db.add(deal)
+        try:
+            await db.commit()
+        except IntegrityError:
+            await db.rollback()
+            deal = (await db.execute(select(Deal).where(Deal.intake_token == token))).scalar_one()
+    results, errors = [], []
+    deal_id = deal.id
+    for file in files:
+        filename = file.filename
+        try:
+            results.append(await upload_document(deal_id, background_tasks, file, "other", db))
+        except HTTPException as exc:
+            errors.append({"filename": filename, "detail": exc.detail})
+    return {"deal_id": deal_id, "documents": results, "errors": errors,
+            "message": "Documents saved. Review begins automatically when available." if results else "No documents saved. Retry this upload to reuse the same deal."}
 
 
 @router.get("/{deal_id}/documents")
@@ -144,7 +188,7 @@ async def upload_document(
         stage = "finding deal"
         result = await db.execute(select(Deal).where(Deal.id == deal_id))
         deal = result.scalar_one_or_none()
-        if not deal:
+        if not deal or deal.deleted_at is not None:
             raise HTTPException(status_code=404, detail="Deal not found")
 
         stage = "validating file type"
@@ -549,6 +593,8 @@ async def _extract_document_background(doc_id: int, file_path: str, ext: str, *,
             doc.file_sha256 = quality.get("file_sha256") or doc.file_sha256 or file_hash
             doc.content_fingerprint = quality.get("content_fingerprint") or sha256_text(extracted_text)
             doc.extraction_quality = quality
+            from app.services.intake_identity import populate_intake_identity
+            await populate_intake_identity(db, doc.deal_id)
             await _commit_with_retry(db, "saving extracted document text")
 
             if quality.get("status") == "error":

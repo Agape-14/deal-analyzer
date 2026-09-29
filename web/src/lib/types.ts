@@ -469,6 +469,10 @@ export interface ChatMessage {
   role: "user" | "assistant";
   content: string;
   created_at: string;
+  analysis_version?: number | null;
+  answer_kind?: string | null;
+  stale?: boolean;
+  references?: Array<{ path: string; state: string; evidence: AnalysisFact["evidence"] }>;
 }
 
 /* ------------------------------------------------------------------ */

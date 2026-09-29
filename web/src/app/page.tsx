@@ -26,7 +26,7 @@ export default async function Home() {
   }
 
   return (
-    <div className="w-full px-6 md:px-10 xl:px-12 2xl:px-14 py-8 md:py-12">
+    <div className="w-full px-5 md:px-8 xl:px-10 py-6 md:py-8">
       {/* Hero */}
       <FadeIn>
         <div className="flex flex-col md:flex-row md:items-end md:justify-between gap-4 mb-8">
@@ -37,7 +37,7 @@ export default async function Home() {
             <h1 className="text-display tracking-tight">Deal Pipeline</h1>
             <p className="text-sm text-muted-foreground mt-1.5 max-w-xl">
               {deals.length
-                ? `${deals.length} active deal${deals.length === 1 ? "" : "s"}. Review underwriting, compare opportunities, and open any deal that needs attention.`
+                ? `${deals.length} active deal${deals.length === 1 ? "" : "s"}. Start with the evidence questions, then compare the reviewed numbers.`
                 : "Upload your first offering memo to start analyzing deals."}
             </p>
           </div>
@@ -87,11 +87,11 @@ function EmptyState() {
         </div>
         <h3 className="text-lg font-semibold tracking-tight">No deals yet</h3>
         <p className="text-sm text-muted-foreground mt-1.5 max-w-md mx-auto">
-          Create a deal and upload offering memorandums to get automated scoring, validation, and risk analysis.
+          Upload an offering memo or financials. The app organizes the evidence and shows the questions that need attention.
         </p>
         <Button asChild className="mt-6">
           <Link href="/?new=1" scroll={false}>
-            Create your first deal
+            Upload your first documents
           </Link>
         </Button>
       </div>

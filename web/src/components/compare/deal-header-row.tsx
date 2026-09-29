@@ -86,6 +86,11 @@ export function DealHeaderRow({
                   </button>
                 </div>
 
+                <div className="mt-2 rounded-md bg-muted/50 px-2 py-1.5 text-[10px] text-muted-foreground leading-relaxed">
+                  {deal.analysis?.primary_strategy?.replaceAll("_", " ") ?? "Strategy unspecified"} · {deal.analysis?.investor_class && deal.analysis.investor_class !== "unspecified" ? deal.analysis.investor_class : "Class unspecified"}
+                  <div>{deal.analysis?.facts["deal_structure.hold_period_years"]?.value != null && ["checked", "manual", "calculated"].includes(deal.analysis.facts["deal_structure.hold_period_years"].state) ? `${deal.analysis.facts["deal_structure.hold_period_years"].value} year horizon` : "Horizon unspecified"}</div>
+                </div>
+
                 {/* Score + stats */}
                 <div className="mt-3 flex items-center justify-between gap-2">
                   <div className="tabular-nums">

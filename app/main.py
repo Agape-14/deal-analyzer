@@ -246,12 +246,10 @@ async def healthz():
 
 @app.get("/")
 async def root_redirect():
-    """FastAPI now serves the legacy UI at /legacy. The new Next.js app (at
-    web/) is expected to sit in front in production. During local FastAPI-only
-    runs we redirect / → /legacy so the legacy UI is still reachable."""
+    """The application UI is served by Next.js; direct API visits show retirement information."""
     return RedirectResponse(url="/legacy")
 
 
 @app.get("/legacy")
 async def legacy_index(request: Request):
-    return templates.TemplateResponse(request, "index.html")
+    return JSONResponse({"detail": "This screen has been retired. Open the main app for the current reviewed analysis."}, status_code=410)

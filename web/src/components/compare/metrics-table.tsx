@@ -7,6 +7,7 @@ import { cn, fmtMoney, fmtMultiple, fmtPct } from "@/lib/utils";
 import type { DealDetail } from "@/lib/types";
 import { getValueAt, type MetricRow } from "./presets";
 import { findExtrema, formatValue, normalize, toNumber, type CellValue } from "./value-format";
+import { compatibleRow, rowFact, returnContext } from "./comparison-context";
 
 export type CompareMode = "values" | "winners" | "deltas" | "normalized";
 
@@ -45,7 +46,7 @@ export function MetricsTable({
         const raw = getValueAt(d, r.path);
         return { dealId: d.id, raw, num: toNumber(raw) };
       });
-      const ex = findExtrema(r, cells);
+      const ex = compatibleRow(deals, r) ? findExtrema(r, cells) : { winners: new Set<number>(), losers: new Set<number>() };
       perRow.set(r.key, ex);
     }
     return perRow;
@@ -107,6 +108,7 @@ function RowLine({
     const raw = getValueAt(d, row.path);
     return { dealId: d.id, raw, num: toNumber(raw) };
   });
+  const compatible = compatibleRow(deals, row);
 
   return (
     <motion.div
@@ -134,19 +136,22 @@ function RowLine({
             {row.hint}
           </div>
         )}
+        {!compatible && row.group === "Returns" && <p className="mt-1 text-[10px] text-warning">Different or unspecified context · values only</p>}
       </div>
 
-      {cells.map((cell) => (
+      {cells.map((cell, index) => (
+        <div key={cell.dealId} className="min-w-0">
         <Cell
-          key={cell.dealId}
           row={row}
           cell={cell}
           cells={cells}
-          mode={mode}
+          mode={compatible ? mode : "values"}
           isWinner={winners.has(cell.dealId)}
           isLoser={losers.has(cell.dealId)}
           baselineCell={baseline ? cells.find((c) => c.dealId === baseline.id) ?? null : null}
         />
+        {row.group === "Returns" && cell.num != null && <p className="mt-1 text-[10px] text-right leading-relaxed text-muted-foreground">{returnContext(rowFact(deals[index], row))}</p>}
+        </div>
       ))}
     </motion.div>
   );

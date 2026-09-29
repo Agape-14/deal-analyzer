@@ -46,7 +46,7 @@ export function NeedsReviewPanel({ deals }: { deals: DealSummary[] }) {
   if (issues.length === 0) return null;
 
   return (
-    <Card elevated className="relative z-0 mb-8 overflow-hidden p-5">
+    <Card elevated className="relative z-0 mb-6 overflow-hidden p-4">
       <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
         <div>
           <div className="flex items-center gap-2">
@@ -80,12 +80,12 @@ export function NeedsReviewPanel({ deals }: { deals: DealSummary[] }) {
         </div>
       </div>
 
-      <div className="mt-4 grid grid-cols-1 gap-3 lg:grid-cols-2 2xl:grid-cols-3">
+      <div className="mt-3 divide-y divide-border/60">
           {issues.slice(0, 6).map(({ deal, gate, reason, nextAction, severity }) => (
             <Link
               key={deal.id}
               href={`/deals/${deal.id}?tab=questions`}
-              className="group flex min-h-[104px] flex-col justify-between rounded-lg border border-border/70 bg-background/35 p-3.5 transition-colors hover:border-primary/30 hover:bg-muted/20"
+              className="group grid gap-2 sm:grid-cols-[minmax(0,1fr)_minmax(0,1.5fr)] rounded-lg px-2 py-3 transition-colors hover:bg-muted/30"
             >
               <div className="flex items-start justify-between gap-3">
                 <div className="min-w-0">
@@ -96,7 +96,7 @@ export function NeedsReviewPanel({ deals }: { deals: DealSummary[] }) {
                 </div>
                 <ArrowUpRight className="h-4 w-4 shrink-0 text-muted-foreground transition-transform group-hover:-translate-y-0.5 group-hover:translate-x-0.5 group-hover:text-foreground" />
               </div>
-              <div className="mt-3 space-y-2">
+              <div className="space-y-1">
                 <div className="flex min-h-6 flex-wrap items-center gap-2">
                   {!deal.analysis && <ScoreQualityBadge gate={gate} size="sm" />}
                   <span
