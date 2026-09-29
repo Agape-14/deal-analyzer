@@ -220,7 +220,7 @@ function Cell({
   }
 
   // Values (+ optional winners) mode
-  const showHighlight = mode === "winners" || mode === "values";
+  const showHighlight = mode === "winners";
   return (
     <div
       className={cn(
@@ -230,7 +230,7 @@ function Cell({
       )}
     >
       <div className="flex items-center justify-end gap-1">
-        {showHighlight && isWinner && <Crown className="h-3 w-3 opacity-70" />}
+        {showHighlight && isWinner && <Crown aria-label="Leading value for this metric" className="h-3 w-3 opacity-70" />}
         <span>{formatValue(cell.raw, row.format)}</span>
       </div>
     </div>

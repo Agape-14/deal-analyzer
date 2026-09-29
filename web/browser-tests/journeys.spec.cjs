@@ -183,11 +183,14 @@ test('all three deals compare with matching accepted returns and export', async 
   await expect(page.getByRole('main').getByText('8.5%', { exact: true })).toBeVisible();
   await expect(page.getByRole('main').getByText('27.5%', { exact: true })).toHaveCount(0);
   await expect(page.getByText(/Best overall/)).toHaveCount(0);
+  await expect(page.getByLabel('Leading value for this metric')).toHaveCount(0);
   await page.getByRole('button', { name: 'Winners', exact: true }).click();
   await expect(page).toHaveURL(/mode=winners/);
   await expect(page.getByText(/Best overall/)).toHaveCount(0);
+  await expect(page.getByLabel('Leading value for this metric').first()).toBeVisible();
   await page.getByRole('button', { name: 'Values', exact: true }).click();
   await expect(page).not.toHaveURL(/mode=/);
+  await expect(page.getByLabel('Leading value for this metric')).toHaveCount(0);
   const download = page.waitForEvent('download');
   await page.getByRole('button', { name: 'Export Excel', exact: true }).click();
   const file = await download;
