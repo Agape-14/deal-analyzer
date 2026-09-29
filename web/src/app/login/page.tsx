@@ -107,8 +107,9 @@ export default function LoginPage() {
 
             <form onSubmit={submit} className="space-y-4">
               <div className="space-y-2">
-                <Label>Username</Label>
+                <Label htmlFor="login-username">Username</Label>
                 <Input
+                  id="login-username"
                   value={username}
                   onChange={(e) => setUsername(e.target.value)}
                   autoComplete="username"
@@ -116,8 +117,9 @@ export default function LoginPage() {
                 />
               </div>
               <div className="space-y-2">
-                <Label>Password</Label>
+                <Label htmlFor="login-password">Password</Label>
                 <Input
+                  id="login-password"
                   type="password"
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
