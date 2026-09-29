@@ -58,7 +58,7 @@ export function CompareClient({ deals }: { deals: DealSummary[] }) {
     [idsParam],
   );
   const preset = searchParams.get("preset") ?? "exec";
-  const mode = (searchParams.get("mode") as CompareMode) ?? "winners";
+  const mode = (searchParams.get("mode") as CompareMode) ?? "values";
   const baselineParam = searchParams.get("baseline");
   const baselineId = baselineParam ? Number(baselineParam) : null;
 
@@ -69,7 +69,6 @@ export function CompareClient({ deals }: { deals: DealSummary[] }) {
   const [loading, setLoading] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
   const [retryCount, setRetryCount] = React.useState(0);
-  const [overallWins, setOverallWins] = React.useState<Record<number, number>>({});
 
   const cacheRef = React.useRef(new Map<string, DealDetail[]>());
 
@@ -84,7 +83,6 @@ export function CompareClient({ deals }: { deals: DealSummary[] }) {
     setDetails(null);
     setError(null);
     setLoading(false);
-    setOverallWins({});
     if (selectedIds.length < 2) {
       return;
     }
@@ -213,9 +211,9 @@ export function CompareClient({ deals }: { deals: DealSummary[] }) {
         <CompareToolbar
           preset={preset}
           onPreset={(k) => setParams({ preset: k === "exec" ? null : k })}
-          mode={modeValid ? mode : "winners"}
+          mode={modeValid ? mode : "values"}
           onMode={(m) => {
-            setParams({ mode: m === "winners" ? null : m, baseline: m === "deltas" ? String(baselineId ?? selectedIds[0]) : null });
+            setParams({ mode: m === "values" ? null : m, baseline: m === "deltas" ? String(baselineId ?? selectedIds[0]) : null });
           }}
           baseline={baselineId ?? selectedIds[0]}
           onBaseline={(id) => setParams({ baseline: id ? String(id) : null })}
@@ -263,7 +261,7 @@ export function CompareClient({ deals }: { deals: DealSummary[] }) {
 
       {details && !loading && !error && (
         <>
-          <DealHeaderRow deals={details} overallWins={overallWins} onRemove={removeDeal} cols={cols} />
+          <DealHeaderRow deals={details} onRemove={removeDeal} cols={cols} />
           {rows.length === 0 ? (
             <Card elevated className="p-10 text-center text-sm text-muted-foreground">
               No metrics selected. Build your own preset or pick a preset above.
@@ -272,9 +270,8 @@ export function CompareClient({ deals }: { deals: DealSummary[] }) {
             <MetricsTable
               deals={details}
               rows={rows}
-              mode={modeValid ? mode : "winners"}
+              mode={modeValid ? mode : "values"}
               baselineId={mode === "deltas" ? baselineId ?? selectedIds[0] : null}
-              onWins={setOverallWins}
               cols={cols}
             />
           )}

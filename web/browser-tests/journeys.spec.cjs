@@ -182,6 +182,12 @@ test('all three deals compare with matching accepted returns and export', async 
   await expect(page.getByText(/3 deals ·/)).toBeVisible();
   await expect(page.getByRole('main').getByText('8.5%', { exact: true })).toBeVisible();
   await expect(page.getByRole('main').getByText('27.5%', { exact: true })).toHaveCount(0);
+  await expect(page.getByText(/Best overall/)).toHaveCount(0);
+  await page.getByRole('button', { name: 'Winners', exact: true }).click();
+  await expect(page).toHaveURL(/mode=winners/);
+  await expect(page.getByText(/Best overall/)).toHaveCount(0);
+  await page.getByRole('button', { name: 'Values', exact: true }).click();
+  await expect(page).not.toHaveURL(/mode=/);
   const download = page.waitForEvent('download');
   await page.getByRole('button', { name: 'Export Excel', exact: true }).click();
   const file = await download;
@@ -228,9 +234,12 @@ test('mobile summary keeps the main workflow reachable', async ({ page }, info) 
   await page.setViewportSize({ width: 390, height: 844 });
   await dealPage(page);
   await expect(page.getByRole('heading', { name: 'Sample Hold', exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'New Deal', exact: true })).toBeInViewport();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(390);
   await page.getByRole('tab', { name: 'Questions', exact: true }).click();
   await expect(page.getByRole('heading', { name: 'Only the questions that affect the summary', exact: true })).toBeVisible();
   await page.getByRole('tab', { name: 'Documents', exact: true }).click();
   await expect(page.getByRole('button', { name: 'Choose files', exact: true })).toBeVisible();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(390);
   await page.screenshot({ path: info.outputPath('mobile-documents.png'), fullPage: true });
 });

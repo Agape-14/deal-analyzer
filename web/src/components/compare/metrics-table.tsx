@@ -12,22 +12,20 @@ export type CompareMode = "values" | "winners" | "deltas" | "normalized";
 
 /**
  * Groups rows by their category and renders a sticky-group-header table.
- * Keeps a rolling win counter and calls `onWins` whenever it changes so the
- * header row can show "Best overall" crowns.
+ * Highlights individual metric values only; different metrics and incomplete
+ * evidence cannot establish an overall investment winner.
  */
 export function MetricsTable({
   deals,
   rows,
   mode,
   baselineId,
-  onWins,
   cols,
 }: {
   deals: DealDetail[];
   rows: MetricRow[];
   mode: CompareMode;
   baselineId: number | null;
-  onWins: (wins: Record<number, number>) => void;
   cols: number;
 }) {
   const grouped = React.useMemo(() => {
@@ -39,9 +37,8 @@ export function MetricsTable({
     return [...m.entries()];
   }, [rows]);
 
-  // Precompute winners per row + tally total wins per deal
-  const { winsByDeal, winsPerRow } = React.useMemo(() => {
-    const wins: Record<number, number> = {};
+  // Precompute extrema for each individual metric.
+  const winsPerRow = React.useMemo(() => {
     const perRow = new Map<string, { winners: Set<number>; losers: Set<number> }>();
     for (const r of rows) {
       const cells: CellValue[] = deals.map((d) => {
@@ -50,16 +47,9 @@ export function MetricsTable({
       });
       const ex = findExtrema(r, cells);
       perRow.set(r.key, ex);
-      ex.winners.forEach((id) => {
-        wins[id] = (wins[id] ?? 0) + 1;
-      });
     }
-    return { winsByDeal: wins, winsPerRow: perRow };
+    return perRow;
   }, [rows, deals]);
-
-  React.useEffect(() => {
-    onWins(winsByDeal);
-  }, [winsByDeal, onWins]);
 
   const baseline = deals.find((d) => d.id === baselineId) ?? null;
 
