@@ -13,6 +13,13 @@ const test = base.extend({
   page: async ({ page, context }, use) => {
     const errors = [];
     page.on('pageerror', error => errors.push(error.stack || error.message));
+    // React's development overlay can report recoverable hydration failures
+    // through console.error instead of the production window error event.
+    page.on('console', message => {
+      if (message.type() === 'error' && /hydration|server rendered|cannot be a descendant/i.test(message.text())) {
+        errors.push(message.text());
+      }
+    });
     await handleWelcomeTour(page);
     await context.route('**/*', route => {
       const url = new URL(route.request().url());
