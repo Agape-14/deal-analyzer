@@ -1,5 +1,6 @@
 const { test: base, expect } = require('@playwright/test');
 const fs = require('node:fs/promises');
+const { captureHydrationDiagnostics } = require('./hydration-diagnostics.cjs');
 
 async function handleWelcomeTour(page) {
   await page.addLocatorHandler(page.getByRole('dialog', { name: 'Welcome to Kenyon', exact: true }), async () => {
@@ -10,8 +11,9 @@ async function handleWelcomeTour(page) {
 // These tests run against the real local API and compiled Next frontend.
 // Only the optional upstream outage case is mocked. No private data is imported.
 const test = base.extend({
-  page: async ({ page, context }, use) => {
+  page: async ({ page, context }, use, info) => {
     const errors = [];
+    const hydration = process.env.BROWSER_DIAGNOSTIC === '1' ? [] : await captureHydrationDiagnostics(page);
     page.on('pageerror', error => errors.push(error.stack || error.message));
     // React's development overlay can report recoverable hydration failures
     // through console.error instead of the production window error event.
@@ -26,6 +28,7 @@ const test = base.extend({
       return ['127.0.0.1', 'localhost'].includes(url.hostname) ? route.continue() : route.abort();
     });
     await use(page);
+    if (hydration.length) await info.attach('hydration-fiber.json', { body: JSON.stringify(hydration, null, 2), contentType: 'application/json' });
     expect(errors, 'Uncaught browser exceptions').toEqual([]);
   },
 });
@@ -423,15 +426,18 @@ test('sign-out and an expired session return to sign-in', async ({ browser }) =>
 });
 
 test('saved deal routes hydrate consistently after repeated reloads', async ({ page }) => {
+  test.setTimeout(180000);
   const created = await page.request.post('/api/deals', { data: { project_name: 'Repeated route check' } });
   expect(created.ok()).toBeTruthy();
   const id = (await created.json()).id;
-  for (const dealId of [1, 2, 3, id]) {
+  for (let cycle = 0; cycle < 3; cycle++) {
+   for (const dealId of [1, 2, 3, id]) {
     for (const tab of ['overview', 'questions', 'documents']) {
       await dealPage(page, dealId, tab);
       await page.reload();
       await expect(page.getByRole('tab', { name: 'Assistant', exact: true })).toBeVisible();
       await expect(page.getByRole('heading', { level: 1 })).toBeVisible();
     }
+  }
   }
 });
