@@ -50,7 +50,11 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
           <RoleBodyClass />
           {/* Subtle radial highlight behind the main content */}
           <div aria-hidden className="pointer-events-none fixed inset-0 bg-radial-fade" />
-          <AppShell>{children}</AppShell>
+          {/* Hydrate the chrome as one boundary. Streaming route content can
+              otherwise move the hydration cursor while the header is loading. */}
+          <Suspense fallback={<div role="status" className="p-6 text-sm text-muted-foreground">Loading workspace…</div>}>
+            <AppShell>{children}</AppShell>
+          </Suspense>
           <CommandPalette />
           <HelpHotkey />
           <FirstRunWelcome />

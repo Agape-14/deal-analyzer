@@ -57,7 +57,6 @@ jobs:
         run: NODE_PATH="$RUNNER_TEMP/browser-tools/node_modules" node "$RUNNER_TEMP/browser-tools/node_modules/@playwright/test/cli.js" test --config=playwright.config.cjs
         env:
           BROWSER_TEST_MODE: synthetic
-          BROWSER_HYDRATION_TRACE: "1"
       - uses: actions/upload-artifact@v4
         if: always() && steps.browsers.outcome == 'failure'
         with:
