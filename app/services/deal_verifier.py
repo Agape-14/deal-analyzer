@@ -99,6 +99,7 @@ Rules:
 7. For risk scores assigned by analysis rather than stated by the document, mark as "calculated" with a note explaining the basis.
 8. If evidence conflicts, mark the field wrong or unverifiable and explain the conflict.
 9. Do not silently correct investor-level return metrics from a sponsor/GP column. Investor/LP returns should come from Investor, LP, Class A/B, or new-money investor columns.
+10. On each audit row include source_doc_name exactly as supplied, source_excerpt containing a VERBATIM CONTIGUOUS quote from the supplied extracted text, and either source_page (PDF) or source_sheet plus source_cell/source_range (workbook). For workbooks the excerpt must include the cited cell address and value, e.g. B12=0.13. Include the row/column label in the excerpt when possible. Do not paraphrase, insert ellipses, or invent a locator; the app checks quotes against that exact page/sheet. A filename by itself is insufficient. For nested values use a dotted field path; audit distinct scenarios and investor classes separately. Include fact_context with scenario, investor_class, basis (gross/net), debt_phase, period and currency only when the source explicitly states them. Never guess missing dimensions. A cash-flow allocation percentage is not cash-on-cash yield; a preferred investor return is not the common investor return. If a value is only shown in an image and cannot be quoted from the extracted text, mark it unverifiable and explain the required visual review.
 
 HERE ARE THE EXTRACTED METRICS TO VERIFY:
 """
@@ -123,7 +124,49 @@ VERIFY_MAX_CONTEXT_CHARS = _env_int("VERIFY_MAX_CONTEXT_CHARS", 65000)
 VERIFY_FULL_TEXT_THRESHOLD_CHARS = _env_int("VERIFY_FULL_TEXT_THRESHOLD_CHARS", 50000)
 VERIFY_MAX_OUTPUT_TOKENS = _env_int("VERIFY_MAX_OUTPUT_TOKENS", 16000)
 VERIFY_CONCURRENCY = max(1, _env_int("VERIFY_CONCURRENCY", 2))
-VERIFICATION_CACHE_VERSION = 1
+VERIFY_MAX_FIELDS_PER_CALL = max(1, min(24, _env_int("VERIFY_MAX_FIELDS_PER_CALL", 12)))
+VERIFICATION_CACHE_VERSION = 4
+
+
+class VerificationOutputLimit(ValueError):
+    """A bounded batch must be split before retrying, never parsed partially."""
+
+
+def verification_batches(metrics, sections, max_fields=VERIFY_MAX_FIELDS_PER_CALL):
+    """Bound output size by leaf fields, retaining explicit dotted identities."""
+    fields_by_path = {}
+    def walk(section, value, prefix=""):
+        if isinstance(value, dict):
+            for key, child in sorted(value.items(), key=lambda item: "." in str(item[0])):
+                if not str(key).startswith("_"):
+                    walk(section, child, f"{prefix}.{key}" if prefix else str(key))
+        elif prefix:
+            fields_by_path.setdefault((section, prefix), value)
+    for section in sections:
+        walk(section, metrics.get(section))
+    fields = [(section, path, value) for (section, path), value in fields_by_path.items()]
+    batches = []
+    for start in range(0, len(fields), max_fields):
+        batch = {}
+        for section, path, value in fields[start:start + max_fields]:
+            batch.setdefault(section, {})[path] = value
+        batches.append(batch)
+    return batches
+
+
+async def _verify_bounded_batch(subset, pdf_docs, doc_texts, api_key, deal_id):
+    """Retry only a truncated batch, with fewer fields and a finite split tree."""
+    try:
+        return await _verify_sections(list(subset), subset, pdf_docs, doc_texts, api_key, deal_id)
+    except VerificationOutputLimit:
+        count = sum(len(values) for values in subset.values())
+        if count <= 1:
+            raise
+        results = []
+        for smaller in verification_batches(subset, list(subset), max(1, count // 2)):
+            results.append(await _verify_bounded_batch(smaller, pdf_docs, doc_texts, api_key, deal_id))
+        return {key: [row for result in results for row in result.get(key, [])]
+                for key in ("audit_results", "missing_data", "calculation_checks")}
 
 
 def _coerce_json_object(parsed: Any, raw: str, context: str) -> dict:
@@ -264,7 +307,7 @@ async def _verify_sections(
             "type": "text",
             "text": (
                 VERIFY_PROMPT
-                + "\n\nFOCUS: only audit fields in these sections: "
+                + "\n\nThis is a bounded batch. Audit exactly the provided leaf fields, including dotted paths; do not add fields from other batches. Return one audit row per supplied field. Keep each supporting quote under 350 characters and each note under 180 characters. Do not repeat the full input JSON in notes or calculations.\n\nFOCUS: only audit fields in these sections: "
                 + ", ".join(sections)
                 + ".\n\n"
                 + json.dumps(subset_metrics, indent=2)
@@ -336,7 +379,7 @@ async def _verify_sections(
         op.output_tokens = output_tokens
         op.meta["stop_reason"] = stop_reason
         if stop_reason == "max_tokens":
-            raise ValueError(
+            raise VerificationOutputLimit(
                 f"Verification for {sections} hit max_tokens ceiling. "
                 "Try splitting the sections further or reducing pages."
             )
@@ -347,8 +390,12 @@ async def _verify_sections(
         return _parse_json_defensively(response_text)
 
 
-async def verify_deal_metrics(deal, db) -> dict:
+async def verify_deal_metrics(deal, db, *, sections: set[str] | None = None) -> dict:
     """Run second-pass verification on extracted metrics."""
+    from app.services.document_versions import review_documents
+    active_docs = review_documents(deal.documents)
+    if not active_docs:
+        raise ValueError("Choose at least one current document for primary review.")
     api_key = os.environ.get("ANTHROPIC_API_KEY")
     if not api_key:
         raise ValueError("ANTHROPIC_API_KEY not set")
@@ -360,11 +407,19 @@ async def verify_deal_metrics(deal, db) -> dict:
 
     pdf_docs = [
         (doc.filename, doc.file_path)
-        for doc in deal.documents
+        for doc in active_docs
         if doc.file_path and str(doc.file_path).lower().endswith(".pdf")
     ]
     doc_texts = []
-    for doc in deal.documents:
+    for doc in active_docs:
+        if str(doc.filename).lower().endswith((".xlsx", ".xlsm", ".xls", ".csv")) and (doc.extraction_quality or {}).get("text_format_version", 0) < 2:
+            from app.services.spreadsheet_extractor import extract_spreadsheet
+            refreshed = extract_spreadsheet(doc.file_path)
+            if refreshed.quality_score and refreshed.text:
+                doc.extracted_text = refreshed.text
+                doc.page_count = refreshed.page_count
+                doc.extraction_quality = {**(doc.extraction_quality or {}), "text_format_version": 2,
+                                          "page_diagnostics": refreshed.page_diagnostics}
         text = (doc.extracted_text or "").strip()
         quality = doc.extraction_quality or {}
         if text and not text.startswith("Error extracting text:") and not (isinstance(quality, dict) and quality.get("error")):
@@ -388,10 +443,14 @@ async def verify_deal_metrics(deal, db) -> dict:
     if extra_sections:
         groups_to_run.append(extra_sections)
 
+    if sections is not None:
+        groups_to_run = [[s for s in group if s in sections] for group in groups_to_run]
+        groups_to_run = [group for group in groups_to_run if group]
+
     docs_fp = documents_fingerprint(deal.documents or [])
     metrics_fp = metrics_sections_fingerprint(metrics, [s for group in groups_to_run for s in group])
     cache = metrics.get("_verification_cache")
-    if isinstance(cache, dict):
+    if sections is None and isinstance(cache, dict):
         cached_verification = cache.get("verification")
         if (
             cache.get("cache_version") == VERIFICATION_CACHE_VERSION
@@ -410,16 +469,30 @@ async def verify_deal_metrics(deal, db) -> dict:
     errors: list[str] = []
     semaphore = asyncio.Semaphore(VERIFY_CONCURRENCY)
 
-    async def _run_one(group: list[str]) -> tuple[list[str], dict | Exception]:
-        subset = {section: metrics.get(section) for section in group if metrics.get(section) is not None}
+    batches = [batch for group in groups_to_run for batch in verification_batches(metrics, group)]
+
+    async def _run_one(subset: dict) -> tuple[list[str], dict | Exception]:
+        group = list(subset)
         async with semaphore:
             try:
-                result = await _verify_sections(group, subset, pdf_docs, doc_texts, api_key, getattr(deal, "id", None))
+                result = await _verify_bounded_batch(subset, pdf_docs, doc_texts, api_key, getattr(deal, "id", None))
+                # Never carry an old confirmation through a silently omitted
+                # provider row. Omission is an unresolved source check.
+                expected = {(section, field) for section, values in subset.items() for field in values}
+                rows = [r for r in result.get("audit_results", []) if isinstance(r, dict) and (r.get("section"), r.get("field")) in expected]
+                result["audit_results"] = rows
+                result["missing_data"] = [r for r in result.get("missing_data", []) if isinstance(r, dict) and (r.get("section"), r.get("field")) in expected]
+                audited = {(r.get("section"), r.get("field")) for r in rows if isinstance(r, dict)}
+                for section, values in subset.items():
+                    for field, value in values.items():
+                        if (section, field) not in audited:
+                            rows.append({"section": section, "field": field, "extracted_value": value,
+                                         "status": "unverifiable", "note": "The provider omitted this field from its source check."})
                 return group, result
             except Exception as exc:
                 return group, exc
 
-    results = await asyncio.gather(*[_run_one(group) for group in groups_to_run])
+    results = await asyncio.gather(*[_run_one(batch) for batch in batches])
 
     for group, result in results:
         if isinstance(result, Exception):
@@ -446,6 +519,9 @@ async def verify_deal_metrics(deal, db) -> dict:
             f"metric groups. No updated score was published. Details: {detail[:1200]}"
         )
 
+    if sections is not None:
+        return combined
+
     metrics["_verification_cache"] = {
         "cache_version": VERIFICATION_CACHE_VERSION,
         "documents_fingerprint": docs_fp,
@@ -458,70 +534,117 @@ async def verify_deal_metrics(deal, db) -> dict:
 
 
 def apply_corrections(metrics: dict, verification: dict) -> tuple[dict, list[str]]:
-    """Apply verified corrections to metrics and preserve provenance."""
+    """Apply source-backed proposals without overwriting user locks or zeros.
+
+    Corrections are provisional until the automatic follow-up source check.
+    """
+    from app.services.canonical_metrics import get_path
+    from app.services.data_integrity import METRIC_SECTIONS, _invalidate_review_resolutions, is_path_locked
+
     metrics = _coerce_json_object(metrics, _json_preview(metrics), "Metrics corrections input")
     verification = _coerce_json_object(verification, _json_preview(verification), "Verification corrections input")
     changes = []
+    changed_paths = []
     prov = dict(metrics.get("_provenance") or {})
+    locks = metrics.get("_locks") or {}
 
-    for result in verification.get("audit_results", []):
-        status = result.get("status", "")
-        correct_val = result.get("correct_value")
-        extracted_val = result.get("extracted_value")
-        needs_fix = status == "wrong"
-        if status == "calculated" and correct_val is not None and extracted_val is not None:
-            try:
-                needs_fix = abs(float(correct_val) - float(extracted_val)) > 0.01
-            except (TypeError, ValueError):
-                needs_fix = str(correct_val) != str(extracted_val)
-        if needs_fix and correct_val is not None:
-            section = result.get("section")
-            field = result.get("field")
-            if section in metrics and isinstance(metrics[section], dict):
-                pre = metrics[section].get(field, extracted_val)
-                metrics[section][field] = correct_val
-                changes.append(
-                    f"CORRECTED {section}.{field}: {pre} -> {correct_val} "
-                    f"(Source: {result.get('source', 'verification')})"
-                )
-                path = f"{section}.{field}"
-                p = dict(prov.get(path) or {})
-                p["previous_value"] = pre
-                p["corrected_value"] = correct_val
-                if result.get("source"):
-                    p["correction_source"] = str(result.get("source"))
-                if result.get("note"):
-                    p["correction_note"] = str(result.get("note"))
-                prov[path] = p
+    def apply(row, value, missing_only=False):
+        if not isinstance(row, dict) or value is None:
+            return
+        section, field = row.get("section"), row.get("field")
+        if section not in METRIC_SECTIONS or not isinstance(field, str):
+            return
+        parts = field.split(".")
+        if any(not part or part.startswith("_") for part in parts):
+            return
+        path = f"{section}.{field}"
+        p = dict(prov.get(path) or {})
+        if is_path_locked(metrics, path) or not str(row.get("source") or "").strip():
+            return
+        previous = get_path(metrics, path)
+        section_values = metrics.get(section)
+        has_alias = len(parts) > 1 and isinstance(section_values, dict) and field in section_values
+        if (previous == value and not has_alias) or (missing_only and previous not in (None, "")):
+            return
+        block = metrics.setdefault(section, {})
+        # Early records stored both dotted and nested versions of scenario
+        # values. Updating only the nested copy leaves a permanent conflict.
+        if len(parts) > 1 and isinstance(block, dict):
+            block.pop(field, None)
+        for part in parts[:-1]:
+            if not isinstance(block, dict):
+                return
+            child = block.get(part)
+            block[part] = dict(child) if isinstance(child, dict) else ({"description": child} if isinstance(child, str) else {})
+            block = block[part]
+        if not isinstance(block, dict):
+            return
+        block[parts[-1]] = value
+        p.update({
+            "previous_value": previous,
+            "corrected_value": value,
+            "correction_source": row["source"],
+            "correction_note": row.get("note") or "",
+            "status": "extracted",
+        })
+        p.pop("verified_at", None)
+        prov[path] = p
+        changed_paths.append(path)
+        changes.append(f"CORRECTED {path}: {previous} -> {value} (Source: {row['source']})")
+
+    for row in verification.get("audit_results", []) or []:
+        if isinstance(row, dict) and row.get("status") in {"wrong", "calculated", "missing"}:
+            apply(row, row.get("correct_value", row.get("found_value")), row.get("status") == "missing")
+    for row in verification.get("missing_data", []) or []:
+        if isinstance(row, dict):
+            apply(row, row.get("found_value"), missing_only=True)
 
     metrics["_provenance"] = prov
-
-    for found in verification.get("missing_data", []):
-        section = found.get("section")
-        field = found.get("field")
-        value = found.get("found_value")
-        if section and field and value is not None:
-            if section not in metrics:
-                metrics[section] = {}
-            if isinstance(metrics[section], dict):
-                old_val = metrics[section].get(field)
-                if old_val is None or old_val == "" or old_val == 0:
-                    metrics[section][field] = value
-                    changes.append(
-                        f"ADDED {section}.{field}: {value} "
-                        f"(Source: {found.get('source', 'found in document')})"
-                    )
-
-    if changes:
-        from app.services.deal_extractor import _post_process_metrics
-
-        _post_process_metrics(metrics)
-
+    if changed_paths:
+        _invalidate_review_resolutions(metrics, changed_paths)
     return metrics, changes
+
+
+async def verify_with_corrections(deal, db, auto_correct=True):
+    """Check proposals once more against sources; never loop on disagreements."""
+    from app.services.data_integrity import METRIC_SECTIONS
+
+    verification = await verify_deal_metrics(deal, db)
+    metrics = deal.metrics
+    before = {s: json.dumps(metrics.get(s), sort_keys=True, default=str) for s in METRIC_SECTIONS}
+    changes = []
+    if auto_correct:
+        metrics, changes = apply_corrections(metrics, verification)
+    changed_sections = {
+        s for s in METRIC_SECTIONS
+        if before[s] != json.dumps(metrics.get(s), sort_keys=True, default=str)
+    }
+    if changed_sections:
+        deal.metrics = metrics
+        # A failed follow-up must fail the pipeline rather than bless proposals.
+        followup = await verify_deal_metrics(deal, db, sections=changed_sections)
+        metrics = deal.metrics
+        verification = {
+            "audit_results": [
+                r for r in verification.get("audit_results", [])
+                if r.get("section") not in changed_sections
+            ] + followup.get("audit_results", []),
+            "missing_data": [
+                r for r in verification.get("missing_data", [])
+                if r.get("section") not in changed_sections
+            ] + followup.get("missing_data", []),
+            "summary": {
+                **verification.get("summary", {}),
+                "cache_hit": False,
+                "corrections_rechecked": True,
+            },
+        }
+        # The old full-document cache describes pre-correction values.
+        metrics.pop("_verification_cache", None)
+    return metrics, verification, changes
 
 
 def _now_iso() -> str:
     from datetime import datetime, timezone
 
     return datetime.now(timezone.utc).isoformat()
-

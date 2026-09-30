@@ -1,5 +1,10 @@
 /** @type {import('next').NextConfig} */
 const FASTAPI = process.env.FASTAPI_URL || "http://127.0.0.1:8000";
+// Next's development debugger executes source-mapped modules with eval.
+// Allow it only in the explicitly disposable synthetic diagnostic runner.
+// A production build/start must retain its policy even if test flags leak in.
+const SYNTHETIC_DIAGNOSTICS = process.env.NODE_ENV === "development" &&
+  process.env.BROWSER_TEST_MODE === "synthetic" && process.env.BROWSER_DIAGNOSTIC === "1";
 
 /**
  * Content-Security-Policy. Tight but permissive enough for:
@@ -12,7 +17,7 @@ const FASTAPI = process.env.FASTAPI_URL || "http://127.0.0.1:8000";
  */
 const CSP = [
   "default-src 'self'",
-  "script-src 'self' 'unsafe-inline'",
+  "script-src 'self' 'unsafe-inline'" + (SYNTHETIC_DIAGNOSTICS ? " 'unsafe-eval'" : ""),
   "style-src 'self' 'unsafe-inline'",
   // MapLibre fetches PNG tiles from these origins; data: for inline icons.
   "img-src 'self' data: blob:" +
@@ -52,6 +57,12 @@ const SECURITY_HEADERS = [
 const nextConfig = {
   reactStrictMode: true,
   poweredByHeader: false,
+  // The development tools button otherwise covers the sidebar's Sign out
+  // control at the test viewport. Keep full error diagnostics available.
+  devIndicators: SYNTHETIC_DIAGNOSTICS ? false : undefined,
+  // Keep the incoming host in middleware redirects, including loopback hosts
+  // used by local deployments and browser verification.
+  skipMiddlewareUrlNormalize: true,
 
   async headers() {
     return [
@@ -60,6 +71,14 @@ const nextConfig = {
         // but that's fine — same policy is valid there.
         source: "/:path*",
         headers: SECURITY_HEADERS,
+      },
+      {
+        // Permit the app's own authenticated PDF preview, never other sites.
+        source: "/api/deals/documents/:id/file",
+        headers: [
+          { key: "X-Frame-Options", value: "SAMEORIGIN" },
+          { key: "Content-Security-Policy", value: CSP.replace("frame-ancestors 'none'", "frame-ancestors 'self'") },
+        ],
       },
     ];
   },

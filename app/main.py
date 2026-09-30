@@ -39,6 +39,9 @@ from app.auth import (
 from app.rate_limit import describe_policies
 from app.services.json_parser_guard import install_deal_verifier_json_guard
 from app.services.pipeline_runner import start_pipeline_runner, stop_pipeline_runner
+from app.routers import analysis as analysis_router
+from sqlalchemy.orm.exc import StaleDataError
+from app.services.review_jobs import start_review_worker, stop_review_worker
 
 
 # ----------------------------- logging setup ----------------------------- #
@@ -77,14 +80,27 @@ async def lifespan(app: FastAPI):
         log.info("[auth] enabled for user '%s' roles=%s", auth.get("username"), auth.get("roles"))
     else:
         log.warning("[auth] %s", auth.get("message"))
-    pipeline_task = start_pipeline_runner()
+    workers_enabled = os.getenv("REVIEW_WORKERS_ENABLED", "1").lower() not in {"0", "false", "no"}
+    pipeline_task = start_pipeline_runner() if workers_enabled else None
+    review_task = start_review_worker() if workers_enabled else None
     try:
         yield
     finally:
-        await stop_pipeline_runner(pipeline_task)
+        if review_task:
+            await stop_review_worker(review_task)
+        if pipeline_task:
+            await stop_pipeline_runner(pipeline_task)
 
 
 app = FastAPI(title="Kenyon Investment Dashboard", version="1.0.0", lifespan=lifespan)
+
+
+@app.exception_handler(StaleDataError)
+async def stale_analysis_handler(request, exc):
+    return JSONResponse(status_code=409, content={"detail": "The deal changed during this operation. Reload and retry; no older result was saved."})
+
+
+app.include_router(analysis_router.router, prefix="/api/deals", tags=["analysis"])
 
 
 class EnforceAuthMiddleware(BaseHTTPMiddleware):
@@ -230,12 +246,10 @@ async def healthz():
 
 @app.get("/")
 async def root_redirect():
-    """FastAPI now serves the legacy UI at /legacy. The new Next.js app (at
-    web/) is expected to sit in front in production. During local FastAPI-only
-    runs we redirect / → /legacy so the legacy UI is still reachable."""
+    """The application UI is served by Next.js; direct API visits show retirement information."""
     return RedirectResponse(url="/legacy")
 
 
 @app.get("/legacy")
 async def legacy_index(request: Request):
-    return templates.TemplateResponse(request, "index.html")
+    return JSONResponse({"detail": "This screen has been retired. Open the main app for the current reviewed analysis."}, status_code=410)

@@ -10,7 +10,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
 import { api } from "@/lib/api";
-import type { DealSummary } from "@/lib/types";
+import type { DealSummary, Investment } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
 /**
@@ -26,6 +26,7 @@ export function NewInvestmentDrawer() {
   const [submitting, setSubmitting] = React.useState(false);
   const [deals, setDeals] = React.useState<DealSummary[] | null>(null);
   const [mode, setMode] = React.useState<"deal" | "manual">("manual");
+  const [editing, setEditing] = React.useState<Investment | null>(null);
   const [form, setForm] = React.useState({
     deal_id: "",
     project_name: "",
@@ -40,10 +41,21 @@ export function NewInvestmentDrawer() {
 
   React.useEffect(() => {
     function onOpen() {
+      setEditing(null);
+      setOpen(true);
+    }
+    function onEdit(event: Event) {
+      const investment = (event as CustomEvent<Investment>).detail;
+      setEditing(investment);
+      setMode("manual");
+      setForm({ deal_id: investment.deal_id?.toString() ?? "", project_name: investment.project_name, sponsor_name: investment.sponsor_name,
+        investment_date: investment.investment_date ?? "", amount_invested: String(investment.amount_invested), investment_class: investment.investment_class ?? "",
+        projected_irr: investment.projected_irr?.toString() ?? "", projected_equity_multiple: investment.projected_equity_multiple?.toString() ?? "", hold_period_years: investment.hold_period_years?.toString() ?? "" });
       setOpen(true);
     }
     document.addEventListener("open-new-investment", onOpen);
-    return () => document.removeEventListener("open-new-investment", onOpen);
+    document.addEventListener("open-edit-investment", onEdit);
+    return () => { document.removeEventListener("open-new-investment", onOpen); document.removeEventListener("open-edit-investment", onEdit); };
   }, []);
 
   React.useEffect(() => {
@@ -105,9 +117,15 @@ export function NewInvestmentDrawer() {
       if (form.projected_equity_multiple)
         body.projected_equity_multiple = Number(form.projected_equity_multiple);
       if (form.hold_period_years) body.hold_period_years = Number(form.hold_period_years);
+      if (editing) {
+        body.investment_class = form.investment_class.trim();
+        body.investment_date = form.investment_date || null;
+        for (const key of ["projected_irr", "projected_equity_multiple", "hold_period_years"] as const) body[key] = form[key].trim() ? Number(form[key]) : null;
+      }
 
-      await api.post("/api/investments/", body);
-      toast.success("Investment added", {
+      if (editing) await api.put(`/api/investments/${editing.id}`, body);
+      else await api.post("/api/investments/", body);
+      toast.success(editing ? "Investment updated" : "Investment added", {
         description:
           mode === "deal"
             ? "Linked to the selected deal. Metrics auto-populated."
@@ -133,21 +151,22 @@ export function NewInvestmentDrawer() {
               <Wallet className="h-4 w-4 text-primary" />
             </div>
             <div>
-              <DialogTitle>Add investment</DialogTitle>
+              <DialogTitle>{editing ? "Edit investment" : "Add investment"}</DialogTitle>
               <DialogDescription>Track a position in your portfolio.</DialogDescription>
             </div>
           </div>
         </div>
 
         <form onSubmit={handleSubmit} className="flex-1 overflow-y-auto px-6 py-5 space-y-5">
-          <div className="flex items-center gap-1 p-1 rounded-lg bg-secondary/40 border border-border/70">
+          {!editing && <div className="flex items-center gap-1 p-1 rounded-lg bg-secondary/40 border border-border/70">
             <ModeTab active={mode === "manual"} onClick={() => setMode("manual")}>
               Manual entry
             </ModeTab>
             <ModeTab active={mode === "deal"} onClick={() => setMode("deal")} disabled={!deals?.length}>
               Link existing deal
             </ModeTab>
-          </div>
+          </div>}
+          {editing?.deal_id && <p className="text-xs text-muted-foreground">This position remains linked to its original deal. Changes here describe your own investment record.</p>}
 
           {mode === "manual" ? (
             <>
@@ -263,7 +282,7 @@ export function NewInvestmentDrawer() {
           </Button>
           <Button type="button" onClick={handleSubmit} disabled={submitting}>
             {submitting ? <Loader2 className="h-4 w-4 animate-spin" /> : <Plus className="h-4 w-4" />}
-            Add investment
+            {editing ? "Save investment" : "Add investment"}
           </Button>
         </div>
       </DialogSheet>
@@ -314,13 +333,14 @@ function Field({
   required?: boolean;
   children: React.ReactNode;
 }) {
+  const id = React.useId();
   return (
     <div className="space-y-2">
-      <Label>
+      <Label htmlFor={id}>
         {label}
         {required && <span className="text-primary ml-1">*</span>}
       </Label>
-      {children}
+      {React.Children.map(children, (child, index) => index === 0 && React.isValidElement<{ id?: string }>(child) ? React.cloneElement(child, { id }) : child)}
     </div>
   );
 }

@@ -27,10 +27,13 @@ from app.services.data_integrity import (
 )
 from app.services.deal_extractor_cost_aware import extract_metrics_from_docs
 from app.services.deal_scorer import score_deal
+from app.services.analysis import score_accepted_deal, effective_scores
 from app.services.deal_validator import validate_deal_metrics
-from app.services.deal_verifier import apply_corrections, verify_deal_metrics
+from app.services.deal_verifier import verify_with_corrections
 from app.services.document_context import documents_fingerprint
+from app.services.document_versions import review_documents
 from app.services.math_checker import run_math_checks
+from app.services.review_jobs import enqueue_review, public_pipeline
 
 router = APIRouter()
 log = logging.getLogger("kenyon.deal_pipeline")
@@ -111,7 +114,7 @@ def _estimate_review_seconds(deal: Deal) -> int:
     AI provider queueing and rate limits can dominate runtime, so this is only a
     planning estimate for the UI. It scales mainly by document type/count.
     """
-    docs = list(deal.documents or [])
+    docs = review_documents(deal.documents)
     if not docs:
         return 60
     pdf_count = len(_pdf_docs(deal))
@@ -202,6 +205,13 @@ def _already_running_response(deal_id: int, pipeline: dict) -> dict:
     }
 
 
+def _active_review_status(deal: Deal) -> dict | None:
+    job = deal.__dict__.get("review_job")
+    if job:
+        return public_pipeline(deal) if job.status in {"queued", "running"} else None
+    return _active_pipeline_status(deal.metrics)
+
+
 def _pipeline_error_kind(error: Exception) -> str:
     text = str(error) or error.__class__.__name__
     lower = text.lower()
@@ -233,7 +243,7 @@ def _pipeline_error_message(error: Exception) -> str:
 def _pdf_docs(deal: Deal):
     return [
         d
-        for d in deal.documents
+        for d in review_documents(deal.documents)
         if d.file_path and str(d.file_path).lower().endswith(".pdf")
     ]
 
@@ -249,7 +259,7 @@ def _doc_has_usable_text(doc) -> bool:
 
 
 def _usable_text_docs(deal: Deal):
-    return [d for d in deal.documents if _doc_has_usable_text(d)]
+    return [d for d in review_documents(deal.documents) if _doc_has_usable_text(d)]
 
 
 @router.get("/{deal_id}/quality")
@@ -262,7 +272,7 @@ async def deal_quality(deal_id: int, db: AsyncSession = Depends(get_db)):
     return {
         "summary": quality_summary(metrics),
         "stale_flags": staleness_flags(metrics, deal.documents or []),
-        "pipeline": metrics.get("_pipeline"),
+        "pipeline": public_pipeline(deal),
     }
 
 
@@ -282,7 +292,7 @@ async def extract_deal_metrics(deal_id: int, db: AsyncSession = Depends(get_db))
     if not usable_docs and not usable_pdfs:
         raise HTTPException(status_code=400, detail="No extracted text or PDF files available")
 
-    active_pipeline = _active_pipeline_status(deal.metrics)
+    active_pipeline = _active_review_status(deal)
     if active_pipeline:
         return _already_running_response(deal_id, active_pipeline)
 
@@ -296,8 +306,8 @@ async def extract_deal_metrics(deal_id: int, db: AsyncSession = Depends(get_db))
             estimated_total_seconds=_estimate_review_seconds(deal),
         ),
     )
+    await enqueue_review(db, deal_id, mode="extract")
     await db.commit()
-    asyncio.ensure_future(_run_extract_background(deal_id))
     return {"message": "Document review started", "status": "started", "deal_id": deal_id}
 
 
@@ -312,12 +322,10 @@ async def review_deal_documents(deal_id: int, db: AsyncSession = Depends(get_db)
     if not deal.documents:
         raise HTTPException(status_code=400, detail="No documents uploaded yet")
 
-    usable_docs = _usable_text_docs(deal)
-    usable_pdfs = _pdf_docs(deal)
-    if not usable_docs and not usable_pdfs:
-        raise HTTPException(status_code=400, detail="No extracted text or PDF files available")
+    # The durable worker reads pending/failed files before extracting metrics.
+    # A spreadsheet with a failed first read must be retryable from Documents.
 
-    active_pipeline = _active_pipeline_status(deal.metrics)
+    active_pipeline = _active_review_status(deal)
     if active_pipeline:
         return _already_running_response(deal_id, active_pipeline)
 
@@ -331,8 +339,8 @@ async def review_deal_documents(deal_id: int, db: AsyncSession = Depends(get_db)
             estimated_total_seconds=_estimate_review_seconds(deal),
         ),
     )
+    await enqueue_review(db, deal_id)
     await db.commit()
-    asyncio.ensure_future(_run_document_review_background(deal_id))
     return {"message": "Document review started", "status": "started", "deal_id": deal_id}
 
 
@@ -425,8 +433,11 @@ async def _run_extract_background(deal_id: int):
                 cache_hit = True
                 log.info("Using cached extraction for deal %s docs_fp=%s", deal_id, docs_fp[:12])
 
-            if not cache_hit and len(deal.documents) > 1 and _deep_conflict_scan_enabled():
-                for doc in deal.documents:
+            active_docs = review_documents(deal.documents)
+            if not active_docs:
+                raise ValueError("Choose at least one current document for primary review.")
+            if not cache_hit and len(active_docs) > 1 and _deep_conflict_scan_enabled():
+                for doc in active_docs:
                     text = doc.extracted_text or ""
                     path = doc.file_path if doc in usable_pdfs else None
                     if not text and not path:
@@ -554,7 +565,7 @@ async def verify_deal_endpoint(deal_id: int, auto_correct: bool = True, db: Asyn
     if not deal.metrics:
         raise HTTPException(status_code=400, detail="No metrics extracted yet. Run extraction first.")
 
-    active_pipeline = _active_pipeline_status(deal.metrics)
+    active_pipeline = _active_review_status(deal)
     if active_pipeline:
         return _already_running_response(deal_id, active_pipeline)
 
@@ -562,8 +573,8 @@ async def verify_deal_endpoint(deal_id: int, auto_correct: bool = True, db: Asyn
         deal.metrics,
         _pipeline_status("running", "verify", "Source verification started. Checking extracted values against source documents."),
     )
+    await enqueue_review(db, deal_id, mode="verify", auto_correct=auto_correct)
     await db.commit()
-    asyncio.ensure_future(_run_verify_background(deal_id, auto_correct))
     return {"message": "Source verification started", "status": "started", "deal_id": deal_id}
 
 
@@ -577,16 +588,12 @@ async def _run_verify_background(deal_id: int, auto_correct: bool):
             if not deal or not deal.metrics:
                 return
 
-            verification = await verify_deal_metrics(deal, db)
+            metrics, verification, changes = await verify_with_corrections(deal, db, auto_correct)
             verification_cache_hit = bool(
                 isinstance(verification.get("summary"), dict)
                 and verification["summary"].get("cache_hit")
             )
-            metrics = _ensure_metrics_dict(deal.metrics, "Stored deal metrics")
-            changes: list[str] = []
-            if auto_correct:
-                metrics, changes = apply_corrections(metrics, verification)
-            metrics = stamp_verification(metrics, verification)
+            metrics = stamp_verification(metrics, verification, deal.documents)
 
             math_results = run_math_checks(metrics)
             metrics["_math_checks"] = {
@@ -601,9 +608,9 @@ async def _run_verify_background(deal_id: int, auto_correct: bool):
             metrics["_pipeline"] = _pipeline_status(
                 "verify_complete",
                 "verify",
-                "Sources checked using the unchanged document cache. Values are ready for scoring."
+                "Source checks reused for unchanged documents. Checking score eligibility next."
                 if verification_cache_hit
-                else "Sources checked. Values are ready for scoring.",
+                else "Source checks complete. Checking score eligibility next.",
                 started_at=(deal.metrics or {}).get("_pipeline", {}).get("started_at")
                 if isinstance((deal.metrics or {}).get("_pipeline"), dict)
                 else None,
@@ -637,7 +644,7 @@ async def score_deal_endpoint(deal_id: int, db: AsyncSession = Depends(get_db)):
     if not deal.metrics:
         raise HTTPException(status_code=400, detail="No metrics extracted yet. Run extraction first.")
 
-    if _active_pipeline_status(deal.metrics):
+    if _active_review_status(deal):
         raise HTTPException(
             status_code=409,
             detail="Document review is still running. Wait for it to finish before recalculating the score.",
@@ -653,7 +660,7 @@ async def score_deal_endpoint(deal_id: int, db: AsyncSession = Depends(get_db)):
         metrics = annotate_canonical_metrics(metrics)
         math_checks = metrics.get("_math_checks", {})
         results = math_checks.get("results") if isinstance(math_checks, dict) else None
-        scores = score_deal(metrics, math_checks=results if isinstance(results, list) else None)
+        scores = score_accepted_deal(deal, metrics)
     except Exception as e:
         await _persist_pipeline_failure(db, deal_id, "score", "Score update failed.", e)
         raise HTTPException(status_code=503, detail=_pipeline_error_message(e))
@@ -664,7 +671,7 @@ async def score_deal_endpoint(deal_id: int, db: AsyncSession = Depends(get_db)):
         _pipeline_status("complete", "score", "Document review complete. Values were extracted, source-checked, math-checked, and scored."),
     )
     await db.commit()
-    return {"message": "Deal scored", "scores": scores}
+    return {"message": "Deal scored", "scores": effective_scores(deal)}
 
 
 async def _run_score_background(deal_id: int):
@@ -692,7 +699,7 @@ async def _run_score_background(deal_id: int):
             metrics = annotate_canonical_metrics(metrics)
             math_checks = metrics.get("_math_checks", {})
             results = math_checks.get("results") if isinstance(math_checks, dict) else None
-            scores = score_deal(metrics, math_checks=results if isinstance(results, list) else None)
+            scores = score_accepted_deal(deal, metrics)
         except Exception as e:
             await _persist_pipeline_failure(db, deal_id, "score", "Score update failed.", e)
             return
@@ -720,6 +727,11 @@ async def _run_score_background(deal_id: int):
 
 
 async def _persist_pipeline_failure(db: AsyncSession, deal_id: int, step: str, message: str, error: Exception) -> None:
+    from sqlalchemy.orm.exc import StaleDataError
+    if isinstance(error, StaleDataError):
+        await db.rollback()
+        log.info("Discarded stale %s result for deal %s; newer inputs are preserved", step, deal_id)
+        return
     try:
         await db.rollback()
         result = await db.execute(select(Deal).where(Deal.id == deal_id))
@@ -743,4 +755,3 @@ async def _persist_pipeline_failure(db: AsyncSession, deal_id: int, step: str, m
         await db.commit()
     except Exception:
         log.exception("failed to persist pipeline failure for deal %s", deal_id)
-

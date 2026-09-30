@@ -88,11 +88,11 @@ export function EnvironmentBanner() {
           <AlertTriangle className="h-4 w-4 shrink-0 mt-0.5" />
           <div className="flex-1 leading-relaxed">
             <div className="font-medium mb-0.5">
-              Backend is running in a degraded configuration.
+              Some automatic checks are unavailable.
             </div>
             <ul className="list-disc list-inside space-y-0.5 text-warning/90">
               {warnings.map((w) => (
-                <li key={w.service}>{w.message}</li>
+                <li key={w.service}>{w.service === "anthropic" ? "Automatic document review is unavailable. Saved documents, reviewed facts and the evidence assistant still work." : w.service === "brave_search" ? "Live market search is unavailable. Check the dates and sources of market information." : "A supporting service is unavailable. Try the affected feature again later."}</li>
               ))}
             </ul>
           </div>

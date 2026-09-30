@@ -1,3 +1,4 @@
+import { redirect } from "next/navigation";
 import { FileSpreadsheet, FileDown } from "lucide-react";
 import { api } from "@/lib/api";
 import type { Investment, PortfolioAnalytics } from "@/lib/types";
@@ -23,6 +24,7 @@ export default async function PortfolioPage() {
     investments = invList;
     analytics = analyticsResp;
   } catch (e) {
+    if ((e as { status?: number }).status === 401) redirect("/login");
     error = (e as { detail?: string })?.detail ?? "Failed to load portfolio";
   }
 

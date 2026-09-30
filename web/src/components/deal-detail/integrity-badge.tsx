@@ -87,13 +87,10 @@ export function IntegrityBadge({
 
   async function revertToPrevious() {
     if (!dealId || !path || provenance?.previous_value === undefined) return;
-    const [section, ...rest] = path.split(".");
-    const field = rest.join(".");
     setBusy(true);
     try {
       await api.post(`/api/deals/${dealId}/fields/edit`, {
-        section,
-        field,
+        path,
         value: provenance.previous_value,
         lock: true,
       });
@@ -112,8 +109,7 @@ export function IntegrityBadge({
     setBusy(true);
     try {
       await api.post(`/api/deals/${dealId}/fields/lock`, {
-        section: path.split(".")[0],
-        field: path.split(".").slice(1).join("."),
+        path,
         locked: true,
       });
       toast.success("Correction accepted & locked");
@@ -360,7 +356,7 @@ function labelFor(status: string, hasConflict: boolean) {
     case "confirmed":
       return "Verified against source document";
     case "wrong":
-      return "Corrected by verification";
+      return "Source check failed";
     case "unverifiable":
       return "Couldn't confirm in source docs";
     case "calculated":

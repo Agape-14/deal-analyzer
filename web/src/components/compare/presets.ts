@@ -50,12 +50,12 @@ export interface Preset {
 
 export const ALL_ROWS: MetricRow[] = [
   // Returns
-  { key: "target_irr", path: "metrics.target_returns.target_irr", label: "Target IRR", format: "percent", direction: "higher", group: "Returns" },
+  { key: "target_irr", path: "metrics._canonical_returns.target_irr", label: "Target IRR", format: "percent", direction: "higher", group: "Returns" },
   { key: "net_irr", path: "metrics.target_returns.net_irr", label: "Net IRR", format: "percent", direction: "higher", group: "Returns" },
   { key: "gross_irr", path: "metrics.target_returns.gross_irr", label: "Gross IRR", format: "percent", direction: "higher", group: "Returns" },
-  { key: "equity_multiple", path: "metrics.target_returns.target_equity_multiple", label: "Equity Multiple", format: "multiple", direction: "higher", group: "Returns" },
+  { key: "equity_multiple", path: "metrics._canonical_returns.target_equity_multiple", label: "Equity Multiple", format: "multiple", direction: "higher", group: "Returns" },
   { key: "net_eq_multiple", path: "metrics.target_returns.net_equity_multiple", label: "Net Equity Multiple", format: "multiple", direction: "higher", group: "Returns" },
-  { key: "cash_on_cash", path: "metrics.target_returns.target_cash_on_cash", label: "Cash-on-Cash", format: "percent", direction: "higher", group: "Returns" },
+  { key: "cash_on_cash", path: "metrics._canonical_returns.cash_on_cash", label: "Cash-on-Cash", format: "percent", direction: "higher", group: "Returns" },
   { key: "distribution_yield", path: "metrics.target_returns.distribution_yield", label: "Distribution Yield", format: "percent", direction: "higher", group: "Returns" },
   { key: "projected_profit", path: "metrics.target_returns.projected_profit", label: "Projected Profit", format: "money", direction: "higher", group: "Returns" },
 

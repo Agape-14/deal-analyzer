@@ -94,7 +94,7 @@ export function ExitModal({
             <div className="grid grid-cols-2 gap-4">
               <div className="space-y-2">
                 <Label>Exit amount</Label>
-                <Input
+                <Input aria-label="Exit amount"
                   autoFocus
                   type="number"
                   min={0}

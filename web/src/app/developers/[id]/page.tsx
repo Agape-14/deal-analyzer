@@ -1,4 +1,4 @@
-import { notFound } from "next/navigation";
+import { notFound, redirect } from "next/navigation";
 import { api } from "@/lib/api";
 import type { Developer, DealSummary, Investment } from "@/lib/types";
 import { DeveloperDetailView } from "@/components/developers/dev-detail-view";
@@ -22,6 +22,7 @@ export default async function DeveloperDetailPage({
   try {
     developer = await api.get<Developer>(`/api/developers/${devId}`);
   } catch (e) {
+    if ((e as { status?: number }).status === 401) redirect("/login");
     if ((e as { status?: number }).status === 404) notFound();
     throw e;
   }

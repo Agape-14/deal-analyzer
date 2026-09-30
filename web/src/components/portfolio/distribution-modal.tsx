@@ -104,7 +104,7 @@ export function DistributionModal({
             <div className="grid grid-cols-2 gap-4">
               <div className="space-y-2">
                 <Label>Amount</Label>
-                <Input
+                <Input aria-label="Amount"
                   autoFocus
                   type="number"
                   min={0}

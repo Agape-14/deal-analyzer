@@ -3,7 +3,7 @@ import type { Format, Direction, MetricRow } from "./presets";
 
 export function formatValue(value: unknown, format: Format): string {
   if (value == null || value === "") return "—";
-  if (typeof value === "number" && Number.isNaN(value)) return "—";
+  if (typeof value === "number" && !Number.isFinite(value)) return "—";
 
   if (typeof value === "number") {
     switch (format) {
@@ -69,8 +69,8 @@ export function findExtrema(
 }
 
 export function toNumber(v: unknown): number | null {
-  if (typeof v === "number" && !Number.isNaN(v)) return v;
-  if (typeof v === "string" && v.trim() !== "" && !Number.isNaN(Number(v))) return Number(v);
+  if (typeof v === "number" && Number.isFinite(v)) return v;
+  if (typeof v === "string" && v.trim() !== "" && Number.isFinite(Number(v))) return Number(v);
   return null;
 }
 

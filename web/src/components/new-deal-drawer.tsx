@@ -3,7 +3,7 @@
 import * as React from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { motion } from "framer-motion";
-import { Building2, Loader2, Plus } from "lucide-react";
+import { Building2, Loader2, Plus, UploadCloud, X, FileText } from "lucide-react";
 import { toast } from "sonner";
 import { Dialog, DialogSheet, DialogTitle, DialogDescription } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
@@ -31,6 +31,19 @@ export function NewDealDrawer() {
   const [open, setOpen] = React.useState(false);
   const [submitting, setSubmitting] = React.useState(false);
   const [developers, setDevelopers] = React.useState<Developer[] | null>(null);
+  const [mode, setMode] = React.useState<"upload" | "manual">("upload");
+  const [files, setFiles] = React.useState<File[]>([]);
+  const [uploadError, setUploadError] = React.useState("");
+  const [savedDealId, setSavedDealId] = React.useState<number | null>(null);
+  const tokenRef = React.useRef<string | null>(null);
+  function addFiles(incoming: File[]) {
+    if (files.length + incoming.length > 10) { setUploadError("Choose up to 10 documents per deal upload."); return; }
+    if (incoming.some(file => !/\.(pdf|xlsx|xlsm|xls|csv)$/i.test(file.name) || file.size === 0 || file.size > 50 * 1024 * 1024)) {
+      setUploadError("Choose nonempty PDF, Excel or CSV documents, no larger than 50 MB each."); return;
+    }
+    setUploadError("");
+    setFiles(current => [...current, ...incoming]);
+  }
 
   const [form, setForm] = React.useState({
     project_name: "",
@@ -63,15 +76,20 @@ export function NewDealDrawer() {
 
   // Pull developers once the drawer opens (we don't need them before).
   React.useEffect(() => {
-    if (!open || developers !== null) return;
+    if (!open || mode !== "manual" || developers !== null) return;
     api
       .get<Developer[]>("/api/developers")
       .then(setDevelopers)
       .catch(() => setDevelopers([]));
-  }, [open, developers]);
+  }, [open, mode, developers]);
 
-  function closeAndClear() {
+  function clearDraft() {
     setOpen(false);
+    setFiles([]);
+    setMode("upload");
+    setUploadError("");
+    setSavedDealId(null);
+    tokenRef.current = null;
     // reset after the close animation so we don't flash an empty form
     setTimeout(() => {
       setForm({
@@ -83,6 +101,11 @@ export function NewDealDrawer() {
         property_type: "multifamily",
       });
     }, 250);
+  }
+
+  function closeAndClear() {
+    if (submitting) return;
+    clearDraft();
     // clear ?new=1 from URL if present
     if (searchParams?.get("new")) {
       router.replace("/", { scroll: false });
@@ -93,6 +116,34 @@ export function NewDealDrawer() {
     e.preventDefault();
     if (!isAnalyst) {
       toast.error("Viewer accounts are read-only");
+      return;
+    }
+    if (mode === "upload") {
+      if (!files.length) { toast.error("Choose at least one document"); return; }
+      setSubmitting(true);
+      setUploadError("");
+      try {
+        tokenRef.current ??= crypto.randomUUID();
+        const body = new FormData();
+        body.append("intake_token", tokenRef.current);
+        body.append("project_name", form.project_name.trim());
+        files.forEach(file => body.append("files", file));
+        const response = await fetch("/document-upload/intake", { method: "POST", body });
+        const result = await response.json();
+        if (!response.ok) throw new Error(typeof result.detail === "string" ? result.detail : "Upload could not be completed");
+        setSavedDealId(result.deal_id);
+        if (result.errors?.length) {
+          const failedNames = new Set(result.errors.map((error: { filename: string }) => error.filename));
+          setFiles(current => current.filter(file => failedNames.has(file.name)));
+          throw new Error(result.errors.map((error: { filename: string; detail: string }) => `${error.filename}: ${error.detail}`).join(" · "));
+        }
+        clearDraft();
+        toast.success("Documents saved", { description: "Your deal is ready for document review." });
+        router.push(`/deals/${result.deal_id}?tab=documents`);
+        router.refresh();
+      } catch (err) {
+        setUploadError((err as Error).message || "Upload failed. Your selected files are ready to retry.");
+      } finally { setSubmitting(false); }
       return;
     }
     if (!form.project_name.trim()) {
@@ -111,7 +162,7 @@ export function NewDealDrawer() {
         devId = dev.id;
       }
 
-      await api.post<DealSummary>("/api/deals", {
+      const deal = await api.post<DealSummary>("/api/deals", {
         project_name: form.project_name.trim(),
         developer_id: devId,
         city: form.city.trim(),
@@ -122,8 +173,9 @@ export function NewDealDrawer() {
       toast.success(`Created “${form.project_name.trim()}”`, {
         description: "Upload an offering memo to auto-populate metrics.",
       });
-      closeAndClear();
-      router.refresh(); // re-fetch server component
+      clearDraft();
+      router.push(`/deals/${deal.id}?tab=documents`);
+      router.refresh();
     } catch (err) {
       const detail = (err as { detail?: string })?.detail ?? "Something went wrong";
       toast.error("Couldn't create deal", { description: detail });
@@ -144,12 +196,26 @@ export function NewDealDrawer() {
             </div>
             <div>
               <DialogTitle>New deal</DialogTitle>
-              <DialogDescription>Create a deal shell, then upload an OM to score it.</DialogDescription>
+              <DialogDescription>Start with documents. Review only what needs attention.</DialogDescription>
             </div>
           </div>
         </div>
 
-        <form onSubmit={handleSubmit} className="flex-1 overflow-y-auto px-6 py-5 space-y-5">
+        <div className="mx-6 mt-5 grid grid-cols-2 rounded-lg bg-muted/60 p-1">
+          {(["upload", "manual"] as const).map(value => <button key={value} disabled={submitting} onClick={() => setMode(value)} className={cn("rounded-md px-3 py-2 text-sm transition-colors", mode === value && "bg-background shadow-sm font-medium")}>{value === "upload" ? "Upload documents" : "Enter details"}</button>)}
+        </div>
+        {mode === "upload" ? <form onSubmit={handleSubmit} className="flex-1 overflow-y-auto px-6 py-5 space-y-5">
+          <div onDragOver={e => e.preventDefault()} onDrop={e => { e.preventDefault(); if (!submitting) addFiles(Array.from(e.dataTransfer.files)); }} className="rounded-xl border-2 border-dashed border-primary/35 bg-primary/5 p-6 text-center">
+            <UploadCloud className="mx-auto h-9 w-9 text-primary mb-3" />
+            <p className="font-medium">Drop the deal documents here</p>
+            <p className="mt-1 text-xs text-muted-foreground">Offering memo, financials or investor terms · PDF, Excel, CSV · up to 10 files, 50 MB each</p>
+            <label className="mt-4 inline-block cursor-pointer rounded-lg border border-border bg-background px-4 py-2 text-sm font-medium">Choose documents<input aria-label="Choose deal documents" type="file" multiple accept=".pdf,.xlsx,.xlsm,.xls,.csv" disabled={submitting} className="sr-only" onChange={e => { addFiles(Array.from(e.target.files ?? [])); e.target.value = ""; }} /></label>
+          </div>
+          {files.length > 0 && <ul className="space-y-2">{files.map((file, index) => <li key={`${file.name}-${index}`} className="flex min-w-0 items-center gap-2 rounded-lg border border-border p-3 text-sm"><FileText className="h-4 w-4 shrink-0 text-muted-foreground" /><span className="truncate flex-1">{file.name}</span><span className="text-xs text-muted-foreground shrink-0">{(file.size / 1024 / 1024).toFixed(1)} MB</span><button type="button" aria-label={`Remove ${file.name}`} disabled={submitting} onClick={() => setFiles(current => current.filter((_, i) => i !== index))}><X className="h-4 w-4" /></button></li>)}</ul>}
+          <Field label="Deal name (optional)"><Input aria-label="Deal name (optional)" value={form.project_name} maxLength={255} onChange={e => setForm(f => ({ ...f, project_name: e.target.value }))} placeholder="Use the first document name" disabled={submitting} /></Field>
+          <p className="text-sm text-muted-foreground">No sponsor or location entry needed to start. Numbers remain withheld until their evidence is accepted.</p>
+          {uploadError && <div role="alert" className="rounded-lg border border-destructive/30 bg-destructive/5 p-3 text-sm"><p>{uploadError}</p>{savedDealId && <a className="mt-2 block underline" href={`/deals/${savedDealId}?tab=documents`}>Open the documents already saved</a>}<p className="mt-2 text-xs text-muted-foreground">Retry uses this same deal and skips identical files.</p></div>}
+        </form> : <form onSubmit={handleSubmit} className="flex-1 overflow-y-auto px-6 py-5 space-y-5">
           <Field label="Project name" required>
             <Input
               autoFocus
@@ -233,7 +299,7 @@ export function NewDealDrawer() {
               <option value="other">Other</option>
             </select>
           </Field>
-        </form>
+        </form>}
 
         <div className="border-t border-border/70 px-6 py-4 flex items-center justify-end gap-2 bg-background/40">
           <Button type="button" variant="ghost" onClick={closeAndClear} disabled={submitting}>
@@ -241,7 +307,7 @@ export function NewDealDrawer() {
           </Button>
           <Button type="button" onClick={handleSubmit} disabled={submitting}>
             {submitting ? <Loader2 className="h-4 w-4 animate-spin" /> : <Plus className="h-4 w-4" />}
-            Create deal
+            {submitting ? "Saving…" : mode === "upload" ? savedDealId ? "Retry remaining documents" : "Upload and review" : "Create deal"}
           </Button>
         </div>
       </DialogSheet>
@@ -258,13 +324,14 @@ function Field({
   required?: boolean;
   children: React.ReactNode;
 }) {
+  const id = React.useId();
   return (
     <div className="space-y-2">
-      <Label>
+      <Label htmlFor={id}>
         {label}
         {required && <span className="text-primary ml-1">*</span>}
       </Label>
-      {children}
+      {React.isValidElement<{ id?: string }>(children) ? React.cloneElement(children, { id }) : children}
     </div>
   );
 }

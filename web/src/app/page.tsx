@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/button";
 import { NeedsReviewPanel } from "@/components/needs-review-panel";
 import { PipelineWidgets, type PipelineSummary } from "@/components/pipeline-widgets";
 import Link from "next/link";
+import { redirect } from "next/navigation";
 import { LayoutDashboard } from "lucide-react";
 
 export const dynamic = "force-dynamic";
@@ -22,11 +23,12 @@ export default async function Home() {
       api.get<PipelineSummary>("/api/deals/pipeline/summary").catch(() => null),
     ]);
   } catch (e) {
+    if ((e as { status?: number }).status === 401) redirect("/login?next=%2F");
     error = (e as { detail?: string }).detail ?? "Failed to load deals";
   }
 
   return (
-    <div className="w-full px-6 md:px-10 xl:px-12 2xl:px-14 py-8 md:py-12">
+    <div className="w-full px-5 md:px-8 xl:px-10 py-6 md:py-8">
       {/* Hero */}
       <FadeIn>
         <div className="flex flex-col md:flex-row md:items-end md:justify-between gap-4 mb-8">
@@ -37,7 +39,7 @@ export default async function Home() {
             <h1 className="text-display tracking-tight">Deal Pipeline</h1>
             <p className="text-sm text-muted-foreground mt-1.5 max-w-xl">
               {deals.length
-                ? `${deals.length} active deal${deals.length === 1 ? "" : "s"}. Review underwriting, compare opportunities, and open any deal that needs attention.`
+                ? `${deals.length} active deal${deals.length === 1 ? "" : "s"}. Start with the evidence questions, then compare the reviewed numbers.`
                 : "Upload your first offering memo to start analyzing deals."}
             </p>
           </div>
@@ -46,7 +48,7 @@ export default async function Home() {
 
       {/* Deal widgets: velocity, win rate, capital, aging */}
       {pipeline ? (
-        <PipelineWidgets summary={pipeline} />
+        <details className="mb-6 rounded-xl border border-border p-4"><summary className="cursor-pointer text-sm font-medium">Pipeline activity and capital</summary><div className="mt-4"><PipelineWidgets summary={pipeline} /></div></details>
       ) : (
         <div className="grid grid-cols-2 md:grid-cols-4 gap-3 md:gap-4 mb-10">
           <StatCard label="Total Deals" value={deals.length} />
@@ -64,7 +66,7 @@ export default async function Home() {
           <div className="text-destructive font-medium">Couldn&apos;t load deals</div>
           <div className="text-sm text-muted-foreground mt-1">{error}</div>
           <div className="text-xs text-muted-foreground mt-4">
-            Is the FastAPI backend running on <code className="font-mono">http://127.0.0.1:8000</code>?
+            Refresh to retry. Your saved deals have not been changed.
           </div>
         </Card>
       ) : deals.length === 0 ? (
@@ -87,11 +89,11 @@ function EmptyState() {
         </div>
         <h3 className="text-lg font-semibold tracking-tight">No deals yet</h3>
         <p className="text-sm text-muted-foreground mt-1.5 max-w-md mx-auto">
-          Create a deal and upload offering memorandums to get automated scoring, validation, and risk analysis.
+          Upload an offering memo or financials. The app organizes the evidence and shows the questions that need attention.
         </p>
         <Button asChild className="mt-6">
           <Link href="/?new=1" scroll={false}>
-            Create your first deal
+            Upload your first documents
           </Link>
         </Button>
       </div>

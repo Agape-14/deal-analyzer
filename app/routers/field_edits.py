@@ -15,6 +15,7 @@ from app.services.confidence import assess_data_quality, summarize_math_checks
 from app.services.canonical_metrics import annotate_canonical_metrics
 from app.services.data_integrity import mark_manual_edit, now_iso, set_lock
 from app.services.deal_scorer import score_deal
+from app.services.analysis import score_accepted_deal
 from app.services.deal_validator import validate_deal_metrics
 from app.services.math_checker import run_math_checks
 
@@ -94,7 +95,7 @@ def _mark_review_resolved(metrics: dict, key: str, action: str, note: Optional[s
         return False
     old_value = resolutions.get(key)
     new_value = {
-        "resolved": True,
+        "resolved": action != "unsure",
         "action": action,
         "note": note,
         "at": now_iso(),
@@ -257,7 +258,7 @@ def _refresh_integrity(deal: Deal, metrics: dict) -> None:
         metrics.setdefault("validation_flags", [])
         metrics["_manual_edit_warning"] = f"Validation did not rerun: {type(e).__name__}: {e}"
     try:
-        scores = score_deal(metrics, math_checks=math_checks)
+        scores = score_accepted_deal(deal, metrics)
     except Exception as e:
         metrics["_manual_edit_warning"] = f"Score did not refresh: {type(e).__name__}: {e}"
         try:
@@ -407,7 +408,7 @@ async def resolve_review_item(deal_id: int, data: ReviewResolveIn, db: AsyncSess
             status_code=500,
             detail=f"Could not resolve review item: {type(e).__name__}: {e}",
         )
-    return {"message": "Review item resolved", "key": data.key, "resolved": True}
+    return {"message": "Uncertainty recorded" if data.action == "unsure" else "Review item resolved", "key": data.key, "resolved": data.action != "unsure"}
 
 
 @router.post("/{deal_id}/fields/lock")

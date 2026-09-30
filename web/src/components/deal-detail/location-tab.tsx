@@ -1,6 +1,7 @@
 "use client";
 
 import * as React from "react";
+import { useCurrentUser } from "@/lib/auth-client";
 import Map, {
   Layer,
   Marker,
@@ -287,7 +288,7 @@ export function LocationTab({
   // moment on suburban deals.
   const autoWidenedRef = React.useRef(false);
   React.useEffect(() => {
-    if (!bundle || autoWidenedRef.current) return;
+    if (!bundle || autoWidenedRef.current || Object.keys(bundle.category_errors ?? {}).length) return;
     const anyPois = Object.values(bundle.categories ?? {}).some((v) => (v?.length ?? 0) > 0);
     if (!anyPois && radiusM < 3219 && hasCoords) {
       autoWidenedRef.current = true;
@@ -303,7 +304,7 @@ export function LocationTab({
         {loading && !bundle ? (
           <LoadingProgress />
         ) : !hasCoords ? (
-          <GeocodeFailure bundle={bundle} onManual={() => toast.info("Open the side panel to manually set coordinates")} />
+          <GeocodeFailure bundle={bundle} onSave={async (lat, lng) => { await api.post(`/api/deals/${dealId}/location/manual`, { lat, lng }); await refetch(true); }} />
         ) : (
           <>
             <Map
@@ -469,6 +470,11 @@ export function LocationTab({
 
       {/* ============== SIDE PANEL ============== */}
       <div className="flex flex-col gap-4 min-h-0">
+        {!!Object.keys(bundle?.category_errors ?? {}).length && (
+          <p role="status" className="rounded-lg border border-warning/30 bg-warning/10 p-3 text-xs text-warning">
+            Nearby places are incomplete for {Object.keys(bundle?.category_errors ?? {}).join(", ")}. The map provider did not respond. Refresh to try again; an empty layer does not mean there are no nearby places.
+          </p>
+        )}
         <Card elevated className="p-4">
           <div className="flex items-center gap-2 mb-3">
             <Layers className="h-4 w-4 text-muted-foreground" />
@@ -551,9 +557,7 @@ export function LocationTab({
             </>
           ) : (
             <div className="text-xs text-muted-foreground">
-              Zip-level rent averages are free from HUD. Set{" "}
-              <code className="font-mono bg-muted/60 px-1 py-0.5 rounded text-[10px]">HUD_API_TOKEN</code>{" "}
-              (register free at huduser.gov) to enable.
+              Rent benchmarks are currently unavailable. They are optional context and do not block document review.
             </div>
           )}
         </Card>
@@ -738,11 +742,22 @@ function LoadingProgress() {
 
 function GeocodeFailure({
   bundle,
-  onManual,
+  onSave,
 }: {
   bundle: LocationBundle | null;
-  onManual: () => void;
+  onSave: (lat: number, lng: number) => Promise<void>;
 }) {
+  const { isAnalyst } = useCurrentUser();
+  const [lat, setLat] = React.useState("");
+  const [lng, setLng] = React.useState("");
+  const [saving, setSaving] = React.useState(false);
+  const [error, setError] = React.useState("");
+  async function save(event: React.FormEvent) {
+    event.preventDefault(); setSaving(true); setError("");
+    try { await onSave(Number(lat), Number(lng)); }
+    catch (e) { setError((e as { detail?: string }).detail ?? "Location could not be saved. Please retry."); }
+    finally { setSaving(false); }
+  }
   return (
     <div className="h-full grid place-items-center p-10 text-center">
       <div className="max-w-sm">
@@ -754,11 +769,7 @@ function GeocodeFailure({
           {bundle?.error ||
             "Add a street address, city, and state to the deal — geocoding happens automatically."}
         </p>
-        <div className="text-[11px] text-muted-foreground mt-5 leading-relaxed">
-          Once the map appears, click <strong>Re-pin</strong> in the top-right to
-          click-place the exact property location. Future refreshes will re-query
-          from that point.
-        </div>
+        {isAnalyst && <form onSubmit={save} className="mt-5 space-y-3 text-left"><p className="text-xs text-muted-foreground">If you know the property's coordinates, place it directly.</p><div className="grid grid-cols-2 gap-3"><label className="text-xs">Latitude<input type="number" step="any" min={-90} max={90} required value={lat} onChange={e => setLat(e.target.value)} className="mt-1 w-full rounded border bg-background p-2" /></label><label className="text-xs">Longitude<input type="number" step="any" min={-180} max={180} required value={lng} onChange={e => setLng(e.target.value)} className="mt-1 w-full rounded border bg-background p-2" /></label></div>{error && <p role="alert" className="text-xs text-destructive">{error}</p>}<Button type="submit" disabled={saving}>{saving ? "Saving…" : "Save location"}</Button></form>}
       </div>
     </div>
   );

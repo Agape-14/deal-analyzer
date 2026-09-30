@@ -70,11 +70,11 @@ def environment_status() -> dict[str, dict]:
     return {
         "anthropic": {
             "configured": anthropic_ok,
-            "affects": ["extract", "verify", "chat", "market_research"],
+            "affects": ["extract", "verify", "market_research"],
             "message": (
                 None
                 if anthropic_ok
-                else "ANTHROPIC_API_KEY is not set - AI-powered extraction, verification, chat, and market research will return 503."
+                else "ANTHROPIC_API_KEY is not set - document extraction, verification and market research are unavailable. Reviewed-fact answers remain available."
             ),
         },
         "brave_search": {

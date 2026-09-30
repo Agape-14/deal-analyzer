@@ -2,7 +2,7 @@
 
 These functions are the backbone of the phase-6 guarantees: smart merge,
 conflict detection, provenance tagging, locks, quality counters. Getting
-any of these wrong corrupts the dashboard â€” they deserve coverage.
+any of these wrong corrupts the dashboard — they deserve coverage.
 """
 
 from app.services.data_integrity import (
@@ -35,11 +35,11 @@ def test_smart_merge_preserves_value_when_incoming_is_null():
         "target_returns": {"target_irr": None},
     }
     merged, changes = smart_merge(existing, incoming, source_doc_id=1, source_doc_name="om.pdf")
-    # LTV was null â€” old value survives
+    # LTV was null — old value survives
     assert merged["deal_structure"]["ltv"] == 65
-    # Debt changed â€” new value wins
+    # Debt changed — new value wins
     assert merged["deal_structure"]["debt_amount"] == 12_000_000
-    # IRR null â€” preserved
+    # IRR null — preserved
     assert merged["target_returns"]["target_irr"] == 16
     # Only debt_amount is in changes list
     assert "deal_structure.debt_amount" in changes
@@ -148,7 +148,7 @@ def test_stamp_verification_adds_per_field_status():
     out = stamp_verification(metrics, verification)
     prov = out["_provenance"]["deal_structure.ltv"]
     assert prov["status"] == "confirmed"
-    assert prov["confidence"] == 88
+    assert "confidence" not in prov  # Overall model confidence is not per-field evidence.
     assert prov["source_page"] == 3
     assert out["_verification"]["confidence"] == 88
     assert out["_verification"]["totals"]["confirmed"] == 1
@@ -251,4 +251,3 @@ def test_staleness_flag_when_doc_newer_than_last_extraction():
     doc = _FakeDoc(upload_date=datetime.now(timezone.utc))
     flags = staleness_flags(metrics, documents=[doc])
     assert any("uploaded after" in f["message"] for f in flags)
-

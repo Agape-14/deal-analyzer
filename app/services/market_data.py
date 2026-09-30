@@ -4,7 +4,7 @@ import os
 import json
 import httpx
 from datetime import date
-from anthropic import Anthropic
+from anthropic import AsyncAnthropic
 
 from app.config import MODEL_MARKET
 
@@ -41,8 +41,9 @@ async def fetch_market_data(city: str, state: str) -> dict:
         raise ValueError("City and state are required for market research")
 
     # Two search queries
-    q1 = f"{city} {state} apartment market rent growth population employment 2024 2025"
-    q2 = f"{city} {state} new apartment construction pipeline supply multifamily"
+    year = date.today().year
+    q1 = f"{city} {state} apartment market rent growth population employment {year - 1} {year}"
+    q2 = f"{city} {state} new apartment construction pipeline supply multifamily {year}"
 
     results1 = await brave_search(q1)
     results2 = await brave_search(q2)
@@ -60,11 +61,13 @@ async def fetch_market_data(city: str, state: str) -> dict:
     all_urls = [r["url"] for r in results1 + results2 if r.get("url")]
 
     # Use Claude to extract structured data
-    client = Anthropic(api_key=os.environ.get("ANTHROPIC_API_KEY"))
+    client = AsyncAnthropic(api_key=os.environ.get("ANTHROPIC_API_KEY"))
 
     prompt = f"""Analyze these search results about the {city}, {state} apartment/multifamily market.
 Extract the best available data into a structured JSON object. Use actual numbers from the sources when available.
 If a data point isn't available in the search results, use null (don't make up numbers).
+Today is {date.today().isoformat()}. Distinguish the publication date from the period a statistic measures.
+Identify stale or geographically broader figures in the summary. Search snippets are preliminary evidence, not verified underwriting inputs.
 
 Search Results:
 {search_text}
@@ -93,7 +96,7 @@ Return ONLY valid JSON with this exact structure (no markdown, no explanation):
   "market_summary": "<2-3 sentence summary of the market>"
 }}"""
 
-    message = client.messages.create(
+    message = await client.messages.create(
         model=ANTHROPIC_MODEL,
         max_tokens=2000,
         messages=[{"role": "user", "content": prompt}],

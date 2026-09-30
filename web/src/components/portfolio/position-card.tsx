@@ -3,7 +3,7 @@
 import * as React from "react";
 import { motion } from "framer-motion";
 import { Area, AreaChart, ResponsiveContainer } from "recharts";
-import { MoreHorizontal, Plus, CheckSquare, Trash2, Loader2 } from "lucide-react";
+import { MoreHorizontal, Plus, CheckSquare, Trash2, Loader2, Pencil } from "lucide-react";
 import { toast } from "sonner";
 import { useRouter } from "next/navigation";
 import { Card } from "@/components/ui/card";
@@ -94,6 +94,7 @@ export function PositionCard({
 
   return (
     <motion.div
+      data-testid={`investment-${investment.id}`}
       layout
       initial={{ opacity: 0, y: 6 }}
       animate={{ opacity: 1, y: 0 }}
@@ -144,6 +145,7 @@ export function PositionCard({
                 transition={{ duration: 0.12 }}
                 className="absolute right-0 top-full mt-1 w-48 rounded-lg border border-border/80 bg-card shadow-[0_20px_60px_-20px_rgba(0,0,0,0.9)] p-1 z-20"
               >
+                <MenuItem icon={Pencil} onClick={() => { setMenuOpen(false); document.dispatchEvent(new CustomEvent("open-edit-investment", { detail: investment })); }}>Edit investment</MenuItem>
                 <MenuItem
                   icon={Plus}
                   onClick={() => {

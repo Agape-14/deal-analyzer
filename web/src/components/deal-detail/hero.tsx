@@ -53,11 +53,11 @@ export function DealHero({ deal }: { deal: DealDetail }) {
   );
   const mountedRef = React.useRef(true);
   const locationBits = [deal.city, deal.state].filter(Boolean).join(", ") || deal.location;
-  const visibleScore = deal.overall_score ?? deal.scores?.provisional_overall ?? null;
+  const visibleScore = deal.scores?.data_quality?.can_score === true ? deal.overall_score : null;
   const { headlineMultiple, primaryReturnLabel, primaryReturnValue } = getHeadlineReturnMetrics(deal);
   const gate = deal.scores?.data_quality;
-  const reviewSummary = dealReviewSummary(gate);
-  const viewerSummary = viewerScoreSummary(gate);
+  const reviewSummary = deal.analysis ? `${deal.analysis.questions.length} material question groups. Accepted facts and evidence are shared across Summary, comparison and exports.` : dealReviewSummary(gate);
+  const viewerSummary = deal.analysis ? `${deal.analysis.coverage.accepted} of ${deal.analysis.coverage.total} recognized facts accepted. Source checks and analyst decisions are labeled separately.` : viewerScoreSummary(gate);
   const reviewStatusName = normalizedPipelineStatus(pipelineStatus);
   const showAnalystTools = !loading && isAnalyst;
   const openAnalystTools = showAnalystTools && (pipelineRunning || reviewStatusName === "failed" || reviewStatusName === "running");
@@ -70,6 +70,8 @@ export function DealHero({ deal }: { deal: DealDetail }) {
   }, []);
 
   React.useEffect(() => {
+    // Strict Mode runs setup, cleanup, then setup again in development.
+    mountedRef.current = true;
     return () => {
       mountedRef.current = false;
     };
@@ -156,7 +158,7 @@ export function DealHero({ deal }: { deal: DealDetail }) {
           </Link>
         </div>
 
-        <div className="grid gap-6 px-5 py-6 md:px-6 lg:grid-cols-[minmax(0,1fr)_340px] lg:items-start">
+        <div className="grid gap-4 px-5 py-4 md:px-6 lg:grid-cols-[minmax(0,1fr)_290px] lg:items-start">
           <div className="min-w-0 flex-1">
             <div className="flex items-center gap-2 text-[11px] uppercase tracking-[0.14em] text-muted-foreground mb-2">
               <span>{deal.property_type || "Investment"}</span>
@@ -171,7 +173,7 @@ export function DealHero({ deal }: { deal: DealDetail }) {
               </span>
             </div>
 
-            <h1 className="text-display-lg tracking-tight">{deal.project_name}</h1>
+            <h1 className="text-2xl md:text-3xl font-semibold tracking-tight break-words">{deal.project_name}</h1>
 
             <div className="mt-3 flex flex-wrap items-center gap-x-5 gap-y-2 text-sm text-muted-foreground">
               {locationBits && (
@@ -188,7 +190,7 @@ export function DealHero({ deal }: { deal: DealDetail }) {
               )}
             </div>
 
-            <div className="mt-7 overflow-hidden rounded-xl border border-border/80 bg-background/70">
+            <div className="mt-5 overflow-hidden rounded-xl border border-border/80 bg-background/70">
               <div className="grid grid-cols-2 divide-x divide-y divide-border/70 md:grid-cols-4 md:divide-y-0">
                 <Metric label={primaryReturnLabel} value={fmtPct(primaryReturnValue)} />
                 <Metric label="Equity Multiple" value={fmtMultiple(headlineMultiple)} />
@@ -201,20 +203,18 @@ export function DealHero({ deal }: { deal: DealDetail }) {
           <aside className="rounded-xl border border-border/80 bg-background/80 p-4 shadow-sm">
             <div className="flex items-start justify-between gap-4">
               <div>
-                <div className="text-[10px] font-extrabold uppercase tracking-[0.14em] text-muted-foreground">Investment summary</div>
+                <div className="hidden lg:block text-[10px] font-extrabold uppercase tracking-[0.14em] text-muted-foreground">Investment summary</div>
                 <div className="mt-2">
-                  <ViewerTrustBadge gate={gate} />
+                  {deal.analysis ? <span className="text-xs font-medium">{deal.analysis.questions.length ? `${deal.analysis.questions.length} question${deal.analysis.questions.length === 1 ? " remains" : "s remain"}` : "Summary ready"}</span> : <ViewerTrustBadge gate={gate} />}
                 </div>
-                <p className="mt-3 text-xs leading-relaxed text-muted-foreground">{viewerSummary}</p>
+                <p className="hidden lg:block mt-3 text-xs leading-relaxed text-muted-foreground">{viewerSummary}</p>
               </div>
-              <div className="shrink-0">
-                <BigScoreRing value={visibleScore} size={100} />
-              </div>
+              {visibleScore != null && <div className="shrink-0"><BigScoreRing value={visibleScore} size={72} /></div>}
             </div>
 
-            <div className="mt-4 grid gap-2">
+            <div className="mt-3 grid grid-cols-2 lg:grid-cols-1 gap-2">
               <Button size="sm" variant="secondary" asChild className="justify-center">
-                <a href="#deal-summary">
+                <a href={`/deals/${deal.id}?tab=overview`}>
                   <FileText className="h-4 w-4" />
                   Deal summary
                 </a>
@@ -229,7 +229,7 @@ export function DealHero({ deal }: { deal: DealDetail }) {
                 <details
                   id="analyst-tools"
                   open={openAnalystTools}
-                  className="group rounded-lg border border-border/80 bg-muted/25"
+                  className="group col-span-2 lg:col-span-1 rounded-lg border border-border/80 bg-muted/25"
                 >
                   <summary className="flex cursor-pointer list-none items-center justify-between gap-3 px-3 py-2 text-xs font-semibold text-muted-foreground marker:hidden hover:text-foreground">
                     <span>Analyst tools</span>
@@ -238,7 +238,7 @@ export function DealHero({ deal }: { deal: DealDetail }) {
                   </summary>
                   <div className="space-y-3 border-t border-border/70 p-3">
                     <div>
-                      <ScoreQualityBadge gate={gate} />
+                      {deal.analysis ? <a href={`/deals/${deal.id}?tab=questions`} className="text-sm underline">Open material questions</a> : <ScoreQualityBadge gate={gate} />}
                       <p className="mt-2 text-xs leading-relaxed text-muted-foreground">{reviewSummary}</p>
                     </div>
                     <div className="grid gap-2">

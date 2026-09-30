@@ -46,6 +46,9 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         <ThemeScript />
       </head>
       <body className="role-viewer min-h-screen bg-background" data-role="viewer">
+        {/* Commit the shell and its DOM-changing effects together. A welcome
+            dialog or role update must not mutate chrome still being hydrated. */}
+        <Suspense fallback={<div role="status" className="p-6 text-sm text-muted-foreground">Loading workspace…</div>}>
         <ThemeProvider>
           <RoleBodyClass />
           {/* Subtle radial highlight behind the main content */}
@@ -72,6 +75,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
             }}
           />
         </ThemeProvider>
+        </Suspense>
       </body>
     </html>
   );
