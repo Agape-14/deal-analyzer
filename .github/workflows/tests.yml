@@ -53,9 +53,16 @@ jobs:
       - run: npm install --prefix "$RUNNER_TEMP/browser-tools" --no-save --package-lock=false @playwright/test@1.58.2
       - run: node "$RUNNER_TEMP/browser-tools/node_modules/playwright/cli.js" install --with-deps chromium
       - name: Browser journeys with disposable synthetic data
+        id: browsers
         run: NODE_PATH="$RUNNER_TEMP/browser-tools/node_modules" node "$RUNNER_TEMP/browser-tools/node_modules/@playwright/test/cli.js" test --config=playwright.config.cjs
         env:
           BROWSER_TEST_MODE: synthetic
+      - name: Development diagnostics for a browser failure
+        if: failure() && steps.browsers.conclusion == 'failure'
+        run: NODE_PATH="$RUNNER_TEMP/browser-tools/node_modules" node "$RUNNER_TEMP/browser-tools/node_modules/@playwright/test/cli.js" test --config=playwright.config.cjs
+        env:
+          BROWSER_TEST_MODE: synthetic
+          BROWSER_DIAGNOSTIC: "1"
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -63,5 +70,6 @@ jobs:
           path: |
             web/playwright-report/
             web/test-results/
+            web/diagnostics/
           retention-days: 7
 

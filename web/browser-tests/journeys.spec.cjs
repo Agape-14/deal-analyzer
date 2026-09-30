@@ -155,9 +155,6 @@ test('preview and adoption update history without losing manual values', async (
   const deal = await (await page.request.get('/api/deals/1')).json();
   expect(deal.target_cash_on_cash).toBe(8.5);
   expect(deal.target_irr).toBeNull();
-  await page.getByRole('button', { name: 'New Deal', exact: true }).click();
-  await expect(drawer.getByLabel('Deal name (optional)')).toHaveValue('');
-  await expect(drawer.getByText('Browser_Offering.csv', { exact: true })).toHaveCount(0);
 });
 
 test('unsupported models show reasons and assistant works without provider credits', async ({ page }) => {
@@ -277,6 +274,9 @@ test('upload-first intake creates a deal from two documents without manual detai
   expect(deal.developer_id).toBeNull();
   expect(deal.documents).toHaveLength(2);
   expect(deal.target_irr).toBeNull();
+  await page.getByRole('button', { name: 'New Deal', exact: true }).click();
+  await expect(drawer.getByLabel('Deal name (optional)')).toHaveValue('');
+  await expect(drawer.getByText('Browser_Offering.csv', { exact: true })).toHaveCount(0);
 });
 
 test('failed assistant request retains question and can be retried', async ({ page }) => {
