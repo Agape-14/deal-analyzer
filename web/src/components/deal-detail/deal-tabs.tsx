@@ -70,12 +70,15 @@ export function DealTabs({
   }, [urlTab]);
 
   React.useEffect(() => {
+    // Authentication is unresolved during the first render. Preserve an
+    // Assistant bookmark until the user's permissions are known.
+    if (loading) return;
     if (visibleTabs.some((tab) => tab.key === active) || ANALYSIS_TABS.includes(active)) return;
     setActive("overview");
     const params = new URLSearchParams(searchParams?.toString() ?? "");
     params.set("tab", "overview");
     router.replace(`${pathname}?${params.toString()}`, { scroll: false });
-  }, [active, pathname, router, searchParams, visibleTabs]);
+  }, [active, loading, pathname, router, searchParams, visibleTabs]);
 
   function onValueChange(v: string) {
     const next = v as DealTabKey;

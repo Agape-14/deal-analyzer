@@ -70,6 +70,8 @@ export function DealHero({ deal }: { deal: DealDetail }) {
   }, []);
 
   React.useEffect(() => {
+    // Strict Mode runs setup, cleanup, then setup again in development.
+    mountedRef.current = true;
     return () => {
       mountedRef.current = false;
     };

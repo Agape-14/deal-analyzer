@@ -9,11 +9,12 @@ async function handleWelcomeTour(page) {
 }
 
 // These tests run against the real local API and compiled Next frontend.
-// Only the optional upstream outage case is mocked. No private data is imported.
+// Upstream outages and a review lifecycle are stubbed separately. No private
+// data or live provider extraction is used.
 const test = base.extend({
   page: async ({ page, context }, use, info) => {
     const errors = [];
-    const hydration = process.env.BROWSER_DIAGNOSTIC === '1' ? [] : await captureHydrationDiagnostics(page);
+    const hydration = process.env.BROWSER_HYDRATION_TRACE === '1' && process.env.BROWSER_DIAGNOSTIC !== '1' ? await captureHydrationDiagnostics(page) : [];
     page.on('pageerror', error => errors.push(error.stack || error.message));
     // React's development overlay can report recoverable hydration failures
     // through console.error instead of the production window error event.
@@ -291,8 +292,12 @@ test('upload-first intake creates a deal from two documents without manual detai
 
 test('failed assistant request retains question and can be retried', async ({ page }) => {
   await dealPage(page, 1, 'chat');
-  await page.getByRole('tab', { name: 'Assistant', exact: true }).click();
+  await expect(page).toHaveURL(/tab=chat$/);
   const input = page.getByPlaceholder('Ask about accepted returns, terms or missing evidence…');
+  await expect(input).toBeVisible();
+  await page.reload();
+  await expect(page).toHaveURL(/tab=chat$/);
+  await expect(input).toBeVisible();
   await page.route('**/api/chat', route => route.fulfill({ status: 503, contentType: 'application/json', body: JSON.stringify({ detail: 'Synthetic temporary interruption' }) }), { times: 1 });
   await input.fill('Show investment terms');
   await page.getByRole('button', { name: 'Send', exact: true }).click();
@@ -300,6 +305,22 @@ test('failed assistant request retains question and can be retried', async ({ pa
   await expect(page.getByText("Couldn't send message", { exact: true })).toBeVisible();
   await page.getByRole('button', { name: 'Send', exact: true }).click();
   await expect(page.getByText(/Minimum investment: unspecified 25,000/).last()).toBeVisible();
+});
+
+test('completed document review restores controls after Strict Mode setup', async ({ page }) => {
+  // Test the browser lifecycle only. The provider/review worker is disabled
+  // in this harness; no extraction request leaves the disposable test app.
+  await page.route('**/api/deals/1/review', route => route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ status: 'queued' }) }));
+  await page.route('**/api/deals/1/quality', route => route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ pipeline: { status: 'complete', step: 'score' } }) }));
+  await dealPage(page);
+  const tools = page.locator('details#analyst-tools');
+  await tools.locator('summary').click();
+  const button = tools.getByRole('button', { name: 'Review documents again', exact: true });
+  if (!(await button.isVisible())) await tools.locator('summary').click();
+  await button.click();
+  await expect(page.getByText('Document review complete', { exact: true }).last()).toBeVisible();
+  if (!(await button.isVisible())) await tools.locator('summary').click();
+  await expect(button).toBeEnabled();
 });
 
 test('manual deal details persist and financial locks remain unchanged', async ({ page }) => {
@@ -430,14 +451,14 @@ test('saved deal routes hydrate consistently after repeated reloads', async ({ p
   const created = await page.request.post('/api/deals', { data: { project_name: 'Repeated route check' } });
   expect(created.ok()).toBeTruthy();
   const id = (await created.json()).id;
-  for (let cycle = 0; cycle < 3; cycle++) {
-   for (const dealId of [1, 2, 3, id]) {
-    for (const tab of ['overview', 'questions', 'documents']) {
-      await dealPage(page, dealId, tab);
-      await page.reload();
-      await expect(page.getByRole('tab', { name: 'Assistant', exact: true })).toBeVisible();
-      await expect(page.getByRole('heading', { level: 1 })).toBeVisible();
+  for (let cycle = 0; cycle < (process.env.BROWSER_DIAGNOSTIC === '1' ? 1 : 5); cycle++) {
+    for (const dealId of [1, 2, 3, id]) {
+      for (const tab of ['overview', 'questions', 'documents']) {
+        await dealPage(page, dealId, tab);
+        await page.reload();
+        await expect(page.getByRole('tab', { name: 'Assistant', exact: true })).toBeVisible();
+        await expect(page.getByRole('heading', { level: 1 })).toBeVisible();
+      }
     }
-  }
   }
 });
