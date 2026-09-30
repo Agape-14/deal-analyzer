@@ -59,7 +59,9 @@ jobs:
           BROWSER_TEST_MODE: synthetic
       - name: Development browser validation with full diagnostics
         if: always() && steps.browsers.outcome != 'skipped'
-        run: NODE_PATH="$RUNNER_TEMP/browser-tools/node_modules" node "$RUNNER_TEMP/browser-tools/node_modules/@playwright/test/cli.js" test --config=playwright.config.cjs
+        # Stop at the first diagnostic failure so its full error and trace are
+        # uploaded before the job deadline rather than losing all evidence.
+        run: NODE_PATH="$RUNNER_TEMP/browser-tools/node_modules" node "$RUNNER_TEMP/browser-tools/node_modules/@playwright/test/cli.js" test --config=playwright.config.cjs --max-failures=1 --global-timeout=480000
         env:
           BROWSER_TEST_MODE: synthetic
           BROWSER_DIAGNOSTIC: "1"
