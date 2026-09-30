@@ -57,6 +57,9 @@ const SECURITY_HEADERS = [
 const nextConfig = {
   reactStrictMode: true,
   poweredByHeader: false,
+  // The development tools button otherwise covers the sidebar's Sign out
+  // control at the test viewport. Keep full error diagnostics available.
+  devIndicators: SYNTHETIC_DIAGNOSTICS ? false : undefined,
   // Keep the incoming host in middleware redirects, including loopback hosts
   // used by local deployments and browser verification.
   skipMiddlewareUrlNormalize: true,
