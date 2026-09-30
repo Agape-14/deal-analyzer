@@ -57,6 +57,14 @@ jobs:
         run: NODE_PATH="$RUNNER_TEMP/browser-tools/node_modules" node "$RUNNER_TEMP/browser-tools/node_modules/@playwright/test/cli.js" test --config=playwright.config.cjs
         env:
           BROWSER_TEST_MODE: synthetic
+      - uses: actions/upload-artifact@v4
+        if: always() && steps.browsers.outcome == 'failure'
+        with:
+          name: synthetic-production-diagnostics
+          path: |
+            web/playwright-report/
+            web/test-results/
+          retention-days: 7
       - name: Development browser validation with full diagnostics
         if: always() && steps.browsers.outcome != 'skipped'
         # Stop at the first diagnostic failure so its full error and trace are

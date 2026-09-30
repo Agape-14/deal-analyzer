@@ -8,8 +8,12 @@ async function captureHydrationDiagnostics(page) {
   await session.send('Debugger.setPauseOnExceptions', { state: 'all' });
   session.on('Debugger.paused', async event => {
     try {
-      if (!/Minified React error #418|Hydration Mismatch Exception/.test(event.data?.description || '')) return;
-      const frame = event.callFrames[0];
+      const mismatchFrame = event.callFrames.find(frame => frame.functionName === 'rD');
+      if (!mismatchFrame && !/Minified React error #418|Hydration Mismatch Exception/.test(event.data?.description || '')) {
+        if (captures.length < 5) captures.push({ exception: event.data?.description, frames: event.callFrames.slice(0, 6).map(frame => frame.functionName) });
+        return;
+      }
+      const frame = mismatchFrame || event.callFrames[0];
       const fiber = await session.send('Debugger.evaluateOnCallFrame', {
         callFrameId: frame.callFrameId,
         expression: `(() => {
@@ -37,7 +41,8 @@ async function captureHydrationDiagnostics(page) {
           nodes.push({ name: prop.name, html: html.result.value });
         }
       }
-      captures.push({ url: page.url(), fiber: fiber.result.value, nodes });
+      const source = await session.send('Debugger.getScriptSource', { scriptId: frame.location.scriptId });
+      captures.push({ url: page.url(), fiber: fiber.result.value, evaluationError: fiber.exceptionDetails, nodes, source: source.scriptSource?.slice(33500, 36500) });
     } catch (error) {
       captures.push({ diagnosticError: error.message });
     } finally {
