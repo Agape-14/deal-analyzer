@@ -70,3 +70,21 @@ test("PDF preview frame permission is limited to document file routes", async ()
   assert.equal(document.headers.find((h) => h.key === "X-Frame-Options").value, "SAMEORIGIN");
   assert.ok(document.headers.find((h) => h.key === "Content-Security-Policy").value.includes("frame-ancestors 'self'"));
 });
+
+test("development debugger permission cannot leak into production headers", async () => {
+  const source = readFileSync(path.join(__dirname, "../next.config.mjs"), "utf8")
+    .replace("export default nextConfig;", "globalThis.config = nextConfig;");
+  async function policy(env) {
+    const context = vm.createContext({ process: { env } });
+    vm.runInContext(source, context);
+    const rules = await context.config.headers();
+    return rules.find(rule => rule.source === "/:path*").headers.find(header => header.key === "Content-Security-Policy").value;
+  }
+  assert.ok((await policy({ NODE_ENV: "development", BROWSER_TEST_MODE: "synthetic", BROWSER_DIAGNOSTIC: "1" })).includes("'unsafe-eval'"));
+  for (const env of [
+    { NODE_ENV: "production", BROWSER_TEST_MODE: "synthetic", BROWSER_DIAGNOSTIC: "1" },
+    { NODE_ENV: "development", BROWSER_DIAGNOSTIC: "1" },
+    { NODE_ENV: "development", BROWSER_TEST_MODE: "synthetic" },
+    {},
+  ]) assert.ok(!(await policy(env)).includes("'unsafe-eval'"));
+});

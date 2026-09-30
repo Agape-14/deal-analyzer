@@ -1,5 +1,10 @@
 /** @type {import('next').NextConfig} */
 const FASTAPI = process.env.FASTAPI_URL || "http://127.0.0.1:8000";
+// Next's development debugger executes source-mapped modules with eval.
+// Allow it only in the explicitly disposable synthetic diagnostic runner.
+// A production build/start must retain its policy even if test flags leak in.
+const SYNTHETIC_DIAGNOSTICS = process.env.NODE_ENV === "development" &&
+  process.env.BROWSER_TEST_MODE === "synthetic" && process.env.BROWSER_DIAGNOSTIC === "1";
 
 /**
  * Content-Security-Policy. Tight but permissive enough for:
@@ -12,7 +17,7 @@ const FASTAPI = process.env.FASTAPI_URL || "http://127.0.0.1:8000";
  */
 const CSP = [
   "default-src 'self'",
-  "script-src 'self' 'unsafe-inline'",
+  "script-src 'self' 'unsafe-inline'" + (SYNTHETIC_DIAGNOSTICS ? " 'unsafe-eval'" : ""),
   "style-src 'self' 'unsafe-inline'",
   // MapLibre fetches PNG tiles from these origins; data: for inline icons.
   "img-src 'self' data: blob:" +
