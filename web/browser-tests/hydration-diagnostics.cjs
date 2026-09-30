@@ -8,7 +8,7 @@ async function captureHydrationDiagnostics(page) {
   await session.send('Debugger.setPauseOnExceptions', { state: 'all' });
   session.on('Debugger.paused', async event => {
     try {
-      if (!/Minified React error #418/.test(event.data?.description || '')) return;
+      if (!/Minified React error #418|Hydration Mismatch Exception/.test(event.data?.description || '')) return;
       const frame = event.callFrames[0];
       const fiber = await session.send('Debugger.evaluateOnCallFrame', {
         callFrameId: frame.callFrameId,
