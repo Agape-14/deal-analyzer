@@ -414,3 +414,17 @@ test('sign-out and an expired session return to sign-in', async ({ browser }) =>
   await expect(page.getByLabel('Username', { exact: true })).toBeVisible();
   await context.close();
 });
+
+test('saved deal routes hydrate consistently after repeated reloads', async ({ page }) => {
+  const created = await page.request.post('/api/deals', { data: { project_name: 'Repeated route check' } });
+  expect(created.ok()).toBeTruthy();
+  const id = (await created.json()).id;
+  for (const dealId of [1, 2, 3, id]) {
+    for (const tab of ['overview', 'questions', 'documents']) {
+      await dealPage(page, dealId, tab);
+      await page.reload();
+      await expect(page.getByRole('tab', { name: 'Assistant', exact: true })).toBeVisible();
+      await expect(page.getByRole('heading', { level: 1 })).toBeVisible();
+    }
+  }
+});

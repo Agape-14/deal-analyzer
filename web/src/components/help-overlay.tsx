@@ -52,7 +52,7 @@ const SECTIONS: Section[] = [
     shortcuts: [
       { keys: ["Tab"], label: "Next tab in the deal view" },
       { keys: ["→ / ← in popups"], label: "Step through conflict-picker options" },
-      { keys: ["Enter in Analyst"], label: "Send chat message · Shift+Enter for newline" },
+      { keys: ["Enter in Assistant"], label: "Send question · Shift+Enter for newline" },
     ],
   },
 ];
@@ -154,7 +154,7 @@ export function FirstRunWelcome() {
     },
     {
       title: "Upload documents",
-      body: "Open Documents and drop your PDFs, Excel models or CSVs. Reading and review continue automatically even after you leave the page. Summary shows accepted facts and expandable source evidence.",
+      body: "Choose New Deal and upload your PDFs, Excel models or CSVs. A deal name is optional. Explicit document labels can fill the details for you. Add later documents from Documents; automatic review requires the review service to be available.",
       icon: Upload,
     },
     {
@@ -164,7 +164,7 @@ export function FirstRunWelcome() {
     },
     {
       title: "Compare & decide",
-      body: "The Compare tab has 8 built-in presets and a custom builder. Switch between Values, Winners, Deltas vs baseline, or Normalized views. Export to Excel with one click.",
+      body: "Compare accepted facts using a preset or your own rows. Returns show scenario, investor class, basis and period. Rankings and differences are available only when that context matches. Export the comparison to Excel.",
       icon: GitCompareArrows,
     },
     {

@@ -57,8 +57,8 @@ jobs:
         run: NODE_PATH="$RUNNER_TEMP/browser-tools/node_modules" node "$RUNNER_TEMP/browser-tools/node_modules/@playwright/test/cli.js" test --config=playwright.config.cjs
         env:
           BROWSER_TEST_MODE: synthetic
-      - name: Development diagnostics for a browser failure
-        if: failure() && steps.browsers.conclusion == 'failure'
+      - name: Development browser validation with full diagnostics
+        if: always() && steps.browsers.outcome != 'skipped'
         run: NODE_PATH="$RUNNER_TEMP/browser-tools/node_modules" node "$RUNNER_TEMP/browser-tools/node_modules/@playwright/test/cli.js" test --config=playwright.config.cjs
         env:
           BROWSER_TEST_MODE: synthetic
