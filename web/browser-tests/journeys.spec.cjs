@@ -469,12 +469,12 @@ test('linked investment previews the accepted revision and records a dated valua
   await page.goto('/portfolio');
   await page.getByRole('button', { name: 'Add investment', exact: true }).first().click();
   const drawer = page.getByRole('dialog');
-  await drawer.getByLabel('Deal', { exact: true }).selectOption('1');
+  await drawer.getByRole('combobox', { name: 'Deal', exact: true }).selectOption('1');
   await drawer.getByRole('button', { name: 'Manual entry', exact: true }).click();
   await drawer.getByLabel('Proj IRR (%)', { exact: true }).fill('99');
   await drawer.getByRole('button', { name: 'Link existing deal', exact: true }).click();
   await expect(drawer.getByText(/Analysis revision/)).toBeVisible();
-  await drawer.getByLabel('Amount invested', { exact: true }).fill('4321');
+  await drawer.getByRole('spinbutton', { name: 'Amount invested', exact: true }).fill('4321');
   await drawer.getByLabel('Investment date', { exact: true }).fill('2024-01-01');
   await drawer.getByText('Optional current valuation', { exact: true }).click();
   await drawer.getByLabel('Residual value', { exact: true }).fill('4500');
@@ -500,6 +500,8 @@ test('failed history is unavailable rather than an empty conversation and can re
   await expect(page.getByText('Understand the reviewed deal', { exact: true })).toHaveCount(0);
   await page.getByRole('button', { name: 'Retry history', exact: true }).click();
   await expect(page.getByText(/History is unavailable/)).toHaveCount(0);
+  await expect(page.getByText('Loading history…', { exact: true })).toHaveCount(0);
+  await expect(page.getByText('Earlier analysis · open archived reply', { exact: true }).first()).toBeVisible();
 });
 
 test('map rendering and sourced public statistics remain separate from rent judgments', async ({ page }, info) => {
