@@ -1,0 +1,48 @@
+{
+  "version": 1,
+  "scope": "Synthetic source and analyst decisions. No private deals or provider output.",
+  "cases": [
+    {
+      "id": "hold-yield-is-not-exit-irr",
+      "metrics": {
+        "target_returns": {"primary_strategy": "hold", "target_irr": 27.5, "target_equity_multiple": 4.25, "hold_scenario": {"cash_on_cash_return": 8.5}},
+        "_provenance": {"target_returns.target_irr": {"status": "manual"}, "target_returns.target_equity_multiple": {"status": "manual"}, "target_returns.hold_scenario.cash_on_cash_return": {"status": "manual"}},
+        "_fact_context": {"target_returns.hold_scenario.cash_on_cash_return": {"investor_class": "Class A", "basis": "net", "period": "annual stabilized"}}
+      },
+      "expected_returns": {"target_irr": null, "target_equity_multiple": null, "cash_on_cash": 8.5},
+      "expected_facts": {"target_returns.hold_scenario.cash_on_cash_return": {"accepted": true, "state": "manual"}}
+    },
+    {
+      "id": "sale-with-current-source-locators",
+      "documents": [{"id": 1, "filename": "Synthetic sale.pdf", "content_hash": "current-source", "page_count": 1}],
+      "metrics": {
+        "target_returns": {"primary_strategy": "sale", "sale_scenario": {"sale_irr": 15.5, "sale_equity_multiple": 1.8}},
+        "_provenance": {
+          "target_returns.sale_scenario.sale_irr": {"status": "confirmed", "source_doc_id": 1, "source_doc_name": "Synthetic sale.pdf", "source_page": 1, "source_excerpt": "Net Class A sale IRR: 15.5% over five years.", "source_document_hash": "current-source", "source_check_version": 1},
+          "target_returns.sale_scenario.sale_equity_multiple": {"status": "confirmed", "source_doc_id": 1, "source_doc_name": "Synthetic sale.pdf", "source_page": 1, "source_excerpt": "Net Class A sale multiple: 1.8x over five years.", "source_document_hash": "current-source", "source_check_version": 1}
+        }
+      },
+      "expected_returns": {"target_irr": 15.5, "target_equity_multiple": 1.8, "cash_on_cash": null},
+      "expected_facts": {"target_returns.sale_scenario.sale_irr": {"accepted": true, "state": "checked"}}
+    },
+    {
+      "id": "wrong-yield-withheld",
+      "metrics": {"target_returns": {"primary_strategy": "hold", "hold_scenario": {"cash_on_cash_return": 9}}, "_provenance": {"target_returns.hold_scenario.cash_on_cash_return": {"status": "wrong"}}},
+      "expected_returns": {"target_irr": null, "target_equity_multiple": null, "cash_on_cash": null},
+      "expected_facts": {"target_returns.hold_scenario.cash_on_cash_return": {"accepted": false, "state": "disputed"}}
+    },
+    {
+      "id": "conflicting-aliases-withheld",
+      "metrics": {"target_returns": {"primary_strategy": "hold", "hold_scenario": {"cash_on_cash_return": 8.5}, "hold_scenario.cash_on_cash_return": 7}, "_provenance": {"target_returns.hold_scenario.cash_on_cash_return": {"status": "manual"}}},
+      "expected_returns": {"target_irr": null, "target_equity_multiple": null, "cash_on_cash": null},
+      "expected_facts": {"target_returns.hold_scenario.cash_on_cash_return": {"accepted": false, "state": "disputed"}}
+    },
+    {
+      "id": "changed-source-invalidates-checked-return",
+      "documents": [{"id": 1, "filename": "Synthetic hold.pdf", "content_hash": "new-source", "page_count": 1}],
+      "metrics": {"target_returns": {"primary_strategy": "hold", "hold_scenario": {"cash_on_cash_return": 7}}, "_provenance": {"target_returns.hold_scenario.cash_on_cash_return": {"status": "confirmed", "source_doc_id": 1, "source_page": 1, "source_document_hash": "old-source", "source_check_version": 1}}},
+      "expected_returns": {"target_irr": null, "target_equity_multiple": null, "cash_on_cash": null},
+      "expected_facts": {"target_returns.hold_scenario.cash_on_cash_return": {"accepted": false}}
+    }
+  ]
+}

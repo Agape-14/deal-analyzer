@@ -4,6 +4,7 @@ import * as React from "react";
 import { AlertTriangle, X } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 import { cn } from "@/lib/utils";
+import { useCapabilities } from "@/lib/capabilities";
 
 type EnvStatus = {
   status: "ok" | "degraded" | string;
@@ -27,7 +28,7 @@ const DISMISS_KEY = "env-banner.dismissed";
  * services) for the session; the banner reappears on a new warning set.
  */
 export function EnvironmentBanner() {
-  const [status, setStatus] = React.useState<EnvStatus | null>(null);
+  const { health: status } = useCapabilities();
   const [dismissed, setDismissed] = React.useState<Set<string>>(new Set());
 
   // Load dismissed set from sessionStorage (so it resets each tab session).
@@ -38,16 +39,6 @@ export function EnvironmentBanner() {
     } catch {
       /* ignore */
     }
-  }, []);
-
-  React.useEffect(() => {
-    fetch("/api/healthz")
-      .then((r) => (r.ok ? r.json() : null))
-      .then((d) => d && setStatus(d))
-      .catch(() => {
-        // If healthz is unreachable the rest of the app will surface it
-        // as 500s on real endpoints; don't spam an extra banner.
-      });
   }, []);
 
   if (!status || status.status === "ok" || !status.environment) return null;
@@ -87,14 +78,12 @@ export function EnvironmentBanner() {
         <div className="max-w-[1400px] mx-auto flex items-start gap-3">
           <AlertTriangle className="h-4 w-4 shrink-0 mt-0.5" />
           <div className="flex-1 leading-relaxed">
-            <div className="font-medium mb-0.5">
-              Backend is running in a degraded configuration.
-            </div>
-            <ul className="list-disc list-inside space-y-0.5 text-warning/90">
+            <details><summary className="cursor-pointer font-medium">Some automatic checks are unavailable. Saved evidence still works.</summary>
+            <ul className="mt-2 list-disc list-inside space-y-0.5 text-warning/90">
               {warnings.map((w) => (
-                <li key={w.service}>{w.message}</li>
+                <li key={w.service}>{w.service === "anthropic" ? w.message || "Automatic document review is unavailable. Saved documents, reviewed facts and the evidence assistant still work." : w.service === "brave_search" ? "Live market search is unavailable. Check the dates and sources of market information." : "A supporting service is unavailable. Try the affected feature again later."}</li>
               ))}
-            </ul>
+            </ul></details>
           </div>
           <button
             onClick={dismiss}

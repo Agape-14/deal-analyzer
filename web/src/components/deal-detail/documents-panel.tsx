@@ -22,6 +22,8 @@ import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import type { DealDocument } from "@/lib/types";
+import { DocumentVersionControls } from "./document-version-controls";
+import { useCapabilities } from "@/lib/capabilities";
 
 type UploadState = {
   id: string;
@@ -33,9 +35,12 @@ type UploadState = {
   tables?: number;
   images?: number;
   error?: string;
+  reused?: boolean;
 };
 
 type UploadResult = {
+  duplicate?: boolean;
+  message?: string;
   id?: number;
   filename?: string;
   extraction?: {
@@ -67,20 +72,21 @@ const ACCEPTED_UPLOAD_EXTENSIONS = new Set([".pdf", ".xlsx", ".xlsm", ".xls", ".
 export function DocumentsPanel({
   dealId,
   documents,
+  revision,
 }: {
   dealId: number;
   documents: DealDocument[];
+  revision?: number;
 }) {
   const router = useRouter();
+  const { review, reviewMessage } = useCapabilities();
   const [dragActive, setDragActive] = React.useState(false);
   const [docType, setDocType] = React.useState<string>("offering_memo");
   const [uploads, setUploads] = React.useState<UploadState[]>([]);
   const [previewDoc, setPreviewDoc] = React.useState<DealDocument | null>(null);
   const inputRef = React.useRef<HTMLInputElement>(null);
   const dragDepth = React.useRef(0);
-  const pendingExtractionIds = React.useRef<Set<string>>(new Set());
-  const reviewReadyRef = React.useRef(false);
-  const reviewStartLock = React.useRef(false);
+  const [reviewPending, setReviewPending] = React.useState(false);
 
   async function handleFiles(files: FileList | File[]) {
     const list = Array.from(files).filter((file) => {
@@ -97,7 +103,6 @@ export function DocumentsPanel({
       file,
       localId: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
     }));
-    uploadItems.forEach(({ localId }) => pendingExtractionIds.current.add(localId));
 
     for (const { file, localId } of uploadItems) {
       setUploads((prev) => [...prev, { id: localId, filename: file.name, status: "uploading", progress: 0 }]);
@@ -114,6 +119,7 @@ export function DocumentsPanel({
               ? {
                   ...u,
                   docId: result.id,
+                  reused: result.duplicate,
                   status: queued ? "extracting" : "done",
                   progress: 100,
                   ocr_pages: result.extraction?.ocr_pages ?? 0,
@@ -124,21 +130,18 @@ export function DocumentsPanel({
           ),
         );
 
-        toast.success("Document uploaded", {
-          description: queued
+        toast.success(result.duplicate ? "File already saved" : "Document uploaded", {
+          description: result.duplicate ? result.message : queued
             ? `${file.name} was saved. Reading the document now.`
-            : `${file.name} was saved. Starting document review next.`,
+            : `${file.name} was saved. Check review status before relying on its figures.`,
         });
         router.refresh();
 
         if (queued && result.id) {
           void pollExtractionStatus(result.id, localId, file.name);
-        } else {
-          markUploadSettled(localId, file.name, true);
         }
       } catch (e) {
         const msg = (e as Error)?.message || "Upload failed";
-        markUploadSettled(localId, file.name, false);
         setUploads((prev) => prev.map((u) => (u.id === localId ? { ...u, status: "error", error: msg } : u)));
         toast.error("Upload failed", { description: `${file.name}: ${msg}` });
       }
@@ -147,22 +150,11 @@ export function DocumentsPanel({
     if (inputRef.current) inputRef.current.value = "";
   }
 
-  function markUploadSettled(localId: string, filename: string, extracted: boolean) {
-    pendingExtractionIds.current.delete(localId);
-    if (extracted) reviewReadyRef.current = true;
-    if (pendingExtractionIds.current.size === 0 && reviewReadyRef.current) {
-      reviewReadyRef.current = false;
-      void startDocumentReview(filename);
-    }
-  }
-
-  async function startDocumentReview(filename: string) {
-    if (reviewStartLock.current) return;
-    reviewStartLock.current = true;
-    setUploads((prev) => prev.map((u) => (u.status === "done" ? { ...u, status: "reviewing" } : u)));
+  async function startDocumentReview() {
+    if (reviewPending) return;
+    setReviewPending(true);
 
     try {
-      await delay(1000);
       const res = await fetch(`/api/deals/${dealId}/review`, {
         method: "POST",
         cache: "no-store",
@@ -170,21 +162,16 @@ export function DocumentsPanel({
         headers: { Accept: "application/json" },
       });
       if (!res.ok) throw new Error(await responseErrorMessage(res));
-      toast.success("Document review started", {
-        description: "Reading documents, checking sources, math-checking, and updating the score.",
+      toast.success("Document review queued", {
+        description: "Review continues automatically, including if you close this page.",
       });
       router.refresh();
     } catch (e) {
-      setUploads((prev) =>
-        prev.map((u) => (u.status === "reviewing" ? { ...u, status: "done" } : u)),
-      );
       toast.error("Document review did not start", {
-        description: `${filename}: ${(e as Error)?.message || "Use Review documents again."}`,
+        description: (e as Error)?.message || "Use Review documents again.",
       });
     } finally {
-      window.setTimeout(() => {
-        reviewStartLock.current = false;
-      }, 5000);
+      setReviewPending(false);
     }
   }
 
@@ -200,7 +187,6 @@ export function DocumentsPanel({
         const quality = getExtractionQuality(doc);
         if (quality?.status === "error") {
           const message = quality.error || "Extraction failed after the upload was saved.";
-          markUploadSettled(localId, filename, false);
           setUploads((prev) =>
             prev.map((u) => (u.id === localId ? { ...u, status: "error", error: message } : u)),
           );
@@ -212,7 +198,6 @@ export function DocumentsPanel({
         if (doc.has_text) {
           const extractionError = await fetchExtractionError(doc.id);
           if (extractionError) {
-            markUploadSettled(localId, filename, false);
             setUploads((prev) =>
               prev.map((u) => (u.id === localId ? { ...u, status: "error", error: extractionError } : u)),
             );
@@ -233,8 +218,6 @@ export function DocumentsPanel({
                 : u,
             ),
           );
-          toast.success("Extraction complete", { description: `${filename} is ready. Document review will start automatically.` });
-          markUploadSettled(localId, filename, true);
           router.refresh();
           return;
         }
@@ -254,7 +237,6 @@ export function DocumentsPanel({
       }
     }
 
-    markUploadSettled(localId, filename, false);
     setUploads((prev) =>
       prev.map((u) =>
         u.id === localId
@@ -337,7 +319,11 @@ export function DocumentsPanel({
                 : `${documents.length} file${documents.length === 1 ? "" : "s"} on this deal.`}
             </p>
           </div>
+          <Button size="sm" variant="secondary" disabled={!documents.length || reviewPending || review === "unavailable"} onClick={startDocumentReview}>
+            {reviewPending ? "Queuing…" : "Review documents"}
+          </Button>
         </div>
+        <p className="mb-4 text-xs text-muted-foreground">{review === "unavailable" ? reviewMessage || "Automatic financial review is unavailable. Files can still be saved and read; existing reviewed facts and source lookup remain available." : "Saving and reading a document does not accept its financial claims. Review status and material questions determine what can be used. Queued jobs continue after this page closes."}</p>
 
         {documents.length === 0 ? (
           <div className="py-10 text-center text-sm text-muted-foreground">
@@ -361,6 +347,10 @@ export function DocumentsPanel({
                     >
                       {d.filename}
                     </button>
+                    <DocumentVersionControls dealId={dealId} revision={revision} document={d} documents={documents} />
+                    {d.extraction_quality?.warnings?.map((warning) => (
+                      <p key={warning} className="mt-1 text-xs text-warning">{warning}</p>
+                    ))}
                     <div className="text-[11px] text-muted-foreground mt-0.5 flex items-center gap-2 flex-wrap">
                       <span className="uppercase tracking-wider">{d.doc_type.replace(/_/g, " ")}</span>
                       <span className="opacity-40">-</span>
@@ -514,7 +504,7 @@ function UploadRow({ upload }: { upload: UploadState }) {
       <div className="flex-1 min-w-0">
         <div className="text-sm font-medium truncate">{upload.filename}</div>
         {upload.status === "done" ? (
-          <div className="text-[11px] text-success mt-0.5">Extraction complete</div>
+          <div className="text-[11px] text-success mt-0.5">{upload.reused ? "Existing file reused; current review status is shown above" : "Document read; financial acceptance is separate"}</div>
         ) : upload.status === "error" ? (
           <div className="text-xs text-destructive mt-0.5">{upload.error}</div>
         ) : upload.status === "reviewing" ? (

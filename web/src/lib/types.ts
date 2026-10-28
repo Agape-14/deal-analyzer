@@ -2,6 +2,8 @@ export type DealStatus = "reviewing" | "interested" | "passed" | "committed" | "
 
 export interface DealSummary {
   id: number;
+  revision?: number;
+  analysis?: DealAnalysis;
   developer_id: number | null;
   developer_name: string;
   project_name: string;
@@ -21,6 +23,43 @@ export interface DealSummary {
   scores?: Partial<DealScores>;
 }
 
+export interface AnalysisFact {
+  path: string;
+  label: string;
+  value: number | string | Array<{ threshold: number; lp_split: number; gp_split: number }> | null;
+  state: "reported" | "checked" | "calculated" | "disputed" | "missing" | "manual" | "unclassified";
+  reason: string;
+  identity: { metric: string; unit: string; scenario: string; investor_class: string; basis: string; debt_phase: string; period: string; currency: string };
+  evidence: Array<{ document_id: number; document_name: string; content_hash: string; page?: number; sheet?: string; cell?: string; excerpt?: string }>;
+  dependencies: string[];
+  formula?: string;
+  alternatives: unknown[];
+  locked: boolean;
+}
+
+export interface AnalysisQuestion {
+  id: string;
+  area: string;
+  title: string;
+  impact: string;
+  issues: Array<{ path: string; reason: string; state: string }>;
+}
+
+export interface DealAnalysis {
+  schema_version: number;
+  version: number;
+  input_hash: string;
+  created_at?: string;
+  status: "questions" | "ready";
+  primary_strategy: string;
+  investor_class: string;
+  facts: Record<string, AnalysisFact>;
+  questions: AnalysisQuestion[];
+  returns: CanonicalReturnSummary;
+  coverage: { accepted: number; checked: number; manual: number; calculated: number; total: number };
+  unclassified_paths: string[];
+}
+
 export interface Developer {
   id: number;
   name: string;
@@ -35,6 +74,12 @@ export interface Developer {
 
 export interface Investment {
   id: number;
+  developer_id?: number | null;
+  residual_value?: number | null;
+  valuation_date?: string | null;
+  source_analysis_version?: number | null;
+  source_analysis_input_hash?: string | null;
+  terms_context?: Record<string, Record<string, unknown>> | null;
   deal_id: number | null;
   deal_name: string | null;
   project_name: string;
@@ -86,11 +131,15 @@ export interface InvestmentPerformance {
   invested: number;
   total_distributions: number;
   exit_amount: number;
+  additional_exit_proceeds?: number;
   total_returned: number;
   net_profit: number;
   multiple: number;
   dpi: number;
-  tvpi: number;
+  tvpi: number | null;
+  residual_value?: number | null;
+  valuation_date?: string | null;
+  valuation_available?: boolean;
   irr: number | null;
   years_held: number | null;
   projected_irr: number | null;
@@ -106,7 +155,7 @@ export interface InvestmentPerformance {
 }
 
 export interface PortfolioAnalytics {
-  summary: PortfolioSummary & { overall_irr_pct: number | null; investment_count: number };
+  summary: PortfolioSummary & { overall_irr_pct: number | null; investment_count: number; dpi?: number; tvpi?: number | null; residual_value?: number | null; valuation_date?: string | null; valuation_complete?: boolean; active_position_count?: number; valued_position_count?: number };
   per_investment: InvestmentPerformance[];
   by_status: Array<{ name: string; count: number; invested: number; returned: number; share_pct: number; multiple: number }>;
   by_sponsor: Array<{ name: string; count: number; invested: number; returned: number; share_pct: number; multiple: number }>;
@@ -120,6 +169,12 @@ export interface PortfolioAnalytics {
 /* ------------------------------------------------------------------ */
 
 export interface DealDocument {
+  source_role?: "active" | "alternative" | "superseded";
+  superseded_by_id?: number | null;
+  duplicate_of_id?: number | null;
+  same_name_different_content?: boolean;
+  included_in_review?: boolean;
+  version_note?: string;
   id: number;
   filename: string;
   doc_type: "offering_memo" | "proforma" | "market_study" | "other" | string;
@@ -127,6 +182,7 @@ export interface DealDocument {
   upload_date: string;
   has_text: boolean;
   extraction_quality?: {
+    warnings?: string[];
     quality_score: number | null;
     ocr_pages: number;
     empty_pages: number[];
@@ -346,6 +402,7 @@ export interface DealDetail extends DealSummary {
 
 export interface CashflowYear {
   year: number;
+  duration_years?: number;
   gross_revenue: number;
   expenses: number;
   noi: number;
@@ -361,15 +418,19 @@ export interface LpCashflowRow {
 }
 
 export interface CashflowResponse {
+  status?: "unavailable" | "illustrative";
+  message?: string;
+  missing_inputs?: string[];
   project_level: CashflowYear[];
   lp_level: LpCashflowRow[];
   summary: {
-    total_operating_cashflow: number;
-    exit_value: number;
-    exit_equity: number;
-    total_return_to_equity: number;
-    equity_multiple: number;
-    years_modeled: number;
+    invested_equity?: number;
+    total_operating_cashflow?: number;
+    exit_value?: number;
+    exit_equity?: number;
+    total_return_to_equity?: number;
+    equity_multiple?: number;
+    years_modeled?: number;
   };
   assumptions?: Record<string, unknown>;
 }
@@ -387,6 +448,8 @@ export interface WaterfallTier {
 }
 
 export interface WaterfallResponse {
+  status?: "unavailable" | "illustrative";
+  message?: string;
   tiers: WaterfallTier[];
   totals: {
     total_distributed: number;
@@ -416,6 +479,10 @@ export interface ChatMessage {
   role: "user" | "assistant";
   content: string;
   created_at: string;
+  analysis_version?: number | null;
+  answer_kind?: string | null;
+  stale?: boolean;
+  references?: Array<{ path: string; state: string; evidence: AnalysisFact["evidence"] }>;
 }
 
 /* ------------------------------------------------------------------ */
@@ -461,6 +528,7 @@ export interface LocationBundle {
   lng: number | null;
   radius_m: number;
   categories: Partial<Record<PoiCategory | string, Poi[]>>;
+  category_errors?: Record<string, string>;
   fmr: HudFmr | null;
   display_name: string | null;
   fetched_at: number;

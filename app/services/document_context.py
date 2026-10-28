@@ -127,6 +127,8 @@ def document_fingerprint(doc: Any) -> dict[str, Any]:
         "page_count": getattr(doc, "page_count", 0) or 0,
         "file_sha256": file_hash,
         "text_sha256": sha256_text(text) if text else "",
+        "source_role": getattr(doc, "source_role", None) or "active",
+        "superseded_by_id": getattr(doc, "superseded_by_id", None),
     }
 
 
@@ -192,6 +194,40 @@ def page_relevance_score(text: str, terms: set[str]) -> int:
     return score
 
 
+def workbook_context(text: str, terms: set[str], max_chars: int) -> str:
+    """Select addressed row windows across sheets, never just the workbook top.
+
+    Small workbooks are passed intact. Large ones retain sheet identity, column
+    orientation and relevant neighboring rows, including late cash-flow blocks.
+    """
+    if len(text) <= max_chars:
+        return text
+    markers = list(re.finditer(r"^--- Sheet: (.+) ---\s*$", text, re.M))
+    candidates = []
+    for index, marker in enumerate(markers):
+        end = markers[index + 1].start() if index + 1 < len(markers) else len(text)
+        rows = text[marker.end():end].strip().splitlines()
+        for start in range(0, len(rows), 6):
+            chunk = "\n".join(rows[max(0, start - 1):start + 7])
+            # Labels, not sheet width or the number of cash-flow periods,
+            # determine relevance. Keep neighboring rows for column context.
+            score = sum(1 for term in terms if term in chunk.lower())
+            score += 4 if start == 0 else 0
+            candidates.append((score, index, start, marker.group(1), chunk))
+    candidates.sort(key=lambda item: (-item[0], item[1], item[2]))
+    selected = []
+    warning = text[:markers[0].start()] if markers else ""
+    warning = "\n".join(line for line in warning.splitlines() if line.startswith("[WORKBOOK LIMITATION:"))
+    remaining = max(0, max_chars - 160 - len(warning))
+    for score, index, start, sheet, chunk in candidates:
+        block = f"--- Sheet: {sheet} ---\n{chunk}"
+        if len(block) <= remaining:
+            selected.append((index, start, block))
+            remaining -= len(block) + 2
+    selected.sort()
+    return warning + "\n[FOCUSED WORKBOOK EXCERPTS: omitted rows remain available in the original; absence here is not proof of missing data.]\n" + "\n\n".join(block for _, _, block in selected)
+
+
 def select_context_for_sections(
     doc_texts: list[dict[str, Any]],
     sections: Iterable[str],
@@ -213,8 +249,17 @@ def select_context_for_sections(
     remaining = max_chars
     total_text_chars = sum(len(doc.get("text") or "") for doc in doc_texts or [])
 
-    for doc in doc_texts or []:
+    for doc_index, doc in enumerate(doc_texts or []):
         filename = doc.get("filename") or "document"
+        # Reserve space for later documents rather than letting the first
+        # large PDF/workbook consume the entire package's context budget.
+        doc_budget = remaining // max(1, len(doc_texts) - doc_index)
+        if re.search(r"^--- Sheet: .+ ---", doc.get("text") or "", re.M):
+            heading = f"===== WORKBOOK: {filename} =====\n"
+            block = heading + workbook_context(doc["text"], terms, max(0, doc_budget - len(heading)))
+            blocks.append(block)
+            remaining -= len(block) + 2
+            continue
         pages = split_text_pages(doc.get("text") or "")
         if not pages:
             continue
@@ -242,12 +287,12 @@ def select_context_for_sections(
         doc_block_lines = [f"===== {heading}: {filename} ====="]
         for score, page_num, page_text in top:
             label = f"--- Page {page_num} (relevance {score}) ---" if page_num is not None else "--- Text excerpt ---"
-            excerpt = page_text if use_full_text else page_text[: min(len(page_text), max(3000, remaining // 3))]
+            excerpt = page_text if use_full_text else page_text[: min(len(page_text), max(1000, doc_budget // max(1, len(top))))]
             doc_block_lines.append(label)
             doc_block_lines.append(excerpt)
         block = "\n".join(doc_block_lines)
-        if len(block) > remaining:
-            block = block[:remaining]
+        if len(block) > doc_budget:
+            block = block[:max(0, doc_budget - 60)] + "\n[Text truncated; review original for omitted material.]"
         blocks.append(block)
         remaining -= len(block)
         if remaining <= 0:

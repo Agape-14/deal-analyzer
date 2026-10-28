@@ -3,7 +3,7 @@
 import * as React from "react";
 import { motion } from "framer-motion";
 import { Area, AreaChart, ResponsiveContainer } from "recharts";
-import { MoreHorizontal, Plus, CheckSquare, Trash2, Loader2 } from "lucide-react";
+import { MoreHorizontal, Plus, CheckSquare, Trash2, Loader2, Pencil } from "lucide-react";
 import { toast } from "sonner";
 import { useRouter } from "next/navigation";
 import { Card } from "@/components/ui/card";
@@ -44,7 +44,7 @@ export function PositionCard({
 
   const mult = performance?.multiple ?? investment.actual_multiple ?? 0;
   const multColor =
-    mult >= 1.5
+    investment.status !== "exited" ? "text-foreground" : mult >= 1.5
       ? "text-success"
       : mult >= 1
         ? "text-primary"
@@ -94,6 +94,7 @@ export function PositionCard({
 
   return (
     <motion.div
+      data-testid={`investment-${investment.id}`}
       layout
       initial={{ opacity: 0, y: 6 }}
       animate={{ opacity: 1, y: 0 }}
@@ -144,6 +145,7 @@ export function PositionCard({
                 transition={{ duration: 0.12 }}
                 className="absolute right-0 top-full mt-1 w-48 rounded-lg border border-border/80 bg-card shadow-[0_20px_60px_-20px_rgba(0,0,0,0.9)] p-1 z-20"
               >
+                <MenuItem icon={Pencil} onClick={() => { setMenuOpen(false); document.dispatchEvent(new CustomEvent("open-edit-investment", { detail: investment })); }}>Edit investment</MenuItem>
                 <MenuItem
                   icon={Plus}
                   onClick={() => {
@@ -176,7 +178,7 @@ export function PositionCard({
         <div className="mt-5 flex items-end justify-between gap-4">
           <div>
             <div className="text-[10px] uppercase tracking-[0.12em] text-muted-foreground">
-              Current Multiple
+              Cash returned multiple
             </div>
             <div className={cn("text-3xl font-semibold tabular-nums leading-none mt-1.5", multColor)}>
               {fmtMultiple(mult)}
@@ -184,7 +186,7 @@ export function PositionCard({
             {irr != null && (
               <div className="mt-2 flex items-center gap-1.5 text-xs">
                 <span className="tabular-nums font-medium">
-                  IRR {fmtPct(irr, 1)}
+                  Total-value IRR {fmtPct(irr, 1)}
                 </span>
                 {projectedIrr != null && irrDelta != null && (
                   <span
@@ -202,6 +204,7 @@ export function PositionCard({
                 )}
               </div>
             )}
+            {investment.status !== "exited" && <p className="mt-2 text-xs text-muted-foreground">{performance?.valuation_available ? `TVPI ${fmtMultiple(performance.tvpi)} · residual value ${fmtMoney(performance.residual_value)} as of ${performance.valuation_date ?? "unavailable"}` : "Total-value returns unavailable. Add or update a dated residual value after the latest cash flow."}</p>}
           </div>
 
           {/* Sparkline */}
@@ -237,7 +240,7 @@ export function PositionCard({
             label="DPI"
             value={
               investment.amount_invested > 0
-                ? fmtMultiple(investment.total_distributions / investment.amount_invested)
+                ? fmtMultiple(investment.total_returned / investment.amount_invested)
                 : "—"
             }
           />

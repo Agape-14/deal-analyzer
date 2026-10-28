@@ -32,20 +32,17 @@ export function getHeadlineReturnMetrics(
   const metrics = (deal.metrics ?? {}) as Metrics;
   const canonical = metrics._canonical_returns;
   const provenance = (metrics._provenance ?? {}) as ProvenanceMap;
-  const isHoldStrategy = isHoldReturnStrategy(canonical?.primary_strategy);
+  const isHoldStrategy = isHoldReturnStrategy(canonical?.primary_strategy ?? metrics.target_returns?.primary_strategy);
 
   const fallbackIrr = isHoldStrategy
     ? null
-    : pickTrustedNumber(metrics, provenance, TRUE_IRR_PATHS) ?? asNumber(deal.target_irr);
-  const headlineIrr = asNumber(canonical?.target_irr) ?? fallbackIrr;
-  const headlineCashOnCash =
-    asNumber(canonical?.cash_on_cash) ??
-    pickTrustedNumber(metrics, provenance, CASH_YIELD_PATHS) ??
-    asNumber(deal.target_cash_on_cash);
-  const headlineMultiple =
-    asNumber(canonical?.target_equity_multiple) ??
-    pickTrustedNumber(metrics, provenance, MULTIPLE_PATHS) ??
-    asNumber(deal.target_equity_multiple);
+    : deal.metrics ? pickTrustedNumber(metrics, provenance, TRUE_IRR_PATHS) : asNumber(deal.target_irr);
+  // A canonical null deliberately withholds a disputed or inapplicable value.
+  const headlineIrr = canonical ? asNumber(canonical.target_irr) : fallbackIrr;
+  const headlineCashOnCash = canonical ? asNumber(canonical.cash_on_cash)
+    : deal.metrics ? pickTrustedNumber(metrics, provenance, CASH_YIELD_PATHS) : asNumber(deal.target_cash_on_cash);
+  const headlineMultiple = canonical ? asNumber(canonical.target_equity_multiple)
+    : deal.metrics ? pickTrustedNumber(metrics, provenance, MULTIPLE_PATHS) : asNumber(deal.target_equity_multiple);
 
   const primaryReturnLabel = headlineIrr !== null ? "Target IRR" : "Cash-on-Cash";
   const primaryReturnValue = headlineIrr !== null ? headlineIrr : headlineCashOnCash;
@@ -75,14 +72,14 @@ function pickTrustedNumber(metrics: Metrics, provenance: ProvenanceMap, paths: s
     const status = String(candidate.provenance?.status ?? "");
     return candidate.provenance?.locked || ["manual", "confirmed", "calculated"].includes(status);
   });
-  return (reviewed ?? clean[0] ?? candidates[0]).value;
+  return (reviewed ?? clean[0])?.value ?? null;
 }
 
 function isBadSource(provenance?: FieldProvenance): boolean {
   if (!provenance) return false;
   const status = String(provenance.status ?? "").toLowerCase();
   const conflictCount = Array.isArray(provenance.conflict) ? provenance.conflict.length : 0;
-  return conflictCount > 1 || ["wrong", "missing", "unverifiable", "stale"].includes(status);
+  return conflictCount > 0 || ["wrong", "missing", "unverifiable", "stale", "math_failed"].includes(status);
 }
 
 function getPath(data: unknown, path: string): unknown {

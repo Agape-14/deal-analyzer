@@ -19,6 +19,7 @@ import { api } from "@/lib/api";
 import { useCurrentUser } from "@/lib/auth-client";
 import type { DealSummary, Developer } from "@/lib/types";
 import { cn } from "@/lib/utils";
+import { EvidenceViewer, type EvidenceSource } from "./deal-detail/evidence-viewer";
 
 /**
  * Global command palette. Opens on ⌘K / Ctrl+K, or on the custom event the
@@ -35,6 +36,12 @@ export function CommandPalette() {
   const [deals, setDeals] = React.useState<DealSummary[] | null>(null);
   const [developers, setDevelopers] = React.useState<Developer[] | null>(null);
   const [loading, setLoading] = React.useState(false);
+  const [error, setError] = React.useState(false);
+  const [retry, reload] = React.useReducer(n => n + 1, 0);
+  const [query, setQuery] = React.useState("");
+  const [evidence, setEvidence] = React.useState<Array<EvidenceSource & { deal_id: number; project_name: string }>>([]);
+  const [evidenceError, setEvidenceError] = React.useState(false);
+  const [source, setSource] = React.useState<EvidenceSource | null>(null);
 
   // Global keybinding
   React.useEffect(() => {
@@ -58,18 +65,31 @@ export function CommandPalette() {
   // Lazy-load data the first time it's opened, re-use after that. We treat
   // the palette as a read-through cache — for now, simple is fine.
   React.useEffect(() => {
-    if (!open || deals !== null || loading) return;
+    if (!open) return;
+    let active = true;
     setLoading(true);
+    setError(false);
     Promise.all([
-      api.get<DealSummary[]>("/api/deals").catch(() => [] as DealSummary[]),
-      api.get<Developer[]>("/api/developers").catch(() => [] as Developer[]),
+      api.get<DealSummary[]>("/api/deals"),
+      api.get<Developer[]>("/api/developers"),
     ])
       .then(([d, dev]) => {
-        setDeals(d);
-        setDevelopers(dev);
+        if (active) { setDeals(d); setDevelopers(dev); }
       })
-      .finally(() => setLoading(false));
-  }, [open, deals, loading]);
+      .catch(() => { if (active) setError(true); })
+      .finally(() => { if (active) setLoading(false); });
+    return () => { active = false; };
+  }, [open, retry]);
+
+  React.useEffect(() => {
+    setEvidence([]); setEvidenceError(false);
+    if (!open || query.trim().length < 2) return;
+    let active = true;
+    const timer = setTimeout(() => {
+      api.get<{ hits: typeof evidence }>(`/api/chat/search?q=${encodeURIComponent(query.trim().slice(0, 200))}`).then(data => { if (active) setEvidence(data.hits); }).catch(() => { if (active) setEvidenceError(true); });
+    }, 300);
+    return () => { active = false; clearTimeout(timer); };
+  }, [open, query]);
 
   function go(href: string) {
     setOpen(false);
@@ -77,7 +97,7 @@ export function CommandPalette() {
   }
 
   return (
-    <Dialog open={open} onOpenChange={setOpen}>
+    <><Dialog open={open} onOpenChange={setOpen}>
       <DialogContent hideClose className="max-w-xl p-0 overflow-hidden">
         <DialogTitle className="sr-only">Command palette</DialogTitle>
         <Command
@@ -88,7 +108,8 @@ export function CommandPalette() {
           <div className="flex items-center gap-2.5 px-4 h-12 border-b border-border/80">
             <Search className="h-4 w-4 text-muted-foreground shrink-0" />
             <Command.Input
-              placeholder="Search deals, developers, actions…"
+              value={query} onValueChange={setQuery}
+              placeholder="Search deals, sponsors or source evidence…"
               className="flex-1 bg-transparent outline-none text-sm placeholder:text-muted-foreground"
               autoFocus
             />
@@ -98,9 +119,12 @@ export function CommandPalette() {
           </div>
 
           <Command.List className="overflow-y-auto py-2 px-1.5">
+            {error && <p role="alert" className="px-3 py-2 text-xs text-warning">Records could not be refreshed. {deals ? "Previous results remain below." : ""} <button className="underline" onClick={reload}>Retry search</button></p>}
+            {evidenceError && <p role="alert" className="px-3 py-2 text-xs text-warning">Source search unavailable. Try again or open the deal documents.</p>}
             <Command.Empty className="px-3 py-8 text-center text-sm text-muted-foreground">
               {loading ? "Searching…" : "Nothing found."}
             </Command.Empty>
+            {evidence.length > 0 && <Command.Group heading="Reported source excerpts · review before use">{evidence.map((hit, i) => <Item key={`source-${hit.document_id}-${i}`} icon={Search} value={`${query} ${hit.project_name} ${hit.excerpt}`} onSelect={() => { setOpen(false); setSource(hit); }} meta={hit.excerpt?.slice(0, 110)}>{hit.project_name} · {hit.document_name}{hit.page ? ` p${hit.page}` : hit.cell ? ` ${hit.cell}` : ""}</Item>)}</Command.Group>}
 
             <Command.Group heading="Actions" className="[&_[cmdk-group-heading]]:px-3 [&_[cmdk-group-heading]]:py-2 [&_[cmdk-group-heading]]:text-[10px] [&_[cmdk-group-heading]]:uppercase [&_[cmdk-group-heading]]:tracking-[0.12em] [&_[cmdk-group-heading]]:text-muted-foreground">
               {isAnalyst && (
@@ -163,7 +187,7 @@ export function CommandPalette() {
 
             {deals && deals.length > 0 && (
               <Command.Group heading="Deals" className="mt-1 [&_[cmdk-group-heading]]:px-3 [&_[cmdk-group-heading]]:py-2 [&_[cmdk-group-heading]]:text-[10px] [&_[cmdk-group-heading]]:uppercase [&_[cmdk-group-heading]]:tracking-[0.12em] [&_[cmdk-group-heading]]:text-muted-foreground">
-                {deals.slice(0, 8).map((d) => (
+                {deals.map((d) => (
                   <Item
                     key={`d-${d.id}`}
                     icon={Building}
@@ -179,12 +203,12 @@ export function CommandPalette() {
 
             {developers && developers.length > 0 && (
               <Command.Group heading="Developers" className="mt-1 [&_[cmdk-group-heading]]:px-3 [&_[cmdk-group-heading]]:py-2 [&_[cmdk-group-heading]]:text-[10px] [&_[cmdk-group-heading]]:uppercase [&_[cmdk-group-heading]]:tracking-[0.12em] [&_[cmdk-group-heading]]:text-muted-foreground">
-                {developers.slice(0, 6).map((dev) => (
+                {developers.map((dev) => (
                   <Item
                     key={`dev-${dev.id}`}
                     icon={User}
                     value={`${dev.name} ${dev.contact_email}`}
-                    onSelect={() => go(`/developers`)}
+                    onSelect={() => go(`/developers/${dev.id}`)}
                     meta={dev.deal_count === 1 ? "1 deal" : `${dev.deal_count} deals`}
                   >
                     {dev.name}
@@ -206,7 +230,7 @@ export function CommandPalette() {
           </div>
         </Command>
       </DialogContent>
-    </Dialog>
+    </Dialog>{source && <EvidenceViewer source={source} autoOpen onClose={() => setSource(null)} />}</>
   );
 }
 

@@ -102,6 +102,33 @@ def xirr(flows: list[tuple[date, float]], guess: float = 0.1) -> float | None:
     return None
 
 
+def additional_exit_proceeds(inv) -> float:
+    """exit_amount is total exit proceeds, including recorded sale distributions."""
+    recorded = sum(float(d.amount or 0) for d in (inv.distributions or [])
+                   if getattr(d, "dist_type", "") in {"sale_proceeds", "exit_proceeds"})
+    return max(0.0, float(inv.exit_amount or 0) - recorded)
+
+
+def residual_valuation(inv):
+    if inv.status == "exited":
+        return 0.0, inv.exit_date
+    value, as_of = getattr(inv, "residual_value", None), getattr(inv, "valuation_date", None)
+    if value is None or not as_of:
+        return None, None
+    # A valuation cannot precede any of the cash flows it is intended to close.
+    dates = [d.date for d in (inv.distributions or []) if d.date]
+    if inv.investment_date:
+        dates.append(inv.investment_date)
+    if as_of > date.today() or (dates and as_of < max(dates)):
+        return None, None
+    return float(value), as_of
+
+
+def cashflow_dates_complete(inv):
+    return bool(inv.investment_date and all(d.date for d in (inv.distributions or []) if d.amount)
+                and (not inv.exit_amount or inv.exit_date) and (inv.status != "exited" or inv.exit_date))
+
+
 def investment_cashflows(inv) -> list[tuple[date, float]]:
     """Build the ordered cash-flow list for a single Investment.
 
@@ -114,8 +141,8 @@ def investment_cashflows(inv) -> list[tuple[date, float]]:
     for d in inv.distributions or []:
         if d.date and d.amount:
             flows.append((d.date, float(d.amount)))
-    if inv.exit_date and inv.exit_amount:
-        flows.append((inv.exit_date, float(inv.exit_amount)))
+    if inv.exit_date and additional_exit_proceeds(inv):
+        flows.append((inv.exit_date, additional_exit_proceeds(inv)))
     return flows
 
 
@@ -124,15 +151,18 @@ def investment_performance(inv) -> dict:
     invested = float(inv.amount_invested or 0)
     distributions = sorted(inv.distributions or [], key=lambda d: d.date or date.min)
     total_dist = sum(float(d.amount) for d in distributions if d.amount)
-    exit_amount = float(inv.exit_amount or 0)
+    exit_amount = additional_exit_proceeds(inv)
     total_returned = total_dist + exit_amount
 
     multiple = round(total_returned / invested, 4) if invested > 0 else 0.0
-    dpi = round(total_dist / invested, 4) if invested > 0 else 0.0  # Distributions / Paid-In
-    tvpi = multiple  # Same thing when we don't track unrealized NAV separately
+    dpi = multiple  # All cash returned, including exits, divided by paid-in capital.
+    residual, as_of = residual_valuation(inv)
+    tvpi = round((total_returned + residual) / invested, 4) if residual is not None and invested > 0 else None
 
     flows = investment_cashflows(inv)
-    irr = xirr(flows)
+    cash_irr = xirr(flows) if cashflow_dates_complete(inv) else None
+    valuation_flows = flows + ([(as_of, residual)] if residual is not None and residual > 0 else [])
+    irr = xirr(valuation_flows) if residual is not None and cashflow_dates_complete(inv) else None
 
     # Cumulative distribution timeseries (for charts)
     cumulative = []
@@ -171,7 +201,7 @@ def investment_performance(inv) -> dict:
     actual_irr_pct = round(irr * 100, 2) if irr is not None else None
     irr_vs_projected = (
         round(actual_irr_pct - projected_irr, 2)
-        if actual_irr_pct is not None and projected_irr is not None
+        if inv.status == "exited" and actual_irr_pct is not None and projected_irr is not None
         else None
     )
 
@@ -179,12 +209,18 @@ def investment_performance(inv) -> dict:
         "investment_id": inv.id,
         "invested": invested,
         "total_distributions": round(total_dist, 2),
-        "exit_amount": exit_amount,
+        "exit_amount": float(inv.exit_amount or 0),
+        "additional_exit_proceeds": exit_amount,
         "total_returned": round(total_returned, 2),
         "net_profit": round(total_returned - invested, 2),
         "multiple": multiple,
         "dpi": dpi,
         "tvpi": tvpi,
+        "residual_value": residual,
+        "valuation_date": as_of.isoformat() if as_of else None,
+        "valuation_available": residual is not None,
+        "cash_flow_irr": round(cash_irr * 100, 2) if cash_irr is not None else None,
+        "cashflow_dates_complete": cashflow_dates_complete(inv),
         "irr": actual_irr_pct,
         "years_held": years_held,
         "projected_irr": projected_irr,
@@ -214,7 +250,7 @@ def portfolio_analytics(investments: Iterable) -> dict:
         invested = float(inv.amount_invested or 0)
         total_invested += invested
         total_distributions += perf["total_distributions"]
-        total_exit_proceeds += perf["exit_amount"]
+        total_exit_proceeds += perf["additional_exit_proceeds"]
         all_flows.extend(investment_cashflows(inv))
 
         # Group by status
@@ -225,7 +261,8 @@ def portfolio_analytics(investments: Iterable) -> dict:
         bucket["returned"] += perf["total_returned"]
 
         # Group by sponsor
-        sp = (inv.sponsor_name or "Unknown").strip() or "Unknown"
+        sponsor = getattr(inv, "developer", None)
+        sp = ((sponsor.name if sponsor else inv.sponsor_name) or "Unknown").strip() or "Unknown"
         sb = by_sponsor.setdefault(sp, {"count": 0, "invested": 0.0, "returned": 0.0})
         sb["count"] += 1
         sb["invested"] += invested
@@ -233,7 +270,15 @@ def portfolio_analytics(investments: Iterable) -> dict:
 
     total_returned = total_distributions + total_exit_proceeds
     overall_multiple = round(total_returned / total_invested, 4) if total_invested > 0 else 0.0
-    overall_irr = xirr(all_flows)
+    active = [inv for inv in investments if inv.status != "exited"]
+    values = [residual_valuation(inv) for inv in active]
+    dates = {as_of for value, as_of in values if value is not None}
+    valuation_complete = bool(investments) and all(value is not None for value, _ in values) and len(dates) <= 1
+    if dates and all_flows and max(d for d, _ in all_flows) > next(iter(dates)):
+        valuation_complete = False
+    total_residual = sum(value for value, _ in values) if valuation_complete else None
+    valuation_flows = all_flows + [(as_of, value) for value, as_of in values if value is not None and value > 0]
+    overall_irr = xirr(valuation_flows) if valuation_complete and all(cashflow_dates_complete(inv) for inv in investments) else None
 
     # Build timeseries: cumulative invested vs cumulative returned over time
     events: list[tuple[date, float, float]] = []  # (date, invested_delta, returned_delta)
@@ -243,8 +288,8 @@ def portfolio_analytics(investments: Iterable) -> dict:
         for d in inv.distributions or []:
             if d.date and d.amount:
                 events.append((d.date, 0.0, float(d.amount)))
-        if inv.exit_date and inv.exit_amount:
-            events.append((inv.exit_date, 0.0, float(inv.exit_amount)))
+        if inv.exit_date and additional_exit_proceeds(inv):
+            events.append((inv.exit_date, 0.0, additional_exit_proceeds(inv)))
     events.sort(key=lambda e: e[0])
 
     timeseries = []
@@ -279,7 +324,8 @@ def portfolio_analytics(investments: Iterable) -> dict:
         return rows
 
     # Top / bottom performers
-    with_irr = [p for p in per_investment if p["irr"] is not None]
+    exited_ids = {inv.id for inv in investments if inv.status == "exited"}
+    with_irr = [p for p in per_investment if p["irr"] is not None and p["investment_id"] in exited_ids]
     top_performers = sorted(with_irr, key=lambda p: -p["irr"])[:5]
     bottom_performers = sorted(with_irr, key=lambda p: p["irr"])[:5]
 
@@ -291,6 +337,13 @@ def portfolio_analytics(investments: Iterable) -> dict:
             "total_returned": round(total_returned, 2),
             "net_profit": round(total_returned - total_invested, 2),
             "overall_multiple": overall_multiple,
+            "dpi": overall_multiple,
+            "tvpi": round((total_returned + total_residual) / total_invested, 4) if total_residual is not None and total_invested > 0 else None,
+            "residual_value": round(total_residual, 2) if total_residual is not None else None,
+            "valuation_date": next(iter(dates)).isoformat() if len(dates) == 1 and valuation_complete else None,
+            "valuation_complete": valuation_complete,
+            "active_position_count": len(active),
+            "valued_position_count": sum(value is not None for value, _ in values),
             "overall_irr_pct": round(overall_irr * 100, 2) if overall_irr is not None else None,
             "investment_count": len(investments),
         },

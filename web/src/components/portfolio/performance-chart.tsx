@@ -22,14 +22,14 @@ type Metric = "cumulative" | "net_position" | "multiple";
 
 const METRICS: Array<{ key: Metric; label: string }> = [
   { key: "cumulative", label: "Invested vs Returned" },
-  { key: "net_position", label: "Net position" },
+  { key: "net_position", label: "Cash balance" },
   { key: "multiple", label: "Multiple over time" },
 ];
 
 /**
  * The hero chart. Switchable between:
  *   - Invested vs Returned (two stacked areas + net line)
- *   - Net position (area that dips below zero during the J-curve)
+ *   - Cash balance (area that dips below zero during the J-curve)
  *   - Multiple (line trending from 0 toward target)
  *
  * Hover gives a scrubbed readout of every metric at that date.
@@ -117,10 +117,10 @@ export function PerformanceChart({ analytics }: { analytics: PortfolioAnalytics 
           <>
             <LegendSwatch color="hsl(var(--destructive))">Cumulative invested</LegendSwatch>
             <LegendSwatch color="hsl(var(--chart-2))">Cumulative returned</LegendSwatch>
-            <LegendLine color="hsl(var(--chart-3))">Net position</LegendLine>
+            <LegendLine color="hsl(var(--chart-3))">Cash balance</LegendLine>
           </>
         )}
-        {metric === "net_position" && <LegendSwatch color="hsl(var(--chart-1))">Net position ({"$"}returned − ${"$"}invested)</LegendSwatch>}
+        {metric === "net_position" && <LegendSwatch color="hsl(var(--chart-1))">Cash balance ({"$"}returned − ${"$"}invested)</LegendSwatch>}
         {metric === "multiple" && (
           <>
             <LegendSwatch color="hsl(var(--primary))">Cumulative multiple</LegendSwatch>

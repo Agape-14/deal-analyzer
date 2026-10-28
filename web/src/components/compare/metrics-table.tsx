@@ -7,27 +7,26 @@ import { cn, fmtMoney, fmtMultiple, fmtPct } from "@/lib/utils";
 import type { DealDetail } from "@/lib/types";
 import { getValueAt, type MetricRow } from "./presets";
 import { findExtrema, formatValue, normalize, toNumber, type CellValue } from "./value-format";
+import { compatibleRow, rowFact, returnContext } from "./comparison-context";
 
 export type CompareMode = "values" | "winners" | "deltas" | "normalized";
 
 /**
  * Groups rows by their category and renders a sticky-group-header table.
- * Keeps a rolling win counter and calls `onWins` whenever it changes so the
- * header row can show "Best overall" crowns.
+ * Highlights individual metric values only; different metrics and incomplete
+ * evidence cannot establish an overall investment winner.
  */
 export function MetricsTable({
   deals,
   rows,
   mode,
   baselineId,
-  onWins,
   cols,
 }: {
   deals: DealDetail[];
   rows: MetricRow[];
   mode: CompareMode;
   baselineId: number | null;
-  onWins: (wins: Record<number, number>) => void;
   cols: number;
 }) {
   const grouped = React.useMemo(() => {
@@ -39,27 +38,19 @@ export function MetricsTable({
     return [...m.entries()];
   }, [rows]);
 
-  // Precompute winners per row + tally total wins per deal
-  const { winsByDeal, winsPerRow } = React.useMemo(() => {
-    const wins: Record<number, number> = {};
+  // Precompute extrema for each individual metric.
+  const winsPerRow = React.useMemo(() => {
     const perRow = new Map<string, { winners: Set<number>; losers: Set<number> }>();
     for (const r of rows) {
       const cells: CellValue[] = deals.map((d) => {
         const raw = getValueAt(d, r.path);
         return { dealId: d.id, raw, num: toNumber(raw) };
       });
-      const ex = findExtrema(r, cells);
+      const ex = compatibleRow(deals, r) ? findExtrema(r, cells) : { winners: new Set<number>(), losers: new Set<number>() };
       perRow.set(r.key, ex);
-      ex.winners.forEach((id) => {
-        wins[id] = (wins[id] ?? 0) + 1;
-      });
     }
-    return { winsByDeal: wins, winsPerRow: perRow };
+    return perRow;
   }, [rows, deals]);
-
-  React.useEffect(() => {
-    onWins(winsByDeal);
-  }, [winsByDeal, onWins]);
 
   const baseline = deals.find((d) => d.id === baselineId) ?? null;
 
@@ -117,9 +108,11 @@ function RowLine({
     const raw = getValueAt(d, row.path);
     return { dealId: d.id, raw, num: toNumber(raw) };
   });
+  const compatible = compatibleRow(deals, row);
 
   return (
     <motion.div
+      data-testid={`compare-row-${row.key}`}
       initial={{ opacity: 0, y: 2 }}
       animate={{ opacity: 1, y: 0 }}
       transition={{ duration: 0.22, delay: Math.min(delayStep, 0.2) }}
@@ -144,19 +137,22 @@ function RowLine({
             {row.hint}
           </div>
         )}
+        {!compatible && row.group === "Returns" && <p className="mt-1 text-[10px] text-warning">Different or unspecified context · values only</p>}
       </div>
 
-      {cells.map((cell) => (
+      {cells.map((cell, index) => (
+        <div key={cell.dealId} className="min-w-0">
         <Cell
-          key={cell.dealId}
           row={row}
           cell={cell}
           cells={cells}
-          mode={mode}
+          mode={compatible ? mode : "values"}
           isWinner={winners.has(cell.dealId)}
           isLoser={losers.has(cell.dealId)}
           baselineCell={baseline ? cells.find((c) => c.dealId === baseline.id) ?? null : null}
         />
+        {row.group === "Returns" && cell.num != null && <p className="mt-1 text-[10px] text-right leading-relaxed text-muted-foreground">{returnContext(rowFact(deals[index], row))}</p>}
+        </div>
       ))}
     </motion.div>
   );
@@ -189,7 +185,7 @@ function Cell({
     return (
       <div className="min-w-0">
         <div className="text-sm text-right tabular-nums font-medium">{formatValue(cell.raw, row.format)}</div>
-        <div className="mt-1 h-1 rounded-full bg-muted overflow-hidden">
+        <div className="mt-1 h-1 rounded-full bg-muted overflow-hidden" role="progressbar" aria-label={`Relative comparison for ${row.label}`} aria-valuenow={pct} aria-valuemin={0} aria-valuemax={100}>
           <motion.div
             className={cn(
               "h-full rounded-full",
@@ -230,7 +226,7 @@ function Cell({
   }
 
   // Values (+ optional winners) mode
-  const showHighlight = mode === "winners" || mode === "values";
+  const showHighlight = mode === "winners";
   return (
     <div
       className={cn(
@@ -240,7 +236,7 @@ function Cell({
       )}
     >
       <div className="flex items-center justify-end gap-1">
-        {showHighlight && isWinner && <Crown className="h-3 w-3 opacity-70" />}
+        {showHighlight && isWinner && <Crown aria-label="Leading value for this metric" className="h-3 w-3 opacity-70" />}
         <span>{formatValue(cell.raw, row.format)}</span>
       </div>
     </div>

@@ -19,13 +19,14 @@ import { DealCard } from "@/components/deal-card";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { useCurrentUser } from "@/lib/auth-client";
-import { cn, fmtMoney } from "@/lib/utils";
+import { cn } from "@/lib/utils";
 
-type SortKey = "score" | "irr" | "multiple" | "recent" | "name";
+type SortKey = "score" | "irr" | "cash_yield" | "multiple" | "recent" | "name";
 
 const SORTS: Array<{ key: SortKey; label: string; icon: React.ComponentType<{ className?: string }> }> = [
   { key: "score", label: "Score", icon: Sparkles },
-  { key: "irr", label: "Return", icon: TrendingUp },
+  { key: "irr", label: "IRR", icon: TrendingUp },
+  { key: "cash_yield", label: "Cash-on-cash", icon: TrendingUp },
   { key: "multiple", label: "Multiple", icon: ArrowDownUp },
   { key: "recent", label: "Most recent", icon: Clock },
   { key: "name", label: "Name (A-Z)", icon: CircleDot },
@@ -66,7 +67,9 @@ export function DealGrid({ deals }: { deals: DealSummary[] }) {
         case "score":
           return (b.overall_score ?? -1) - (a.overall_score ?? -1);
         case "irr":
-          return ((b.target_irr ?? b.target_cash_on_cash) ?? -1) - ((a.target_irr ?? a.target_cash_on_cash) ?? -1);
+          return (b.target_irr ?? -Infinity) - (a.target_irr ?? -Infinity);
+        case "cash_yield":
+          return (b.target_cash_on_cash ?? -Infinity) - (a.target_cash_on_cash ?? -Infinity);
         case "multiple":
           return (b.target_equity_multiple ?? -1) - (a.target_equity_multiple ?? -1);
         case "recent":
@@ -79,7 +82,6 @@ export function DealGrid({ deals }: { deals: DealSummary[] }) {
   }, [deals, query, status, sort]);
 
   const activeSort = SORTS.find((s) => s.key === sort)!;
-  const visibleExposure = filtered.reduce((sum, deal) => sum + (deal.minimum_investment ?? 0), 0);
   const showTeamCompare = !loading && !isAnalyst && deals.length > 1;
 
   return (
@@ -179,9 +181,6 @@ export function DealGrid({ deals }: { deals: DealSummary[] }) {
               matching <span className="text-foreground">&quot;{query}&quot;</span>
             </>
           )}
-        </span>
-        <span className="hidden sm:inline tabular-nums">
-          Visible exposure: <span className="font-medium text-foreground">{fmtMoney(visibleExposure)}</span>
         </span>
       </div>
 

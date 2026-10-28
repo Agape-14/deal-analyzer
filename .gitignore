@@ -8,3 +8,6 @@ __pycache__/
 env/
 uploads/*
 !uploads/.gitkeep
+snapshot-manifest.json
+replay-report.json
+private-staging/

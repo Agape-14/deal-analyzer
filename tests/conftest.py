@@ -37,6 +37,8 @@ async def client(tmp_path, monkeypatch):
     db_dir.mkdir()
     monkeypatch.setenv("DB_DIR", str(db_dir))
     monkeypatch.setenv("AUTH_DISABLED", "1")
+    # Route tests use synthetic files and must not schedule paid AI work.
+    monkeypatch.setenv("DEAL_REVIEW_AUTO_AFTER_UPLOAD", "0")
 
     # Force re-import of database / models so they pick up the new DB path.
     for mod in list(sys.modules):

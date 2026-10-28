@@ -1,13 +1,13 @@
 import os
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
+from sqlalchemy import select, func
 from sqlalchemy.orm import selectinload
 from pydantic import BaseModel, Field, field_validator
 from typing import Optional
 from datetime import date, datetime, timezone
 from app.database import get_db
-from app.models import Investment, Distribution, Deal
+from app.models import Investment, Distribution, Deal, Developer
 from app.services.portfolio_analytics import (
     investment_performance,
     portfolio_analytics,
@@ -24,7 +24,10 @@ INVESTMENT_STATUSES = {"active", "exited", "defaulted", "pending"}
 
 
 class InvestmentCreate(BaseModel):
+    expected_analysis_version: Optional[int] = Field(None, exclude=True)
+    expected_analysis_input_hash: Optional[str] = Field(None, exclude=True)
     deal_id: Optional[int] = Field(None, ge=1)
+    developer_id: Optional[int] = Field(None, ge=1)
     project_name: str = Field("", max_length=255)
     sponsor_name: str = Field("", max_length=255)
     investment_date: Optional[date] = None
@@ -39,6 +42,8 @@ class InvestmentCreate(BaseModel):
     # Allow backfilling already-exited investments in a single POST
     exit_date: Optional[date] = None
     exit_amount: Optional[float] = Field(None, ge=0, le=10_000_000_000)
+    residual_value: Optional[float] = Field(None, ge=0, le=10_000_000_000)
+    valuation_date: Optional[date] = None
     notes: str = Field("", max_length=10000)
 
     @field_validator("status")
@@ -52,6 +57,7 @@ class InvestmentCreate(BaseModel):
 
 
 class InvestmentUpdate(BaseModel):
+    developer_id: Optional[int] = Field(None, ge=1)
     project_name: Optional[str] = Field(None, max_length=255)
     sponsor_name: Optional[str] = Field(None, max_length=255)
     investment_date: Optional[date] = None
@@ -65,6 +71,8 @@ class InvestmentUpdate(BaseModel):
     status: Optional[str] = None
     exit_date: Optional[date] = None
     exit_amount: Optional[float] = Field(None, ge=0, le=10_000_000_000)
+    residual_value: Optional[float] = Field(None, ge=0, le=10_000_000_000)
+    valuation_date: Optional[date] = None
     notes: Optional[str] = Field(None, max_length=10000)
 
     @field_validator("status")
@@ -87,6 +95,7 @@ class DistributionCreate(BaseModel):
 
 # ===== Investment Endpoints =====
 
+@router.get("", include_in_schema=False)
 @router.get("/")
 async def list_investments(
     trash: bool = False,
@@ -115,35 +124,10 @@ async def portfolio_summary(db: AsyncSession = Depends(get_db)):
     )
     investments = result.scalars().all()
 
-    total_invested = 0
-    total_distributions = 0
-    total_exit_proceeds = 0
-    active_count = 0
-    exited_count = 0
-
-    for inv in investments:
-        total_invested += inv.amount_invested or 0
-        for d in inv.distributions:
-            total_distributions += d.amount or 0
-        if inv.status == "active":
-            active_count += 1
-        elif inv.status == "exited":
-            exited_count += 1
-            total_exit_proceeds += inv.exit_amount or 0
-
-    total_returned = total_distributions + total_exit_proceeds
-    overall_multiple = round(total_returned / total_invested, 2) if total_invested > 0 else 0
-    net_profit = total_returned - total_invested
-
     return {
-        "total_invested": total_invested,
-        "total_distributions": total_distributions,
-        "total_exit_proceeds": total_exit_proceeds,
-        "total_returned": total_returned,
-        "net_profit": net_profit,
-        "overall_multiple": overall_multiple,
-        "active_investments": active_count,
-        "exited_investments": exited_count,
+        **portfolio_analytics(investments)["summary"],
+        "active_investments": sum(inv.status == "active" for inv in investments),
+        "exited_investments": sum(inv.status == "exited" for inv in investments),
         "total_investments": len(investments),
     }
 
@@ -175,39 +159,58 @@ async def investment_performance_endpoint(
     return investment_performance(inv)
 
 
+@router.post("", include_in_schema=False)
 @router.post("/")
 async def create_investment(data: InvestmentCreate, db: AsyncSession = Depends(get_db)):
     """Create a new investment."""
+    source_metadata = {}
     # If deal_id provided, auto-populate from deal
     if data.deal_id:
-        deal_result = await db.execute(select(Deal).where(Deal.id == data.deal_id))
+        deal_result = await db.execute(select(Deal).options(selectinload(Deal.developer), selectinload(Deal.documents)).where(Deal.id == data.deal_id, Deal.deleted_at.is_(None)))
         deal = deal_result.scalar_one_or_none()
+        if not deal:
+            raise HTTPException(status_code=404, detail="Selected deal is unavailable")
         if deal:
+            data.developer_id = deal.developer_id
             if not data.project_name:
                 data.project_name = deal.project_name
             if not data.sponsor_name and deal.developer:
-                deal_result2 = await db.execute(
-                    select(Deal).options(selectinload(Deal.developer)).where(Deal.id == data.deal_id)
-                )
-                deal2 = deal_result2.scalar_one_or_none()
-                if deal2 and deal2.developer:
-                    data.sponsor_name = deal2.developer.name
+                data.sponsor_name = deal.developer.name
             # Pull from metrics
-            m = deal.metrics or {}
+            from app.services.analysis import analysis_for_deal
+            analysis = analysis_for_deal(deal)
+            if ((data.expected_analysis_version is not None and data.expected_analysis_version != analysis["version"]) or
+                    (data.expected_analysis_input_hash is not None and data.expected_analysis_input_hash != analysis["input_hash"])):
+                raise HTTPException(409, "Accepted deal terms changed. Re-select the deal to review the current revision before saving.")
+            source_metadata = {"source_analysis_version": analysis["version"], "source_analysis_input_hash": analysis["input_hash"],
+                "terms_context": {key: analysis["facts"][path]["identity"] for key in ("target_irr", "target_equity_multiple", "cash_on_cash")
+                                  if (path := analysis["returns"].get(key + "_path")) in analysis["facts"]}}
+            m = analysis["accepted_metrics"]
             ds = m.get('deal_structure', {}) or {}
-            tr = m.get('target_returns', {}) or {}
-            if not data.preferred_return and ds.get('preferred_return'):
+            returns = analysis["returns"]
+            selected_class = analysis.get("investor_class", "unspecified")
+            if data.investment_class and data.investment_class != selected_class:
+                returns = {}  # Another class's returns cannot become this position's defaults.
+                ds = {}
+                source_metadata["terms_context"] = {}
+            elif not data.investment_class and selected_class != "unspecified":
+                data.investment_class = selected_class
+            if data.preferred_return is None and ds.get('preferred_return') is not None:
                 data.preferred_return = ds['preferred_return']
-            if not data.projected_irr:
-                data.projected_irr = tr.get('net_irr') or tr.get('target_irr')
-            if not data.projected_equity_multiple:
-                data.projected_equity_multiple = tr.get('net_equity_multiple') or tr.get('target_equity_multiple')
+            if data.projected_irr is None:
+                data.projected_irr = returns.get('target_irr')
+            if data.projected_equity_multiple is None:
+                data.projected_equity_multiple = returns.get('target_equity_multiple')
             if not data.investment_class and ds.get('investment_class'):
                 data.investment_class = ds['investment_class']
             if not data.hold_period_years and ds.get('hold_period_years'):
                 data.hold_period_years = ds['hold_period_years']
 
-    inv = Investment(**data.model_dump())
+    validate_valuation(data.residual_value, data.valuation_date, data.investment_date)
+    sponsor = await resolve_sponsor(db, data.developer_id, data.sponsor_name)
+    if sponsor:
+        data.developer_id, data.sponsor_name = sponsor.id, sponsor.name
+    inv = Investment(**data.model_dump(), **source_metadata)
     db.add(inv)
     await db.commit()
     await db.refresh(inv)
@@ -233,13 +236,21 @@ async def get_investment(investment_id: int, db: AsyncSession = Depends(get_db))
 @router.put("/{investment_id}")
 async def update_investment(investment_id: int, data: InvestmentUpdate, db: AsyncSession = Depends(get_db)):
     """Update an investment."""
-    result = await db.execute(select(Investment).where(Investment.id == investment_id))
+    result = await db.execute(select(Investment).options(selectinload(Investment.distributions)).where(Investment.id == investment_id))
     inv = result.scalar_one_or_none()
     if not inv or inv.deleted_at is not None:
         raise HTTPException(status_code=404, detail="Investment not found")
 
     for field, value in data.model_dump(exclude_unset=True).items():
         setattr(inv, field, value)
+
+    validate_valuation(inv.residual_value, inv.valuation_date, inv.investment_date)
+    if inv.valuation_date and any(d.date and d.date > inv.valuation_date for d in inv.distributions):
+        raise HTTPException(422, "Valuation date must include all recorded distributions. Update or clear the valuation.")
+    if "developer_id" in data.model_fields_set or (not inv.developer_id and "sponsor_name" in data.model_fields_set):
+        sponsor = await resolve_sponsor(db, inv.developer_id, inv.sponsor_name)
+        if sponsor:
+            inv.developer_id, inv.sponsor_name = sponsor.id, sponsor.name
 
     await db.commit()
     return {"message": "Investment updated"}
@@ -319,11 +330,31 @@ async def delete_distribution(investment_id: int, dist_id: int, db: AsyncSession
 
 # ===== Helpers =====
 
+def validate_valuation(value, as_of, investment_date):
+    if (value is None) != (as_of is None):
+        raise HTTPException(422, "A residual value and valuation date must be supplied together, or both cleared.")
+    if as_of and (as_of > date.today() or (investment_date and as_of < investment_date)):
+        raise HTTPException(422, "Valuation date must be after investment and no later than today.")
+
+
+async def resolve_sponsor(db, developer_id, sponsor_name):
+    if developer_id:
+        sponsor = await db.get(Developer, developer_id)
+        if not sponsor or sponsor.deleted_at is not None:
+            raise HTTPException(422, "The selected sponsor is unavailable.")
+        return sponsor
+    if sponsor_name and sponsor_name.strip():
+        matches = (await db.execute(select(Developer).where(Developer.deleted_at.is_(None), func.lower(func.trim(Developer.name)) == sponsor_name.strip().lower()))).scalars().all()
+        if len(matches) == 1:
+            return matches[0]
+    return None
+
+
 def _serialize_investment(inv: Investment) -> dict:
     """Serialize investment with calculated metrics."""
     total_distributions = sum(d.amount for d in inv.distributions) if inv.distributions else 0
-    exit_amount = inv.exit_amount or 0
-    total_returned = total_distributions + exit_amount
+    performance = investment_performance(inv)
+    total_returned = performance["total_returned"]
     invested = inv.amount_invested or 0
     
     # Actual equity multiple
@@ -341,7 +372,8 @@ def _serialize_investment(inv: Investment) -> dict:
         "deal_id": inv.deal_id,
         "deal_name": inv.deal.project_name if inv.deal else None,
         "project_name": inv.project_name,
-        "sponsor_name": inv.sponsor_name,
+        "sponsor_name": inv.developer.name if inv.developer else inv.sponsor_name,
+        "developer_id": inv.developer_id or (inv.deal.developer_id if inv.deal else None),
         "investment_date": inv.investment_date.isoformat() if inv.investment_date else None,
         "amount_invested": inv.amount_invested,
         "shares": inv.shares,
@@ -353,6 +385,11 @@ def _serialize_investment(inv: Investment) -> dict:
         "status": inv.status,
         "exit_date": inv.exit_date.isoformat() if inv.exit_date else None,
         "exit_amount": inv.exit_amount,
+        "residual_value": inv.residual_value,
+        "valuation_date": inv.valuation_date.isoformat() if inv.valuation_date else None,
+        "source_analysis_version": inv.source_analysis_version,
+        "source_analysis_input_hash": inv.source_analysis_input_hash,
+        "terms_context": inv.terms_context,
         "notes": inv.notes,
         "created_at": inv.created_at.isoformat() if inv.created_at else None,
         # Calculated

@@ -1,6 +1,7 @@
 "use client";
 
 import * as React from "react";
+import { useCurrentUser } from "@/lib/auth-client";
 import Map, {
   Layer,
   Marker,
@@ -40,6 +41,7 @@ import { Button } from "@/components/ui/button";
 import { api } from "@/lib/api";
 import { cn, fmtDate, fmtMoney } from "@/lib/utils";
 import type { LocationBundle, Poi, PoiCategory } from "@/lib/types";
+import { PublicContext } from "./public-context";
 
 /* ================== Map styles (all free, no API key) ================== */
 
@@ -159,6 +161,7 @@ export function LocationTab({
   const [bundle, setBundle] = React.useState<LocationBundle | null>(null);
   const [loading, setLoading] = React.useState(true);
   const [refreshing, setRefreshing] = React.useState(false);
+  const [mapError, setMapError] = React.useState(false);
   const [enabled, setEnabled] = React.useState<Set<PoiCategory>>(
     new Set(["apartments", "transit", "grocery"]),
   );
@@ -211,13 +214,6 @@ export function LocationTab({
   const lat = bundle?.lat ?? initialLat ?? null;
   const lng = bundle?.lng ?? initialLng ?? null;
   const hasCoords = typeof lat === "number" && typeof lng === "number";
-
-  const fmr2br = bundle?.fmr?.rents?.br2 ?? null;
-  const fmrComparison = React.useMemo(() => {
-    if (!fmr2br || !proformaRent || proformaRent <= 0) return null;
-    const delta = ((proformaRent - fmr2br) / fmr2br) * 100;
-    return { fmr2br, proformaRent, delta };
-  }, [fmr2br, proformaRent]);
 
   function toggleCategory(c: PoiCategory) {
     setEnabled((prev) => {
@@ -287,7 +283,7 @@ export function LocationTab({
   // moment on suburban deals.
   const autoWidenedRef = React.useRef(false);
   React.useEffect(() => {
-    if (!bundle || autoWidenedRef.current) return;
+    if (!bundle || autoWidenedRef.current || Object.keys(bundle.category_errors ?? {}).length) return;
     const anyPois = Object.values(bundle.categories ?? {}).some((v) => (v?.length ?? 0) > 0);
     if (!anyPois && radiusM < 3219 && hasCoords) {
       autoWidenedRef.current = true;
@@ -297,23 +293,24 @@ export function LocationTab({
   }, [bundle, radiusM, hasCoords]);
 
   return (
-    <div className="grid grid-cols-1 lg:grid-cols-[1fr_320px] gap-4 lg:h-[calc(100vh-280px)] lg:min-h-[600px]">
+    <div className="space-y-4"><PublicContext dealId={dealId} /><div className="grid grid-cols-1 lg:grid-cols-[1fr_320px] gap-4 lg:min-h-[600px]">
       {/* ============== MAP ============== */}
       <Card elevated className="p-0 overflow-hidden relative h-[60vh] lg:h-auto min-h-[400px]">
         {loading && !bundle ? (
           <LoadingProgress />
         ) : !hasCoords ? (
-          <GeocodeFailure bundle={bundle} onManual={() => toast.info("Open the side panel to manually set coordinates")} />
+          <GeocodeFailure bundle={bundle} onSave={async (lat, lng) => { await api.post(`/api/deals/${dealId}/location/manual`, { lat, lng }); await refetch(true); }} />
         ) : (
           <>
             <Map
               ref={mapRef}
               initialViewState={{ longitude: lng, latitude: lat, zoom: 14 }}
               mapStyle={STYLES[styleKey].spec}
-              attributionControl={true}
+              attributionControl={{ compact: true }}
               style={{ width: "100%", height: "100%" }}
               cursor={pinMode ? "crosshair" : undefined}
               onClick={pinMode ? handlePinDrop : undefined}
+              onError={() => setMapError(true)}
             >
               <NavigationControl position="top-right" showCompass={false} />
 
@@ -388,6 +385,7 @@ export function LocationTab({
                 </Popup>
               )}
             </Map>
+            {mapError && <div role="alert" className="absolute bottom-10 left-3 right-3 z-10 rounded-lg border bg-card/95 p-2 text-xs">Some map tiles could not load. Area statistics and saved coordinates remain available. <a className="underline" href={`https://www.openstreetmap.org/?mlat=${lat}&mlon=${lng}#map=14/${lat}/${lng}`} target="_blank" rel="noreferrer">Open this location on a map</a></div>}
 
             {/* Style switcher + radius control overlaid top-left */}
             <div className="absolute top-3 left-3 flex flex-col gap-2">
@@ -469,6 +467,11 @@ export function LocationTab({
 
       {/* ============== SIDE PANEL ============== */}
       <div className="flex flex-col gap-4 min-h-0">
+        {!!Object.keys(bundle?.category_errors ?? {}).length && (
+          <p role="status" className="rounded-lg border border-warning/30 bg-warning/10 p-3 text-xs text-warning">
+            Nearby places are incomplete for {Object.keys(bundle?.category_errors ?? {}).join(", ")}. The map provider did not respond. Refresh to try again; an empty layer does not mean there are no nearby places.
+          </p>
+        )}
         <Card elevated className="p-4">
           <div className="flex items-center gap-2 mb-3">
             <Layers className="h-4 w-4 text-muted-foreground" />
@@ -508,52 +511,28 @@ export function LocationTab({
           </div>
         </Card>
 
-        {/* Rent comparison */}
+        {/* Rent context */}
         <Card elevated className="p-4">
           <h3 className="text-sm font-semibold mb-2">Rent context</h3>
-          {fmr2br ? (
+          {bundle?.fmr && Object.values(bundle.fmr.rents).some(value => typeof value === "number") ? (
             <>
               <div className="text-[11px] text-muted-foreground">
-                HUD Fair Market Rent · {bundle?.fmr?.metro ?? bundle?.fmr?.county ?? "zip " + bundle?.fmr?.zip}
+                HUD Fair Market Rent · monthly gross rent · {bundle?.fmr?.metro ?? bundle?.fmr?.county ?? "zip " + bundle?.fmr?.zip}
                 {bundle?.fmr?.year && <> · {bundle.fmr.year}</>}
               </div>
               <div className="mt-3 grid grid-cols-2 gap-2 text-xs tabular-nums">
                 <FmrRow label="Studio" value={bundle?.fmr?.rents?.studio} />
                 <FmrRow label="1 BR" value={bundle?.fmr?.rents?.br1} />
-                <FmrRow label="2 BR" value={bundle?.fmr?.rents?.br2} highlight />
+                <FmrRow label="2 BR" value={bundle?.fmr?.rents?.br2} />
                 <FmrRow label="3 BR" value={bundle?.fmr?.rents?.br3} />
+                <FmrRow label="4 BR" value={bundle?.fmr?.rents?.br4} />
               </div>
-              {fmrComparison && (
-                <div
-                  className={cn(
-                    "mt-3 p-2.5 rounded-md text-xs ring-1",
-                    fmrComparison.delta > 25
-                      ? "bg-destructive/10 text-destructive ring-destructive/30"
-                      : fmrComparison.delta > 10
-                        ? "bg-warning/10 text-warning ring-warning/30"
-                        : "bg-success/10 text-success ring-success/30",
-                  )}
-                >
-                  <div className="font-medium">
-                    Proforma rent {fmtMoney(proformaRent!)} vs FMR {fmtMoney(fmr2br)}
-                  </div>
-                  <div className="mt-0.5 text-[10px] opacity-90">
-                    {fmrComparison.delta > 0 ? "+" : ""}
-                    {fmrComparison.delta.toFixed(1)}%{" "}
-                    {fmrComparison.delta > 25
-                      ? "above market — aggressive"
-                      : fmrComparison.delta > 10
-                        ? "above market — verify"
-                        : "within market range"}
-                  </div>
-                </div>
-              )}
+              <p className="mt-3 text-xs text-muted-foreground">HUD FMR is a 40th-percentile gross-rent benchmark, including most tenant-paid utilities. It is not a matched asking-rent comparable. Bedroom count, geography and fiscal year must match before using this context.</p>
+              <a className="mt-2 block text-xs underline" href="https://www.huduser.gov/portal/datasets/fmr.html" target="_blank" rel="noreferrer">Source and methodology</a>
             </>
           ) : (
             <div className="text-xs text-muted-foreground">
-              Zip-level rent averages are free from HUD. Set{" "}
-              <code className="font-mono bg-muted/60 px-1 py-0.5 rounded text-[10px]">HUD_API_TOKEN</code>{" "}
-              (register free at huduser.gov) to enable.
+              Rent benchmarks are currently unavailable. They are optional context and do not block document review.
             </div>
           )}
         </Card>
@@ -573,11 +552,11 @@ export function LocationTab({
         )}
 
         <div className="text-[10px] text-muted-foreground leading-relaxed mt-auto">
-          Map tiles © CARTO / Esri · POI data © OpenStreetMap contributors. All
-          free / unauthenticated sources.
+          Map tiles © CARTO / Esri · POI data © OpenStreetMap contributors.
+          Nearby places are context, not verified rental comparables.
         </div>
       </div>
-    </div>
+    </div></div>
   );
 }
 
@@ -590,7 +569,7 @@ function totalPois(bundle: LocationBundle): number {
   );
 }
 
-function circleGeoJson(lat: number, lng: number, radiusM: number) {
+function circleGeoJson(lat: number, lng: number, radiusM: number): { type: "Feature"; properties: Record<string, never>; geometry: { type: "Polygon"; coordinates: number[][][] } } {
   // ~64-segment polygon approximating a circle, in WGS84 lat/lng.
   const pts: number[][] = [];
   const R = 6371000;
@@ -610,11 +589,12 @@ function circleGeoJson(lat: number, lng: number, radiusM: number) {
       );
     pts.push([(lng2 * 180) / Math.PI, (lat2 * 180) / Math.PI]);
   }
+  pts[pts.length - 1] = [...pts[0]];
   return {
     type: "Feature",
     properties: {},
     geometry: { type: "Polygon", coordinates: [pts] },
-  } as const;
+  };
 }
 
 function PoiPin({ category, name }: { category: PoiCategory; name: string }) {
@@ -698,7 +678,7 @@ function FmrRow({ label, value, highlight }: { label: string; value?: number | n
       )}
     >
       <span className="text-muted-foreground">{label}</span>
-      <span className="font-semibold tabular-nums">{value ? fmtMoney(value) : "—"}</span>
+      <span className="font-semibold tabular-nums">{value != null ? fmtMoney(value, { compact: false }) : "—"}</span>
     </div>
   );
 }
@@ -738,11 +718,22 @@ function LoadingProgress() {
 
 function GeocodeFailure({
   bundle,
-  onManual,
+  onSave,
 }: {
   bundle: LocationBundle | null;
-  onManual: () => void;
+  onSave: (lat: number, lng: number) => Promise<void>;
 }) {
+  const { isAnalyst } = useCurrentUser();
+  const [lat, setLat] = React.useState("");
+  const [lng, setLng] = React.useState("");
+  const [saving, setSaving] = React.useState(false);
+  const [error, setError] = React.useState("");
+  async function save(event: React.FormEvent) {
+    event.preventDefault(); setSaving(true); setError("");
+    try { await onSave(Number(lat), Number(lng)); }
+    catch (e) { setError((e as { detail?: string }).detail ?? "Location could not be saved. Please retry."); }
+    finally { setSaving(false); }
+  }
   return (
     <div className="h-full grid place-items-center p-10 text-center">
       <div className="max-w-sm">
@@ -754,11 +745,7 @@ function GeocodeFailure({
           {bundle?.error ||
             "Add a street address, city, and state to the deal — geocoding happens automatically."}
         </p>
-        <div className="text-[11px] text-muted-foreground mt-5 leading-relaxed">
-          Once the map appears, click <strong>Re-pin</strong> in the top-right to
-          click-place the exact property location. Future refreshes will re-query
-          from that point.
-        </div>
+        {isAnalyst && <form onSubmit={save} className="mt-5 space-y-3 text-left"><p className="text-xs text-muted-foreground">If you know the property's coordinates, place it directly.</p><div className="grid grid-cols-2 gap-3"><label className="text-xs">Latitude<input type="number" step="any" min={-90} max={90} required value={lat} onChange={e => setLat(e.target.value)} className="mt-1 w-full rounded border bg-background p-2" /></label><label className="text-xs">Longitude<input type="number" step="any" min={-180} max={180} required value={lng} onChange={e => setLng(e.target.value)} className="mt-1 w-full rounded border bg-background p-2" /></label></div>{error && <p role="alert" className="text-xs text-destructive">{error}</p>}<Button type="submit" disabled={saving}>{saving ? "Saving…" : "Save location"}</Button></form>}
       </div>
     </div>
   );

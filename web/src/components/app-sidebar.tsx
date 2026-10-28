@@ -80,20 +80,6 @@ function Brand() {
   );
 }
 
-function LegacyLink({ onPick }: { onPick?: () => void }) {
-  const { isAnalyst } = useCurrentUser();
-  if (!isAnalyst) return null;
-  return (
-    <Link
-      href="/legacy"
-      onClick={onPick}
-      className="text-[11px] text-muted-foreground hover:text-foreground transition-colors"
-    >
-      Switch to legacy UI →
-    </Link>
-  );
-}
-
 function UserMenu({ onPick }: { onPick?: () => void }) {
   const { user, role } = useCurrentUser();
 
@@ -141,7 +127,7 @@ export function AppSidebar() {
       </nav>
       <div className="px-5 py-3 border-t border-border/60 space-y-2">
         <UserMenu />
-        <LegacyLink />
+
       </div>
     </aside>
   );
@@ -217,7 +203,7 @@ export function MobileNav() {
               </nav>
               <div className="px-5 py-3 border-t border-border/60 space-y-2">
                 <UserMenu onPick={() => setOpen(false)} />
-                <LegacyLink onPick={() => setOpen(false)} />
+
               </div>
             </motion.aside>
           </>

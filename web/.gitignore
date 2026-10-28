@@ -24,3 +24,8 @@ src/lib/api-types.ts
 # TypeScript
 *.tsbuildinfo
 next-env.d.ts
+
+# Synthetic browser tests (including temporary authenticated sessions)
+playwright-report/
+test-results/
+.browser-auth/

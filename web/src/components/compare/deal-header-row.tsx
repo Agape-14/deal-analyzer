@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { motion, AnimatePresence } from "framer-motion";
-import { X, AlertCircle, AlertTriangle, CheckCircle2, Crown, ExternalLink } from "lucide-react";
+import { X, AlertCircle, AlertTriangle, CheckCircle2, ExternalLink } from "lucide-react";
 import { cn, fmtPct, fmtMultiple } from "@/lib/utils";
 import type { DealDetail } from "@/lib/types";
 
@@ -11,7 +11,6 @@ import type { DealDetail } from "@/lib/types";
  *   - project + sponsor + city/state
  *   - overall score (big colored number)
  *   - validation-flag chips (red/yellow/green counts)
- *   - "Overall winner" crown when the deal wins the most metric rows
  *   - quick stats (IRR / Multiple)
  *   - remove-from-comparison button
  *
@@ -20,17 +19,13 @@ import type { DealDetail } from "@/lib/types";
  */
 export function DealHeaderRow({
   deals,
-  overallWins,
   onRemove,
   cols,
 }: {
   deals: DealDetail[];
-  overallWins: Record<number, number>;
   onRemove: (id: number) => void;
   cols: number;
 }) {
-  const mostWins = Math.max(0, ...Object.values(overallWins));
-
   return (
     <div
       className="sticky top-16 z-20 bg-background/85 backdrop-blur-md border-b border-border/60 -mx-6 md:-mx-10 px-6 md:px-10 py-3 overflow-x-auto"
@@ -52,8 +47,6 @@ export function DealHeaderRow({
               yellow: flags.filter((f) => f.severity === "yellow").length,
               green: flags.filter((f) => f.severity === "green").length,
             };
-            const wins = overallWins[deal.id] ?? 0;
-            const isOverallWinner = wins > 0 && wins === mostWins && Object.keys(overallWins).length > 1;
 
             return (
               <motion.div
@@ -65,13 +58,6 @@ export function DealHeaderRow({
                 transition={{ duration: 0.2 }}
                 className="relative min-w-0 rounded-xl border border-border/80 bg-card p-3"
               >
-                {isOverallWinner && (
-                  <div className="absolute -top-2 left-3 inline-flex items-center gap-1 px-2 h-5 rounded-full bg-success/20 text-success ring-1 ring-success/50 text-[10px] font-semibold uppercase tracking-wider">
-                    <Crown className="h-3 w-3" />
-                    Best overall · {wins} wins
-                  </div>
-                )}
-
                 <div className="flex items-start justify-between gap-2">
                   <div className="min-w-0">
                     <Link
@@ -98,6 +84,11 @@ export function DealHeaderRow({
                   >
                     <X className="h-3.5 w-3.5" />
                   </button>
+                </div>
+
+                <div className="mt-2 rounded-md bg-muted/50 px-2 py-1.5 text-[10px] text-muted-foreground leading-relaxed">
+                  {deal.analysis?.primary_strategy?.replaceAll("_", " ") ?? "Strategy unspecified"} · {deal.analysis?.investor_class && deal.analysis.investor_class !== "unspecified" ? deal.analysis.investor_class : "Class unspecified"}
+                  <div>{deal.analysis?.facts["deal_structure.hold_period_years"]?.value != null && ["checked", "manual", "calculated"].includes(deal.analysis.facts["deal_structure.hold_period_years"].state) ? `${deal.analysis.facts["deal_structure.hold_period_years"].value} year horizon` : "Horizon unspecified"}</div>
                 </div>
 
                 {/* Score + stats */}

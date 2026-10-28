@@ -22,12 +22,14 @@ from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 
 from app.database import async_session
+from app.config import paid_review_enabled
 from app.models import Deal
 from app.services.confidence import assess_data_quality, summarize_math_checks
 from app.services.data_integrity import now_iso, staleness_flags, stamp_verification
 from app.services.deal_scorer import score_deal
+from app.services.analysis import score_accepted_deal
 from app.services.deal_validator import validate_deal_metrics
-from app.services.deal_verifier import apply_corrections, verify_deal_metrics
+from app.services.deal_verifier import verify_with_corrections
 from app.services.math_checker import run_math_checks
 from app.services import notifications as notif_svc
 
@@ -78,6 +80,8 @@ async def _run_loop() -> None:
 
 async def process_pending_deals() -> int:
     """Verify and score a small batch of deals that need backend follow-through."""
+    if not paid_review_enabled():
+        return 0
     batch_size = _env_int("DEAL_PIPELINE_BATCH_SIZE", DEFAULT_BATCH_SIZE)
     processed = 0
 
@@ -167,10 +171,8 @@ async def _verify_score_and_commit(db, deal: Deal) -> None:
     await db.commit()
 
     try:
-        verification = await verify_deal_metrics(deal, db)
-        metrics = dict(deal.metrics or {})
-        metrics, changes = apply_corrections(metrics, verification)
-        metrics = stamp_verification(metrics, verification)
+        metrics, verification, changes = await verify_with_corrections(deal, db)
+        metrics = stamp_verification(metrics, verification, deal.documents)
 
         math_results = run_math_checks(metrics)
         metrics["_math_checks"] = {
@@ -201,7 +203,7 @@ async def _verify_score_and_commit(db, deal: Deal) -> None:
         metrics["_pipeline"] = pipeline
 
         deal.metrics = metrics
-        deal.scores = score_deal(metrics, math_checks=math_results, require_verified=True)
+        deal.scores = score_accepted_deal(deal, metrics)
         await _emit_verification_notification(db, deal, verification, len(changes))
         await db.commit()
     except Exception as exc:

@@ -65,9 +65,10 @@ def price_for_model(model: str | None) -> dict[str, float]:
     """
     name = (model or "").lower()
     if "haiku" in name:
+        legacy = "haiku-3" in name or "claude-3-haiku" in name
         return {
-            "input_per_mtok": _env_float("AI_HAIKU_INPUT_PER_MTOK", 0.25),
-            "output_per_mtok": _env_float("AI_HAIKU_OUTPUT_PER_MTOK", 1.25),
+            "input_per_mtok": _env_float("AI_HAIKU_INPUT_PER_MTOK", 0.25 if legacy else 1.0),
+            "output_per_mtok": _env_float("AI_HAIKU_OUTPUT_PER_MTOK", 1.25 if legacy else 5.0),
         }
     if "sonnet" in name:
         return {

@@ -39,6 +39,16 @@ async def test_healthz_reports_models_and_auth(client):
 # ---------- Developer CRUD ---------- #
 
 
+async def test_portfolio_collection_never_redirects_to_internal_host(client):
+    for path in ("/api/investments", "/api/investments/"):
+        response = await client.post(path, json={"project_name": "Same origin position", "amount_invested": 1234.56}, follow_redirects=False)
+        assert response.status_code == 200
+        assert "location" not in response.headers
+        listing = await client.get(path, follow_redirects=False)
+        assert listing.status_code == 200
+        assert any(item["id"] == response.json()["id"] for item in listing.json())
+
+
 async def test_developer_crud(client):
     dev = await _new_dev(client)
     r = await client.get("/api/developers")

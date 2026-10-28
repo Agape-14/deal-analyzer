@@ -33,6 +33,10 @@ async def emit(
     they're in the middle of a larger transaction and a double-commit
     would be wrong). This function only flushes so the id is available.
     """
+    from app.services.review_jobs import active_lease
+    if active_lease.get():
+        # The durable job emits one outcome after all stages/retries finish.
+        return 0
     n = Notification(
         kind=kind,
         title=title[:255],

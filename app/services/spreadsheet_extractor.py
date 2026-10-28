@@ -4,13 +4,14 @@ from __future__ import annotations
 
 import csv
 import os
+import zipfile
 from dataclasses import dataclass, field
 from typing import Any
 
 
 MAX_SHEETS = 20
-MAX_ROWS_PER_SHEET = 180
-MAX_COLS_PER_SHEET = 50
+MAX_ROWS_PER_SHEET = 2000
+MAX_COLS_PER_SHEET = 150
 MAX_CELLS_FOR_PROVENANCE = 1500
 MAX_KEY_ROWS = 250
 
@@ -90,6 +91,11 @@ def _extract_xlsx(file_path: str) -> SpreadsheetExtractionResult:
 
     sheet_names = list(wb.sheetnames)[:MAX_SHEETS]
     text_parts: list[str] = []
+    with zipfile.ZipFile(file_path) as archive:
+        external_links = sum(1 for name in archive.namelist()
+                             if name.startswith("xl/externalLinks/externalLink") and name.endswith(".xml"))
+    if external_links:
+        text_parts.append(f"[WORKBOOK LIMITATION: {external_links} external workbook links. Values below are saved cached results, not independently recalculated. Missing linked workbooks prevent full formula validation.]")
     try:
         for sheet_index, sheet_name in enumerate(sheet_names, 1):
             ws = wb[sheet_name]
@@ -98,11 +104,18 @@ def _extract_xlsx(file_path: str) -> SpreadsheetExtractionResult:
             result.cells.extend(cells)
             result.key_rows.extend(key_rows)
             result.page_diagnostics.append(
-                {"page": sheet_index, "source": "spreadsheet", "chars": sum(len(r) for r in rows)}
+                {"page": sheet_index, "source": "spreadsheet", "chars": sum(len(r) for r in rows),
+                 "external_workbook_links": external_links,
+                 "omitted_sheets": max(0, len(wb.sheetnames) - MAX_SHEETS),
+                 "truncated": bool((ws.max_row or 0) > MAX_ROWS_PER_SHEET or (ws.max_column or 0) > MAX_COLS_PER_SHEET)}
             )
             if table_rows:
                 result.tables.append({"sheet": sheet_name, "rows": table_rows})
             text_parts.append(_render_sheet(sheet_name, rows))
+            if result.page_diagnostics[-1]["truncated"]:
+                text_parts[-1] += f"\n[INCOMPLETE SHEET: read only rows 1:{MAX_ROWS_PER_SHEET}, columns 1:{MAX_COLS_PER_SHEET}; values outside this range require review.]"
+        if len(wb.sheetnames) > MAX_SHEETS:
+            text_parts.append(f"[INCOMPLETE WORKBOOK: {len(wb.sheetnames) - MAX_SHEETS} sheets omitted; review the original file.]")
     finally:
         wb.close()
         if formula_wb:
@@ -141,7 +154,7 @@ def _extract_xls(file_path: str) -> SpreadsheetExtractionResult:
             if not any(v != "" for v in rendered_values):
                 continue
             table_rows.append(values)
-            rows.append("\t".join(str(v) for v in rendered_values))
+            rows.append(" | ".join(f"{_cell_ref(row_idx + 1, col + 1)}={value}" for col, value in enumerate(rendered_values) if value != ""))
             if _is_key_row(rendered_values):
                 result.key_rows.append(
                     {"sheet": sheet.name, "row": row_idx + 1, "values": rendered_values, "cells": []}
@@ -155,9 +168,15 @@ def _extract_xls(file_path: str) -> SpreadsheetExtractionResult:
         if table_rows:
             result.tables.append({"sheet": sheet.name, "rows": table_rows})
         result.page_diagnostics.append(
-            {"page": sheet_index + 1, "source": "spreadsheet", "chars": sum(len(r) for r in rows)}
+            {"page": sheet_index + 1, "source": "spreadsheet", "chars": sum(len(r) for r in rows),
+             "truncated": sheet.nrows > max_rows or sheet.ncols > max_cols,
+             "omitted_sheets": max(0, book.nsheets - MAX_SHEETS)}
         )
         text_parts.append(_render_sheet(sheet.name, rows))
+        if result.page_diagnostics[-1]["truncated"]:
+            text_parts[-1] += "\n[INCOMPLETE SHEET: reading limit reached; review the original file.]"
+    if book.nsheets > MAX_SHEETS:
+        text_parts.append(f"[INCOMPLETE WORKBOOK: {book.nsheets - MAX_SHEETS} sheets omitted; review the original file.]")
 
     result.key_rows = result.key_rows[:MAX_KEY_ROWS]
     result.page_count = sheet_count
@@ -171,17 +190,20 @@ def _extract_csv(file_path: str) -> SpreadsheetExtractionResult:
     result = SpreadsheetExtractionResult(page_count=1)
     rows: list[str] = []
     table_rows: list[list[str]] = []
+    truncated = False
     with open(file_path, newline="", encoding="utf-8-sig", errors="replace") as fh:
         reader = csv.reader(fh)
         for idx, row in enumerate(reader):
             if idx >= MAX_ROWS_PER_SHEET:
+                truncated = True
                 break
+            truncated = truncated or len(row) > MAX_COLS_PER_SHEET
             trimmed = row[:MAX_COLS_PER_SHEET]
             rendered = [_render_cell(cell) for cell in trimmed]
             if not any(cell.strip() for cell in rendered):
                 continue
             table_rows.append(trimmed)
-            rows.append("\t".join(rendered))
+            rows.append(" | ".join(f"{_cell_ref(idx + 1, col + 1)}={value}" for col, value in enumerate(rendered) if str(value).strip()))
             if _is_key_row(rendered):
                 result.key_rows.append({"sheet": "CSV", "row": idx + 1, "values": rendered, "cells": []})
             for col_idx, value in enumerate(trimmed, 1):
@@ -193,8 +215,10 @@ def _extract_csv(file_path: str) -> SpreadsheetExtractionResult:
     if table_rows:
         result.tables.append({"sheet": "CSV", "rows": table_rows})
     result.key_rows = result.key_rows[:MAX_KEY_ROWS]
-    result.page_diagnostics.append({"page": 1, "source": "spreadsheet", "chars": sum(len(r) for r in rows)})
-    body = _render_sheet(os.path.basename(file_path), rows)
+    result.page_diagnostics.append({"page": 1, "source": "spreadsheet", "chars": sum(len(r) for r in rows), "truncated": truncated})
+    body = _render_sheet("CSV", rows)
+    if truncated:
+        body += "\n[INCOMPLETE SHEET: reading limit reached; review the original file.]"
     result.text = _render_key_rows(result.key_rows) + ("\n\n" if body else "") + body
     result.quality_score = 100 if result.text.strip() else 0
     return result
@@ -208,13 +232,18 @@ def _worksheet_rows(ws, formula_ws, sheet_name: str) -> tuple[list[str], list[li
     max_row = min(ws.max_row or 0, MAX_ROWS_PER_SHEET)
     max_col = min(ws.max_column or 0, MAX_COLS_PER_SHEET)
 
-    for row_idx in range(1, max_row + 1):
+    # Read-only worksheets stream XML. Repeated ws.cell() reparses the sheet
+    # for every cell and becomes unusably slow on detailed cash-flow schedules.
+    value_rows = ws.iter_rows(max_row=max_row, max_col=max_col, values_only=True)
+    formula_rows = formula_ws.iter_rows(max_row=max_row, max_col=max_col, values_only=True) if formula_ws else None
+    for row_idx, values in enumerate(value_rows, 1):
+        formulas = next(formula_rows) if formula_rows else ()
         row_values: list[str] = []
         raw_values: list[Any] = []
         row_cells: list[dict] = []
         for col_idx in range(1, max_col + 1):
-            value = ws.cell(row=row_idx, column=col_idx).value
-            formula = formula_ws.cell(row=row_idx, column=col_idx).value if formula_ws else None
+            value = values[col_idx - 1]
+            formula = formulas[col_idx - 1] if formulas else None
             rendered = _render_cell(value)
             row_values.append(rendered)
             raw_values.append(value)
@@ -229,10 +258,15 @@ def _worksheet_rows(ws, formula_ws, sheet_name: str) -> tuple[list[str], list[li
                 row_cells.append(cell)
                 if len(cells) < MAX_CELLS_FOR_PROVENANCE:
                     cells.append(cell)
-        if not any(v != "" for v in row_values):
+            elif isinstance(formula, str) and formula.startswith("="):
+                row_cells.append({"sheet": sheet_name, "cell": _cell_ref(row_idx, col_idx),
+                                  "value": "[formula has no cached value]", "formula": formula})
+        if not row_cells:
             continue
         table_rows.append(raw_values)
-        rows.append("\t".join(row_values))
+        # Preserve addresses and column gaps: otherwise a later verifier can
+        # identify a number but cannot return a reproducible cell citation.
+        rows.append(" | ".join(f"{cell['cell']}={_render_cell(cell['value'])}" for cell in row_cells))
         if _is_key_row(row_values):
             key_rows.append(
                 {"sheet": sheet_name, "row": row_idx, "values": row_values, "cells": row_cells[:20]}

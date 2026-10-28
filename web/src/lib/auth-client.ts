@@ -17,7 +17,10 @@ export function isAnalystRole(role?: string | null): boolean {
   return role === "admin" || role === "analyst";
 }
 
-export function useCurrentUser() {
+type AuthState = { user: AuthUser | null; role: UserRole | undefined; loading: boolean; isAnalyst: boolean; isViewer: boolean };
+const AuthContext = React.createContext<AuthState>({ user: null, role: undefined, loading: true, isAnalyst: false, isViewer: false });
+
+export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = React.useState<AuthUser | null>(null);
 
   React.useEffect(() => {
@@ -43,11 +46,16 @@ export function useCurrentUser() {
   const role = user?.role ?? (user?.authenticated ? "admin" : undefined);
   const isAnalyst = isAnalystRole(role);
 
-  return {
+  const value = {
     user,
     role,
     loading: user === null,
     isAnalyst,
     isViewer: role === "viewer",
   };
+  return React.createElement(AuthContext.Provider, { value }, children);
+}
+
+export function useCurrentUser() {
+  return React.useContext(AuthContext);
 }

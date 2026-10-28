@@ -148,9 +148,9 @@ export function DeveloperDetailView({
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
         <StatCard label="Active deals" value={String(stats.activeDeals)} sublabel={`${deals.length} total`} />
         <StatCard
-          label="Avg target IRR"
-          value={fmtPct(stats.avgIrr)}
-          sublabel={`Across ${stats.irrCount} scored deal${stats.irrCount === 1 ? "" : "s"}`}
+          label="Supported returns"
+          value={`${deals.filter(d => d.target_irr != null || d.target_cash_on_cash != null).length}/${deals.length}`}
+          sublabel="Compare class, scenario and period per deal"
         />
         <StatCard
           label="Avg score"
@@ -330,10 +330,8 @@ function computeStats(deals: DealSummary[], investments: Investment[]) {
   const avgScore = scored.length
     ? scored.reduce((a, d) => a + (d.overall_score ?? 0), 0) / scored.length
     : null;
-  const irrs = deals.map((d) => d.target_irr).filter((x): x is number => typeof x === "number");
-  const avgIrr = irrs.length ? irrs.reduce((a, b) => a + b, 0) / irrs.length : null;
   const invested = investments.reduce((a, i) => a + (i.amount_invested ?? 0), 0);
-  return { activeDeals, avgScore, avgIrr, irrCount: irrs.length, invested };
+  return { activeDeals, avgScore, invested };
 }
 
 function scoreColor(v: number | null): string {

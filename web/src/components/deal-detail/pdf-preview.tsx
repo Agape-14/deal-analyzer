@@ -61,13 +61,14 @@ export function PdfPreviewDialog({
         </div>
 
         {isPdf ? (
-          <div className="flex-1 bg-black/30 min-h-0">
+          <div className="flex flex-1 flex-col bg-black/30 min-h-0">
+            <p className="px-4 py-2 text-xs text-muted-foreground">If the preview is blank, use Open or Download above to view the original PDF.</p>
             {/* Browser-native PDF viewer. `#toolbar=1` shows Chrome's
                 page nav + download; other browsers ignore unknown hashes. */}
             <iframe
               src={`${url}#toolbar=1&view=FitH`}
               title={doc.filename}
-              className="w-full h-full border-0"
+              className="w-full flex-1 min-h-0 border-0"
             />
             <div className="sr-only">
               <a href={url}>Open {doc.filename}</a>
