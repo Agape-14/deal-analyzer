@@ -143,11 +143,11 @@ export function NewInvestmentDrawer() {
         if (!editing?.deal_id) body.developer_id = form.developer_id ? Number(form.developer_id) : null;
       }
       if (form.investment_date) body.investment_date = form.investment_date;
-      if (form.investment_class) body.investment_class = form.investment_class;
-      if (form.projected_irr) body.projected_irr = Number(form.projected_irr);
-      if (form.projected_equity_multiple)
+      if (mode === "manual" && form.investment_class) body.investment_class = form.investment_class;
+      if (mode === "manual" && form.projected_irr) body.projected_irr = Number(form.projected_irr);
+      if (mode === "manual" && form.projected_equity_multiple)
         body.projected_equity_multiple = Number(form.projected_equity_multiple);
-      if (form.hold_period_years) body.hold_period_years = Number(form.hold_period_years);
+      if (mode === "manual" && form.hold_period_years) body.hold_period_years = Number(form.hold_period_years);
       if (form.residual_value || form.valuation_date || editing) {
         body.residual_value = form.residual_value.trim() ? Number(form.residual_value) : null;
         body.valuation_date = form.valuation_date || null;
@@ -380,9 +380,9 @@ function Field({
     <div className="space-y-2">
       <Label htmlFor={id}>
         {label}
-        {required && <span className="text-primary ml-1">*</span>}
+        {required && <span aria-hidden="true" className="text-primary ml-1">*</span>}
       </Label>
-      {React.Children.map(children, (child, index) => index === 0 && React.isValidElement<{ id?: string }>(child) ? React.cloneElement(child, { id }) : child)}
+      {React.Children.map(children, (child, index) => index === 0 && React.isValidElement<{ id?: string; "aria-required"?: boolean }>(child) ? React.cloneElement(child, { id, "aria-required": required || undefined }) : child)}
     </div>
   );
 }

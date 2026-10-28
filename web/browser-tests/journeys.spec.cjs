@@ -175,7 +175,7 @@ test('unsupported models show reasons and assistant works without provider credi
   await expect(page.getByRole('status').filter({ hasText: 'Waterfall unavailable: Refinancing distributions require' })).toBeVisible();
   await expect(page.getByText(/Multiple equity classes require/)).toBeVisible();
   await page.getByRole('tab', { name: 'Assistant', exact: true }).click();
-  await expect(page.getByText(/Answers from the current reviewed facts/)).toBeVisible();
+  await expect(page.getByText(/Reviewed facts and labeled source excerpts/)).toBeVisible();
   await expect(page.getByText('Earlier analysis · open archived reply', { exact: true })).toBeVisible();
   await expect(page.getByText('Synthetic saved conversation. Summary holds the accepted figures.')).not.toBeVisible();
   await page.getByPlaceholder('Ask about accepted returns, terms or missing evidence…').fill('What is the accepted cash yield?');
@@ -470,6 +470,9 @@ test('linked investment previews the accepted revision and records a dated valua
   await page.getByRole('button', { name: 'Add investment', exact: true }).first().click();
   const drawer = page.getByRole('dialog');
   await drawer.getByLabel('Deal', { exact: true }).selectOption('1');
+  await drawer.getByRole('button', { name: 'Manual entry', exact: true }).click();
+  await drawer.getByLabel('Proj IRR (%)', { exact: true }).fill('99');
+  await drawer.getByRole('button', { name: 'Link existing deal', exact: true }).click();
   await expect(drawer.getByText(/Analysis revision/)).toBeVisible();
   await drawer.getByLabel('Amount invested', { exact: true }).fill('4321');
   await drawer.getByLabel('Investment date', { exact: true }).fill('2024-01-01');
@@ -483,6 +486,7 @@ test('linked investment previews the accepted revision and records a dated valua
   expect(row.developer_id).toBe(1);
   expect(row.source_analysis_version).toBeGreaterThan(0);
   expect(row.residual_value).toBe(4500);
+  expect(row.projected_irr).toBeNull();
   const performance = await (await page.request.get(`/api/investments/${row.id}/performance`)).json();
   expect(performance.tvpi).toBeGreaterThan(1);
   expect(performance.dpi).toBe(0);

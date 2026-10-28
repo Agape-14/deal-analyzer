@@ -31,6 +31,8 @@ export function NewDealDrawer() {
   const [open, setOpen] = React.useState(false);
   const [submitting, setSubmitting] = React.useState(false);
   const [developers, setDevelopers] = React.useState<Developer[] | null>(null);
+  const [developerError, setDeveloperError] = React.useState(false);
+  const [developerRetry, retryDevelopers] = React.useReducer(n => n + 1, 0);
   const [mode, setMode] = React.useState<"upload" | "manual">("upload");
   const [files, setFiles] = React.useState<File[]>([]);
   const [uploadError, setUploadError] = React.useState("");
@@ -76,12 +78,15 @@ export function NewDealDrawer() {
 
   // Pull developers once the drawer opens (we don't need them before).
   React.useEffect(() => {
-    if (!open || mode !== "manual" || developers !== null) return;
+    if (!open || mode !== "manual") return;
+    let active = true;
+    setDeveloperError(false);
     api
       .get<Developer[]>("/api/developers")
-      .then(setDevelopers)
-      .catch(() => setDevelopers([]));
-  }, [open, mode, developers]);
+      .then(data => { if (active) setDevelopers(data); })
+      .catch(() => { if (active) setDeveloperError(true); });
+    return () => { active = false; };
+  }, [open, mode, developerRetry]);
 
   function clearDraft() {
     setOpen(false);
@@ -242,6 +247,7 @@ export function NewDealDrawer() {
                 </option>
               ))}
             </select>
+            {developerError && <p role="alert" className="text-xs text-warning">Sponsor list could not be refreshed. {developers ? "Showing previous results." : ""} <button type="button" className="underline" onClick={retryDevelopers}>Retry sponsors</button></p>}
           </Field>
 
           {!form.developer_id && (
