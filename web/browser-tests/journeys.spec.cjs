@@ -498,6 +498,20 @@ test('failed history is unavailable rather than an empty conversation and can re
   await expect(page.getByText(/History is unavailable/)).toHaveCount(0);
 });
 
+test('map rendering and sourced public statistics remain separate from rent judgments', async ({ page }, info) => {
+  await page.route('**/api/deals/1/location**', route => route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ lat: 37.7749, lng: -122.4194, radius_m: 1609, categories: {}, fmr: { zip: '94103', year: 2026, metro: 'Synthetic metro', rents: { studio: 1000, br1: 1200, br2: 1500, br3: 1800 } }, fetched_at: Date.now() / 1000 }) }));
+  await page.route('**/api/deals/1/public-context', route => route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ status: 'available', message: 'Synthetic Census test estimate.', asset_guidance: 'Apartment rent evidence still needed', research_url: 'https://www.census.gov/', profile_supported: true, observations: [{ metric: 'population', label: 'Population', value: 123456, margin_of_error: 300, confidence_level: '90%', unit: 'people', observed_period: '2020–2024', geography_name: 'Synthetic city', geography_level: 'place', geography_id: '1600000US0612345', retrieved_at: '2026-10-28', publication_date: null, source_url: 'https://api.census.gov/data/2024/acs/acs5' }] }) }));
+  await dealPage(page, 1, 'location');
+  await expect(page.locator('.maplibregl-canvas')).toBeVisible();
+  await expect(page.getByText('123,456', { exact: true })).toBeVisible();
+  await page.getByText('Source, uncertainty and freshness', { exact: true }).click();
+  await expect(page.getByText(/Margin of error: 300 at 90% confidence/)).toBeVisible();
+  await expect(page.getByRole('link', { name: 'Census source query', exact: true })).toHaveAttribute('href', 'https://api.census.gov/data/2024/acs/acs5');
+  await expect(page.getByText(/above market — aggressive|within market range/)).toHaveCount(0);
+  await page.getByRole('button', { name: 'Streets', exact: true }).click();
+  await page.screenshot({ path: info.outputPath('map-public-context.png'), fullPage: true });
+});
+
 test('saved deal routes hydrate consistently after repeated reloads', async ({ page }) => {
   test.setTimeout(180000);
   const created = await page.request.post('/api/deals', { data: { project_name: 'Repeated route check' } });
