@@ -467,7 +467,7 @@ async def set_manual_location(
 
 @router.post("/{deal_id}/market-research", dependencies=[Depends(limit("ai"))])
 async def market_research(deal_id: int, db: AsyncSession = Depends(get_db)):
-    """Fetch real market data for the deal's city/state via Brave Search + Claude AI."""
+    """Refresh structured public area context for this asset type, without AI-generated statistics."""
     result = await db.execute(select(Deal).where(Deal.id == deal_id))
     deal = result.scalar_one_or_none()
     if not deal:

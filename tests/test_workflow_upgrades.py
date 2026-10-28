@@ -21,6 +21,15 @@ async def test_linked_terms_are_revision_guarded_and_sponsor_renames_retain_posi
     assert saved["source_analysis_version"] == deal["analysis"]["version"]
 
 
+async def test_sponsor_purge_preserves_stably_linked_financial_records(client):
+    sponsor = (await client.post("/api/developers", json={"name": "Retained sponsor"})).json()["id"]
+    investment = (await client.post("/api/investments/", json={"project_name": "Retained position", "developer_id": sponsor, "amount_invested": 1000})).json()["id"]
+    await client.delete(f"/api/developers/{sponsor}")
+    assert (await client.delete(f"/api/developers/{sponsor}/purge")).status_code == 409
+    assert (await client.get(f"/api/investments/{investment}")).json()["developer_id"] == sponsor
+    assert (await client.post(f"/api/developers/{sponsor}/restore")).status_code == 200
+
+
 async def test_api_valuations_are_paired_and_exits_reconcile_across_endpoints(client):
     result = await client.post("/api/investments/", json={"project_name": "Reconciled", "amount_invested": 1000, "investment_date": "2024-01-01"})
     investment_id = result.json()["id"]
