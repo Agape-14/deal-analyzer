@@ -305,7 +305,7 @@ export function LocationTab({
               ref={mapRef}
               initialViewState={{ longitude: lng, latitude: lat, zoom: 14 }}
               mapStyle={STYLES[styleKey].spec}
-              attributionControl={true}
+              attributionControl={{ compact: true }}
               style={{ width: "100%", height: "100%" }}
               cursor={pinMode ? "crosshair" : undefined}
               onClick={pinMode ? handlePinDrop : undefined}

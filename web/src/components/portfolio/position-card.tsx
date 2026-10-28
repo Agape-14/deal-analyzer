@@ -204,6 +204,7 @@ export function PositionCard({
                 )}
               </div>
             )}
+            {investment.status !== "exited" && <p className="mt-2 text-xs text-muted-foreground">{performance?.valuation_available ? `TVPI ${fmtMultiple(performance.tvpi)} · residual value ${fmtMoney(performance.residual_value)} as of ${performance.valuation_date ?? "unavailable"}` : "Total-value returns unavailable. Add or update a dated residual value after the latest cash flow."}</p>}
           </div>
 
           {/* Sparkline */}

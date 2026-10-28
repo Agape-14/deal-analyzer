@@ -44,6 +44,8 @@ def evaluate(cases):
 
 def require_reviewed_sources(cases):
     """Validate label attestations; this cannot substitute for human review."""
+    if not cases:
+        raise ValueError("At least one independently reviewed real-document case is required")
     for case in cases:
         review = case.get("label_review", {})
         if not (review.get("status") == "approved" and review.get("reviewer") and review.get("reviewed_at") and review.get("real_document") is True and review.get("source_sha256")):

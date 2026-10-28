@@ -29,3 +29,27 @@ jobs:
             candidate-lock.txt
             candidate-results.xml
             candidate-benchmark.json
+  frontend-candidate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - run: npm update --package-lock-only --ignore-scripts
+      - run: npm ci
+      - run: npm run test
+      - run: npm run build
+      - run: npm audit --audit-level=high --json > candidate-audit.json
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: frontend-dependency-candidate-review-required
+          path: |
+            web/package.json
+            web/package-lock.json
+            web/candidate-audit.json

@@ -236,7 +236,7 @@ async def get_investment(investment_id: int, db: AsyncSession = Depends(get_db))
 @router.put("/{investment_id}")
 async def update_investment(investment_id: int, data: InvestmentUpdate, db: AsyncSession = Depends(get_db)):
     """Update an investment."""
-    result = await db.execute(select(Investment).where(Investment.id == investment_id))
+    result = await db.execute(select(Investment).options(selectinload(Investment.distributions)).where(Investment.id == investment_id))
     inv = result.scalar_one_or_none()
     if not inv or inv.deleted_at is not None:
         raise HTTPException(status_code=404, detail="Investment not found")

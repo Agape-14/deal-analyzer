@@ -252,6 +252,8 @@ test('mobile summary keeps the main workflow reachable', async ({ page }, info) 
   await dealPage(page);
   await expect(page.getByRole('heading', { name: 'Sample Hold', exact: true })).toBeVisible();
   await expect(page.getByRole('button', { name: 'New Deal', exact: true })).toBeInViewport();
+  await expect(page.getByRole('link', { name: /Resolve next question|Inspect reviewed evidence/ }).first()).toBeInViewport();
+  await page.screenshot({ path: info.outputPath('mobile-brief.png') });
   expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(390);
   await page.getByRole('tab', { name: 'Questions', exact: true }).click();
   await expect(page.getByRole('heading', { name: 'Only the questions that affect the summary', exact: true })).toBeVisible();
@@ -450,7 +452,7 @@ test('sign-out and an expired session return to sign-in', async ({ browser }) =>
   await context.close();
 });
 
-test('source search opens the current excerpt without leaving the deal', async ({ page }) => {
+test('source search opens the current excerpt without leaving the deal', async ({ page }, info) => {
   await dealPage(page);
   await page.keyboard.press('Control+k');
   await page.getByPlaceholder('Search deals, sponsors or source evidence…').fill('hold cash');
@@ -460,6 +462,7 @@ test('source search opens the current excerpt without leaving the deal', async (
   await expect(viewer.getByText(/Current active source/)).toBeVisible();
   await expect(viewer.locator('mark')).toContainText('Hold cash-on-cash return: 8.5%');
   await expect(viewer.getByRole('link', { name: 'Open / download original' })).toBeVisible();
+  await page.screenshot({ path: info.outputPath('source-excerpt.png'), fullPage: true });
 });
 
 test('linked investment previews the accepted revision and records a dated valuation', async ({ page }) => {

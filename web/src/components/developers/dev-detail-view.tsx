@@ -330,10 +330,8 @@ function computeStats(deals: DealSummary[], investments: Investment[]) {
   const avgScore = scored.length
     ? scored.reduce((a, d) => a + (d.overall_score ?? 0), 0) / scored.length
     : null;
-  const irrs = deals.map((d) => d.target_irr).filter((x): x is number => typeof x === "number");
-  const avgIrr = irrs.length ? irrs.reduce((a, b) => a + b, 0) / irrs.length : null;
   const invested = investments.reduce((a, i) => a + (i.amount_invested ?? 0), 0);
-  return { activeDeals, avgScore, avgIrr, irrCount: irrs.length, invested };
+  return { activeDeals, avgScore, invested };
 }
 
 function scoreColor(v: number | null): string {
