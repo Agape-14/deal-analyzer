@@ -2,14 +2,8 @@ import type { Metadata, Viewport } from "next";
 import { Inter, JetBrains_Mono } from "next/font/google";
 import "./globals.css";
 import "./refinements.css";
-import { Suspense } from "react";
-import { AppShell } from "@/components/app-shell";
-import { CommandPalette } from "@/components/command-palette";
-import { NewDealDrawer } from "@/components/new-deal-drawer";
-import { RoleBodyClass } from "@/components/role-body-class";
-import { ThemeProvider, ThemeScript } from "@/components/theme-provider";
-import { HelpHotkey, FirstRunWelcome } from "@/components/help-overlay";
-import { Toaster } from "sonner";
+import { ThemeScript } from "@/components/theme-provider";
+import { Workspace } from "@/components/workspace";
 
 const inter = Inter({
   subsets: ["latin"],
@@ -46,36 +40,8 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
         <ThemeScript />
       </head>
       <body className="role-viewer min-h-screen bg-background" data-role="viewer">
-        {/* Commit the shell and its DOM-changing effects together. A welcome
-            dialog or role update must not mutate chrome still being hydrated. */}
-        <Suspense fallback={<div role="status" className="p-6 text-sm text-muted-foreground">Loading workspace…</div>}>
-        <ThemeProvider>
-          <RoleBodyClass />
-          {/* Subtle radial highlight behind the main content */}
-          <div aria-hidden className="pointer-events-none fixed inset-0 bg-radial-fade" />
-          <AppShell>{children}</AppShell>
-          <CommandPalette />
-          <HelpHotkey />
-          <FirstRunWelcome />
-          <Suspense fallback={null}>
-            <NewDealDrawer />
-          </Suspense>
-          <Toaster
-            position="bottom-right"
-            theme="system"
-            richColors
-            closeButton
-            toastOptions={{
-              style: {
-                background: "hsl(var(--card))",
-                border: "1px solid hsl(var(--border))",
-                color: "hsl(var(--card-foreground))",
-                boxShadow: "0 22px 50px -24px hsl(222 39% 11% / 0.35)",
-              },
-            }}
-          />
-        </ThemeProvider>
-        </Suspense>
+        <Workspace>{children}</Workspace>
+        <noscript>Enable JavaScript to open this workspace.</noscript>
       </body>
     </html>
   );
