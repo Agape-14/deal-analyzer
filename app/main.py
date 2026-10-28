@@ -241,6 +241,9 @@ async def healthz():
         "auth": auth,
         "rate_limits": describe_policies(),
     }
+    from app.version import release_identity
+    body["release"] = release_identity()
+    body["provider_readiness"] = "Configuration only; credits and semantic accuracy are not verified by this probe."
     return JSONResponse(body, headers={"Cache-Control": "private, max-age=10"})
 
 

@@ -41,6 +41,7 @@ import { Button } from "@/components/ui/button";
 import { api } from "@/lib/api";
 import { cn, fmtDate, fmtMoney } from "@/lib/utils";
 import type { LocationBundle, Poi, PoiCategory } from "@/lib/types";
+import { PublicContext } from "./public-context";
 
 /* ================== Map styles (all free, no API key) ================== */
 
@@ -291,7 +292,7 @@ export function LocationTab({
   }, [bundle, radiusM, hasCoords]);
 
   return (
-    <div className="grid grid-cols-1 lg:grid-cols-[1fr_320px] gap-4 lg:h-[calc(100vh-280px)] lg:min-h-[600px]">
+    <div className="space-y-4"><PublicContext dealId={dealId} /><div className="grid grid-cols-1 lg:grid-cols-[1fr_320px] gap-4 lg:min-h-[600px]">
       {/* ============== MAP ============== */}
       <Card elevated className="p-0 overflow-hidden relative h-[60vh] lg:h-auto min-h-[400px]">
         {loading && !bundle ? (
@@ -551,7 +552,7 @@ export function LocationTab({
           Nearby places are context, not verified rental comparables.
         </div>
       </div>
-    </div>
+    </div></div>
   );
 }
 

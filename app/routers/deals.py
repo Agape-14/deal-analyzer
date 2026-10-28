@@ -480,7 +480,7 @@ async def market_research(deal_id: int, db: AsyncSession = Depends(get_db)):
         raise HTTPException(status_code=400, detail="City and state are required. Update the deal first.")
 
     try:
-        market_data = await fetch_market_data(city, state)
+        market_data = await fetch_market_data(city, state, deal.property_type)
     except Exception as e:
         msg = str(e)
         status = 503 if ("ANTHROPIC_API_KEY" in msg or "BRAVE_API_KEY" in msg) else 500
@@ -488,11 +488,19 @@ async def market_research(deal_id: int, db: AsyncSession = Depends(get_db)):
 
     # Save to deal metrics
     metrics = deal.metrics.copy() if deal.metrics else {}
-    metrics["market_research"] = market_data
+    metrics["_public_context"] = market_data
     deal.metrics = metrics
     await db.commit()
 
     return {"message": "Market research complete", "market_research": market_data}
+
+
+@router.get("/{deal_id}/public-context")
+async def public_market_context(deal_id: int, db: AsyncSession = Depends(get_db)):
+    deal = (await db.execute(select(Deal).where(Deal.id == deal_id, Deal.deleted_at.is_(None)))).scalar_one_or_none()
+    if not deal:
+        raise HTTPException(404, "Deal not found")
+    return await fetch_market_data(deal.city, deal.state, deal.property_type)
 
 
 # ===== Cash Flow Projection =====

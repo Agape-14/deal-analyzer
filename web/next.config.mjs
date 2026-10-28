@@ -55,6 +55,7 @@ const SECURITY_HEADERS = [
 ];
 
 const nextConfig = {
+  env: { NEXT_PUBLIC_APP_COMMIT: (/^[a-f0-9]{7,40}$/i.test(process.env.RAILWAY_GIT_COMMIT_SHA || process.env.APP_COMMIT || process.env.GITHUB_SHA || "") ? process.env.RAILWAY_GIT_COMMIT_SHA || process.env.APP_COMMIT || process.env.GITHUB_SHA : "unidentified") },
   reactStrictMode: true,
   poweredByHeader: false,
   // The development tools button otherwise covers the sidebar's Sign out

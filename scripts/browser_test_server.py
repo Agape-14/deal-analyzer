@@ -45,6 +45,15 @@ from app.database import async_session, engine, init_db
 from app.models import Deal, DealChat, DealDocument, Developer, Investment, Distribution
 from app.main import app
 
+# Isolated source-adapter fixture. This does not change production behavior.
+async def synthetic_public_context(city, state, property_type="multifamily"):
+    return {"status": "unavailable", "observations": [], "message": "Synthetic area context: no exact place match.",
+            "asset_guidance": "Use matched asset-specific sources", "profile_supported": True,
+            "research_url": "https://www.census.gov/", "research_date": "2026-10-28"}
+
+from app.routers import deals as deals_router
+deals_router.fetch_market_data = synthetic_public_context
+
 
 def metrics(yield_value, *, missing_minimum=False, sale=False):
     data = {

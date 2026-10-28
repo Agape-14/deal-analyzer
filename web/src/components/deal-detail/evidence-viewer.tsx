@@ -4,11 +4,11 @@ import * as React from "react";
 import { api } from "@/lib/api";
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 
-type Source = { document_id: number; document_name: string; page?: number | null; sheet?: string | null; cell?: string | null; excerpt?: string; content_hash?: string };
+export type EvidenceSource = { document_id: number; document_name: string; page?: number | null; sheet?: string | null; cell?: string | null; excerpt?: string; content_hash?: string };
 type Excerpt = { text: string; included_in_review: boolean; hash_matches: boolean; analysis_version: number; truncated: boolean };
 
-export function EvidenceViewer({ source }: { source: Source }) {
-  const [open, setOpen] = React.useState(false);
+export function EvidenceViewer({ source, autoOpen = false, onClose }: { source: EvidenceSource; autoOpen?: boolean; onClose?: () => void }) {
+  const [open, setOpen] = React.useState(autoOpen);
   const [data, setData] = React.useState<Excerpt | null>(null);
   const [error, setError] = React.useState(false);
   const [retry, reload] = React.useReducer(n => n + 1, 0);
@@ -25,8 +25,8 @@ export function EvidenceViewer({ source }: { source: Source }) {
   const location = source.page ? `page ${source.page}` : source.sheet ? `${source.sheet} ${source.cell ?? ""}` : "extracted text";
   const quote = source.excerpt?.trim() ?? "";
   const index = data && quote ? data.text.indexOf(quote) : -1;
-  return <><button type="button" className="underline text-left text-primary" onClick={() => setOpen(true)}>{source.document_name} · {location}</button>
-    <Dialog open={open} onOpenChange={setOpen}><DialogContent className="max-w-4xl p-5 max-h-[90vh] overflow-y-auto"><DialogTitle>{source.document_name} · {location}</DialogTitle>
+  return <>{!autoOpen && <button type="button" className="underline text-left text-primary" onClick={() => setOpen(true)}>{source.document_name} · {location}</button>}
+    <Dialog open={open} onOpenChange={value => { setOpen(value); if (!value) onClose?.(); }}><DialogContent className="max-w-4xl p-5 max-h-[90vh] overflow-y-auto"><DialogTitle>{source.document_name} · {location}</DialogTitle>
       {error ? <p role="alert" className="my-3">Source text is unavailable. <button onClick={reload} className="underline">Retry source</button> or open the original below.</p> : !data ? <p className="my-3">Loading source…</p> : <>
         <p className="my-3 text-xs text-muted-foreground">Revision {data.analysis_version} · {data.included_in_review && data.hash_matches ? "Current active source" : "Source version changed or excluded from review; recheck the fact"}. Extracted text preserves reported content; visual layout and formulas require the original.</p>
         <div className="grid gap-4 md:grid-cols-[minmax(0,1fr)_240px]"><pre className="rounded-lg bg-muted/40 p-4 text-xs leading-relaxed whitespace-pre-wrap break-words max-h-[55vh] overflow-auto">{data.text ? index >= 0 ? <>{data.text.slice(0, index)}<mark className="bg-warning/25 text-foreground">{quote}</mark>{data.text.slice(index + quote.length)}</> : data.text : "No extracted text for this location. Open the original for visual review."}</pre>

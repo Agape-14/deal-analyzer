@@ -308,6 +308,7 @@ test('failed assistant request retains question and can be retried', async ({ pa
 });
 
 test('completed document review restores controls after Strict Mode setup', async ({ page }) => {
+  await page.route('**/api/healthz', route => route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ status: 'ok', environment: { anthropic: { configured: true } } }) }));
   // Test the browser lifecycle only. The provider/review worker is disabled
   // in this harness; no extraction request leaves the disposable test app.
   await page.route('**/api/deals/1/review', route => route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ status: 'queued' }) }));

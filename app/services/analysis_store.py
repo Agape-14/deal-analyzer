@@ -13,7 +13,7 @@ from app.services.analysis import build_analysis
 
 def snapshot_inputs(metrics):
     # Keep the source/decision record, not provider caches or transient jobs.
-    omitted = {"_pipeline", "_document_review_cache", "_verification_cache", "_math_checks", "_data_quality"}
+    omitted = {"_pipeline", "_document_review_cache", "_verification_cache", "_math_checks", "_data_quality", "_public_context"}
     return copy.deepcopy({k: v for k, v in (metrics or {}).items() if k not in omitted})
 
 

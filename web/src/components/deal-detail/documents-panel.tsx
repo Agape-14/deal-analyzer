@@ -23,6 +23,7 @@ import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import type { DealDocument } from "@/lib/types";
 import { DocumentVersionControls } from "./document-version-controls";
+import { useCapabilities } from "@/lib/capabilities";
 
 type UploadState = {
   id: string;
@@ -78,6 +79,7 @@ export function DocumentsPanel({
   revision?: number;
 }) {
   const router = useRouter();
+  const { review } = useCapabilities();
   const [dragActive, setDragActive] = React.useState(false);
   const [docType, setDocType] = React.useState<string>("offering_memo");
   const [uploads, setUploads] = React.useState<UploadState[]>([]);
@@ -131,7 +133,7 @@ export function DocumentsPanel({
         toast.success(result.duplicate ? "File already saved" : "Document uploaded", {
           description: result.duplicate ? result.message : queued
             ? `${file.name} was saved. Reading the document now.`
-            : `${file.name} was saved. Review continues automatically.`,
+            : `${file.name} was saved. Check review status before relying on its figures.`,
         });
         router.refresh();
 
@@ -317,11 +319,11 @@ export function DocumentsPanel({
                 : `${documents.length} file${documents.length === 1 ? "" : "s"} on this deal.`}
             </p>
           </div>
-          <Button size="sm" variant="secondary" disabled={!documents.length || reviewPending} onClick={startDocumentReview}>
+          <Button size="sm" variant="secondary" disabled={!documents.length || reviewPending || review === "unavailable"} onClick={startDocumentReview}>
             {reviewPending ? "Queuing…" : "Review documents"}
           </Button>
         </div>
-        <p className="mb-4 text-xs text-muted-foreground">Uploads are reviewed automatically. You can close this page while they run. Use Review documents to retry a stopped review.</p>
+        <p className="mb-4 text-xs text-muted-foreground">{review === "unavailable" ? "Automatic financial review is unavailable. Files can still be saved and read; existing reviewed facts and source lookup remain available." : "Saving and reading a document does not accept its financial claims. Review status and material questions determine what can be used. Queued jobs continue after this page closes."}</p>
 
         {documents.length === 0 ? (
           <div className="py-10 text-center text-sm text-muted-foreground">
@@ -502,7 +504,7 @@ function UploadRow({ upload }: { upload: UploadState }) {
       <div className="flex-1 min-w-0">
         <div className="text-sm font-medium truncate">{upload.filename}</div>
         {upload.status === "done" ? (
-          <div className="text-[11px] text-success mt-0.5">{upload.reused ? "Existing file reused; current review status is shown above" : "Extraction complete"}</div>
+          <div className="text-[11px] text-success mt-0.5">{upload.reused ? "Existing file reused; current review status is shown above" : "Document read; financial acceptance is separate"}</div>
         ) : upload.status === "error" ? (
           <div className="text-xs text-destructive mt-0.5">{upload.error}</div>
         ) : upload.status === "reviewing" ? (

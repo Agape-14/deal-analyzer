@@ -148,9 +148,9 @@ export function DeveloperDetailView({
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
         <StatCard label="Active deals" value={String(stats.activeDeals)} sublabel={`${deals.length} total`} />
         <StatCard
-          label="Avg target IRR"
-          value={fmtPct(stats.avgIrr)}
-          sublabel={`Across ${stats.irrCount} scored deal${stats.irrCount === 1 ? "" : "s"}`}
+          label="Supported returns"
+          value={`${deals.filter(d => d.target_irr != null || d.target_cash_on_cash != null).length}/${deals.length}`}
+          sublabel="Compare class, scenario and period per deal"
         />
         <StatCard
           label="Avg score"

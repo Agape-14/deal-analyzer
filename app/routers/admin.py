@@ -17,6 +17,10 @@ from fastapi import APIRouter, Depends, Query
 from app.auth import require_auth
 from app.services.ai_usage import summarize_usage
 from app.services.operation_log import clear_entries, snapshot_entries
+from app.database import get_db
+from app.models import ReviewJob, Deal
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 
 router = APIRouter()
@@ -32,6 +36,7 @@ async def diagnostics(
     only_errors: bool = Query(False, description="Filter to failed operations only"),
     operation: str | None = Query(None, description="Filter by operation name (extract/verify/chat)"),
     limit: int = Query(50, ge=1, le=200, description="Max entries to return"),
+    db: AsyncSession = Depends(get_db),
 ):
     """Return the last N AI-pipeline operations in reverse-chronological order.
 
@@ -65,9 +70,15 @@ async def diagnostics(
         ),
     }
 
+    jobs = (await db.execute(select(ReviewJob).join(Deal).where(Deal.deleted_at.is_(None)).order_by(ReviewJob.updated_at.desc()).limit(limit))).scalars().all()
+    from app.version import release_identity
     return {
         "counts": counts,
         "entries": entries,
+        "release": release_identity(),
+        "jobs": [{"deal_id": job.deal_id, "status": job.status, "mode": job.mode, "attempts": job.attempts,
+                  "updated_at": job.updated_at.isoformat(), "error": job.error,
+                  "correlation_id": f"review-{job.deal_id}-{job.request_seq}"} for job in jobs],
     }
 
 

@@ -8,6 +8,7 @@ import { RoleBodyClass } from "./role-body-class";
 import { ThemeProvider } from "./theme-provider";
 import { HelpHotkey, FirstRunWelcome } from "./help-overlay";
 import { AuthProvider } from "@/lib/auth-client";
+import { CapabilityProvider } from "@/lib/capabilities";
 import { Toaster } from "sonner";
 
 /**
@@ -21,7 +22,7 @@ export function Workspace({ children }: { children: React.ReactNode }) {
   React.useEffect(() => setMounted(true), []);
   if (!mounted) return <div role="status" className="min-h-screen grid place-items-center text-sm text-muted-foreground">Opening your workspace…</div>;
 
-  return <ThemeProvider><AuthProvider>
+  return <ThemeProvider><AuthProvider><CapabilityProvider>
     <RoleBodyClass />
     <div aria-hidden className="pointer-events-none fixed inset-0 bg-radial-fade" />
     <AppShell>{children}</AppShell>
@@ -30,5 +31,5 @@ export function Workspace({ children }: { children: React.ReactNode }) {
     <FirstRunWelcome />
     <React.Suspense fallback={null}><NewDealDrawer /></React.Suspense>
     <Toaster position="bottom-right" theme="system" richColors closeButton />
-  </AuthProvider></ThemeProvider>;
+  </CapabilityProvider></AuthProvider></ThemeProvider>;
 }

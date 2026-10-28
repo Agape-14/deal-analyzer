@@ -24,6 +24,8 @@ INVESTMENT_STATUSES = {"active", "exited", "defaulted", "pending"}
 
 
 class InvestmentCreate(BaseModel):
+    expected_analysis_version: Optional[int] = Field(None, exclude=True)
+    expected_analysis_input_hash: Optional[str] = Field(None, exclude=True)
     deal_id: Optional[int] = Field(None, ge=1)
     developer_id: Optional[int] = Field(None, ge=1)
     project_name: str = Field("", max_length=255)
@@ -177,6 +179,9 @@ async def create_investment(data: InvestmentCreate, db: AsyncSession = Depends(g
             # Pull from metrics
             from app.services.analysis import analysis_for_deal
             analysis = analysis_for_deal(deal)
+            if ((data.expected_analysis_version is not None and data.expected_analysis_version != analysis["version"]) or
+                    (data.expected_analysis_input_hash is not None and data.expected_analysis_input_hash != analysis["input_hash"])):
+                raise HTTPException(409, "Accepted deal terms changed. Re-select the deal to review the current revision before saving.")
             source_metadata = {"source_analysis_version": analysis["version"], "source_analysis_input_hash": analysis["input_hash"],
                 "terms_context": {key: analysis["facts"][path]["identity"] for key in ("target_irr", "target_equity_multiple", "cash_on_cash")
                                   if (path := analysis["returns"].get(key + "_path")) in analysis["facts"]}}
@@ -186,6 +191,8 @@ async def create_investment(data: InvestmentCreate, db: AsyncSession = Depends(g
             selected_class = analysis.get("investor_class", "unspecified")
             if data.investment_class and data.investment_class != selected_class:
                 returns = {}  # Another class's returns cannot become this position's defaults.
+                ds = {}
+                source_metadata["terms_context"] = {}
             elif not data.investment_class and selected_class != "unspecified":
                 data.investment_class = selected_class
             if data.preferred_return is None and ds.get('preferred_return') is not None:

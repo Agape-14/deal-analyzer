@@ -178,7 +178,7 @@ export function PositionCard({
         <div className="mt-5 flex items-end justify-between gap-4">
           <div>
             <div className="text-[10px] uppercase tracking-[0.12em] text-muted-foreground">
-              Current Multiple
+              Cash returned multiple
             </div>
             <div className={cn("text-3xl font-semibold tabular-nums leading-none mt-1.5", multColor)}>
               {fmtMultiple(mult)}
@@ -186,7 +186,7 @@ export function PositionCard({
             {irr != null && (
               <div className="mt-2 flex items-center gap-1.5 text-xs">
                 <span className="tabular-nums font-medium">
-                  IRR {fmtPct(irr, 1)}
+                  Total-value IRR {fmtPct(irr, 1)}
                 </span>
                 {projectedIrr != null && irrDelta != null && (
                   <span
@@ -239,7 +239,7 @@ export function PositionCard({
             label="DPI"
             value={
               investment.amount_invested > 0
-                ? fmtMultiple(investment.total_distributions / investment.amount_invested)
+                ? fmtMultiple(investment.total_returned / investment.amount_invested)
                 : "—"
             }
           />

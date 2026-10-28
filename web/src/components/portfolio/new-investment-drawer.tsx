@@ -10,7 +10,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
 import { api } from "@/lib/api";
-import type { DealSummary, Investment } from "@/lib/types";
+import type { DealSummary, DealDetail, Investment } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
 /**
@@ -25,7 +25,11 @@ export function NewInvestmentDrawer() {
   const [open, setOpen] = React.useState(false);
   const [submitting, setSubmitting] = React.useState(false);
   const [deals, setDeals] = React.useState<DealSummary[] | null>(null);
-  const [mode, setMode] = React.useState<"deal" | "manual">("manual");
+  const [dealsError, setDealsError] = React.useState(false);
+  const [retry, reloadDeals] = React.useReducer(n => n + 1, 0);
+  const [preview, setPreview] = React.useState<DealDetail | null>(null);
+  const [previewError, setPreviewError] = React.useState(false);
+  const [mode, setMode] = React.useState<"deal" | "manual">("deal");
   const [editing, setEditing] = React.useState<Investment | null>(null);
   const [form, setForm] = React.useState({
     deal_id: "",
@@ -37,11 +41,14 @@ export function NewInvestmentDrawer() {
     projected_irr: "",
     projected_equity_multiple: "",
     hold_period_years: "",
+    residual_value: "",
+    valuation_date: "",
   });
 
   React.useEffect(() => {
     function onOpen() {
       setEditing(null);
+      setMode("deal");
       setOpen(true);
     }
     function onEdit(event: Event) {
@@ -50,7 +57,7 @@ export function NewInvestmentDrawer() {
       setMode("manual");
       setForm({ deal_id: investment.deal_id?.toString() ?? "", project_name: investment.project_name, sponsor_name: investment.sponsor_name,
         investment_date: investment.investment_date ?? "", amount_invested: String(investment.amount_invested), investment_class: investment.investment_class ?? "",
-        projected_irr: investment.projected_irr?.toString() ?? "", projected_equity_multiple: investment.projected_equity_multiple?.toString() ?? "", hold_period_years: investment.hold_period_years?.toString() ?? "" });
+        projected_irr: investment.projected_irr?.toString() ?? "", projected_equity_multiple: investment.projected_equity_multiple?.toString() ?? "", hold_period_years: investment.hold_period_years?.toString() ?? "", residual_value: investment.residual_value?.toString() ?? "", valuation_date: investment.valuation_date ?? "" });
       setOpen(true);
     }
     document.addEventListener("open-new-investment", onOpen);
@@ -59,12 +66,23 @@ export function NewInvestmentDrawer() {
   }, []);
 
   React.useEffect(() => {
-    if (!open || deals !== null) return;
+    if (!open) return;
+    let active = true;
+    setDealsError(false);
     api
       .get<DealSummary[]>("/api/deals")
-      .then(setDeals)
-      .catch(() => setDeals([]));
-  }, [open, deals]);
+      .then(data => { if (active) { setDeals(data); if (!data.length) setMode("manual"); } })
+      .catch(() => { if (active) setDealsError(true); });
+    return () => { active = false; };
+  }, [open, retry]);
+
+  React.useEffect(() => {
+    setPreview(null); setPreviewError(false);
+    if (!open || mode !== "deal" || !form.deal_id) return;
+    let active = true;
+    api.get<DealDetail>(`/api/deals/${form.deal_id}`).then(data => { if (active) setPreview(data); }).catch(() => { if (active) setPreviewError(true); });
+    return () => { active = false; };
+  }, [open, mode, form.deal_id]);
 
   function closeAndClear() {
     setOpen(false);
@@ -80,6 +98,8 @@ export function NewInvestmentDrawer() {
         projected_irr: "",
         projected_equity_multiple: "",
         hold_period_years: "",
+        residual_value: "",
+        valuation_date: "",
       });
     }, 250);
   }
@@ -107,6 +127,10 @@ export function NewInvestmentDrawer() {
       };
       if (mode === "deal") {
         body.deal_id = Number(form.deal_id);
+        if (preview?.analysis) {
+          body.expected_analysis_version = preview.analysis.version;
+          body.expected_analysis_input_hash = preview.analysis.input_hash;
+        }
       } else {
         body.project_name = form.project_name.trim();
         body.sponsor_name = form.sponsor_name.trim();
@@ -117,6 +141,10 @@ export function NewInvestmentDrawer() {
       if (form.projected_equity_multiple)
         body.projected_equity_multiple = Number(form.projected_equity_multiple);
       if (form.hold_period_years) body.hold_period_years = Number(form.hold_period_years);
+      if (form.residual_value || form.valuation_date || editing) {
+        body.residual_value = form.residual_value.trim() ? Number(form.residual_value) : null;
+        body.valuation_date = form.valuation_date || null;
+      }
       if (editing) {
         body.investment_class = form.investment_class.trim();
         body.investment_date = form.investment_date || null;
@@ -128,7 +156,7 @@ export function NewInvestmentDrawer() {
       toast.success(editing ? "Investment updated" : "Investment added", {
         description:
           mode === "deal"
-            ? "Linked to the selected deal. Metrics auto-populated."
+            ? "Linked to the selected deal and its current accepted terms."
             : `${form.project_name}.`,
       });
       closeAndClear();
@@ -162,10 +190,11 @@ export function NewInvestmentDrawer() {
             <ModeTab active={mode === "manual"} onClick={() => setMode("manual")}>
               Manual entry
             </ModeTab>
-            <ModeTab active={mode === "deal"} onClick={() => setMode("deal")} disabled={!deals?.length}>
+            <ModeTab active={mode === "deal"} onClick={() => setMode("deal")}>
               Link existing deal
             </ModeTab>
           </div>}
+          {!editing && dealsError && <p role="alert" className="text-sm text-warning">Deals could not be refreshed. <button type="button" className="underline" onClick={reloadDeals}>Retry deals</button> or use Manual entry.</p>}
           {editing?.deal_id && <p className="text-xs text-muted-foreground">This position remains linked to its original deal. Changes here describe your own investment record.</p>}
 
           {mode === "manual" ? (
@@ -196,7 +225,7 @@ export function NewInvestmentDrawer() {
                 value={form.deal_id}
                 onChange={(e) => setForm((f) => ({ ...f, deal_id: e.target.value }))}
               >
-                <option value="">— Select deal —</option>
+                <option value="">{deals === null ? "Loading deals…" : deals.length ? "— Select deal —" : "No deals on file"}</option>
                 {deals?.map((d) => (
                   <option key={d.id} value={d.id}>
                     {d.project_name} {d.developer_name ? `· ${d.developer_name}` : ""}
@@ -204,8 +233,9 @@ export function NewInvestmentDrawer() {
                 ))}
               </select>
               <p className="text-[11px] text-muted-foreground mt-1">
-                Will auto-populate sponsor, projected IRR/multiple, preferred return, hold period.
+                Only accepted terms from the selected analysis are copied. Your amount and date are new investor inputs.
               </p>
+              {form.deal_id && <div className="rounded-lg border p-3 text-xs space-y-1">{previewError ? "Accepted terms unavailable. Retry selecting this deal before saving." : !preview ? "Loading accepted terms…" : <><p className="font-medium">Analysis revision {preview.analysis?.version ?? "unavailable"} · {preview.analysis?.investor_class ?? "unspecified class"} · {preview.analysis?.primary_strategy ?? "unspecified strategy"}</p><p>IRR: {preview.analysis?.returns.target_irr ?? "Unavailable"}{preview.analysis?.returns.target_irr != null ? "%" : ""} · Multiple: {preview.analysis?.returns.target_equity_multiple ?? "Unavailable"}{preview.analysis?.returns.target_equity_multiple != null ? "x" : ""}</p><p>{preview.analysis?.questions.length ?? 0} evidence questions. Projections are separate from realized performance.</p></>}</div>}
             </Field>
           )}
 
@@ -274,13 +304,14 @@ export function NewInvestmentDrawer() {
               </div>
             </motion.div>
           )}
+          <details className="rounded-lg border border-border/70 p-3 text-sm"><summary className="cursor-pointer">Optional current valuation</summary><p className="my-3 text-xs text-muted-foreground">Use the sponsor's dated residual value for your position, excluding cash already paid out. Total-value returns require this value; cash returned is available without it. Clear both fields to remove a valuation.</p><div className="grid grid-cols-2 gap-3"><Field label="Residual value"><Input type="number" min={0} value={form.residual_value} onChange={e => setForm(f => ({ ...f, residual_value: e.target.value }))} /></Field><Field label="Valuation date"><Input type="date" value={form.valuation_date} onChange={e => setForm(f => ({ ...f, valuation_date: e.target.value }))} /></Field></div></details>
         </form>
 
         <div className="border-t border-border/70 px-6 py-4 flex items-center justify-end gap-2 bg-background/40">
           <Button type="button" variant="ghost" onClick={closeAndClear} disabled={submitting}>
             Cancel
           </Button>
-          <Button type="button" onClick={handleSubmit} disabled={submitting}>
+          <Button type="button" onClick={handleSubmit} disabled={submitting || (mode === "deal" && (!preview || previewError || dealsError))}>
             {submitting ? <Loader2 className="h-4 w-4 animate-spin" /> : <Plus className="h-4 w-4" />}
             {editing ? "Save investment" : "Add investment"}
           </Button>

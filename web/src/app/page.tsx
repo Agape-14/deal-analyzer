@@ -47,16 +47,16 @@ export default async function Home() {
       </FadeIn>
 
       {/* Deal widgets: velocity, win rate, capital, aging */}
-      {pipeline ? (
+      {!error && (pipeline ? (
         <details className="mb-6 rounded-xl border border-border p-4"><summary className="cursor-pointer text-sm font-medium">Pipeline activity and capital</summary><div className="mt-4"><PipelineWidgets summary={pipeline} /></div></details>
       ) : (
         <div className="grid grid-cols-2 md:grid-cols-4 gap-3 md:gap-4 mb-10">
           <StatCard label="Total Deals" value={deals.length} />
           <StatCard label="Reviewing" value={deals.filter((d) => d.status === "reviewing").length} />
           <StatCard label="Committed" value={deals.filter((d) => d.status === "committed").length} accent="primary" />
-          <StatCard label="Avg Score" value={0} format="score" />
+          <StatCard label="With supported returns" value={deals.filter(d => d.target_irr != null || d.target_cash_on_cash != null).length} />
         </div>
-      )}
+      ))}
 
       {!error && deals.length > 0 && <NeedsReviewPanel deals={deals} />}
 

@@ -37,6 +37,8 @@ interface Entry {
 }
 
 interface Diagnostics {
+  release?: { backend_commit: string; schema: string };
+  jobs?: Array<{ deal_id: number; status: string; mode: string; attempts: number; updated_at: string; error: string | null; correlation_id: string }>;
   counts: {
     total_in_buffer: number;
     returned: number;
@@ -48,6 +50,7 @@ interface Diagnostics {
 export default function DiagnosticsPage() {
   const [data, setData] = React.useState<Diagnostics | null>(null);
   const [loading, setLoading] = React.useState(true);
+  const [loadError, setLoadError] = React.useState(false);
   const [onlyErrors, setOnlyErrors] = React.useState(false);
   const [full, setFull] = React.useState(false);
   const [autoRefresh, setAutoRefresh] = React.useState(true);
@@ -61,7 +64,9 @@ export default function DiagnosticsPage() {
       params.set("limit", "50");
       const res = await api.get<Diagnostics>(`/api/admin/diagnostics?${params.toString()}`);
       setData(res);
+      setLoadError(false);
     } catch (e) {
+      setLoadError(true);
       toast.error("Couldn't load diagnostics", {
         description: (e as { detail?: string })?.detail ?? String(e),
       });
@@ -160,6 +165,9 @@ export default function DiagnosticsPage() {
           </span>
         </div>
       )}
+      {loadError && <p role="alert" className="text-sm text-warning">Diagnostics could not be refreshed. {data ? "Showing the previous retrieval." : ""} Use Refresh to retry.</p>}
+      <Card className="p-4 text-xs space-y-2"><p>Frontend commit: {process.env.NEXT_PUBLIC_APP_COMMIT ?? "unidentified"} · Backend commit: {data?.release?.backend_commit ?? "unavailable"}</p><p>{data?.release?.schema} · A configured provider does not confirm credits or analysis accuracy.</p></Card>
+      <Card className="p-4"><h2 className="text-sm font-semibold">Persistent review status</h2><p className="mt-1 text-xs text-muted-foreground">Latest request per deal, retained across process restarts. Individual operation logs below are process-local.</p><div className="mt-3 space-y-3">{data?.jobs?.length ? data.jobs.map(job => <div key={job.correlation_id} className="text-xs border-t pt-2"><a className="underline" href={`/deals/${job.deal_id}?tab=documents`}>Deal {job.deal_id}</a> · {job.status} · {job.mode} · attempt {job.attempts}<p className="text-muted-foreground mt-1">{job.correlation_id} · {job.updated_at}</p>{job.error && <p className="mt-1 text-warning">{job.error}</p>}</div>) : <p className="text-xs text-muted-foreground">{data ? "No review requests recorded in this database." : "Review status unavailable until diagnostics loads."}</p>}</div></Card>
 
       {loading && !data && (
         <div className="py-16 grid place-items-center">
@@ -171,7 +179,7 @@ export default function DiagnosticsPage() {
         <Card elevated className="p-10 text-center">
           <p className="text-sm text-muted-foreground">
             {onlyErrors
-              ? "No errors in the buffer. Ship it."
+              ? "No errors in this process buffer. This does not verify credits, service readiness or analysis accuracy."
               : "No operations yet. Trigger an extraction or verification and they'll appear here."}
           </p>
         </Card>

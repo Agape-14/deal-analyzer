@@ -70,20 +70,20 @@ def environment_status() -> dict[str, dict]:
     return {
         "anthropic": {
             "configured": anthropic_ok,
-            "affects": ["extract", "verify", "market_research"],
+            "affects": ["extract", "verify"],
             "message": (
                 None
                 if anthropic_ok
-                else "ANTHROPIC_API_KEY is not set - document extraction, verification and market research are unavailable. Reviewed-fact answers remain available."
+                else "ANTHROPIC_API_KEY is not set - automatic financial extraction and verification are unavailable. Document reading, public context and evidence lookup remain available."
             ),
         },
         "brave_search": {
-            "configured": brave_ok,
-            "affects": ["market_research"],
+            "configured": True,
+            "affects": [],
             "message": (
                 None
                 if brave_ok
-                else "BRAVE_API_KEY is not set - market research will fall back to Claude-only synthesis without live web results."
+                else "Public context uses structured Census data and requires no Brave or Anthropic key."
             ),
         },
         "database": {

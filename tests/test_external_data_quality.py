@@ -9,19 +9,47 @@ import pytest
 @pytest.mark.asyncio
 async def test_market_search_uses_current_year_without_blocking_client(monkeypatch):
     from app.services import market_data as market
-    queries = []
-    async def search(query):
-        queries.append(query)
-        return []
-    async def create(**kwargs):
-        assert date.today().isoformat() in kwargs["messages"][0]["content"]
-        return SimpleNamespace(content=[SimpleNamespace(text='{"population":null}')])
-    monkeypatch.setattr(market, "brave_search", search)
-    monkeypatch.setattr(market, "AsyncAnthropic", lambda **kwargs: SimpleNamespace(messages=SimpleNamespace(create=create)))
-    result = await market.fetch_market_data("Example", "CA")
-    assert all(str(date.today().year) in q for q in queries)
+    async def context(city, state):
+        return {"status": "unavailable", "observations": [], "message": "No exact place match"}
+    monkeypatch.setattr(market, "census_context", context)
+    result = await market.fetch_market_data("Example", "CA", "office")
+    assert str(date.today().year) in result["research_url"]
+    assert "office" in result["asset_guidance"] and "apartment" not in result["asset_guidance"]
     assert result["research_date"] == date.today().isoformat()
-    assert result["population"] is None
+    assert result["observations"] == []
+    assert "population" not in result  # No generated or unsupported statistic.
+
+
+@pytest.mark.asyncio
+async def test_census_estimates_have_exact_geography_period_and_suppression(monkeypatch):
+    from app.services import public_context as public
+    public._cache.clear()
+    rows = [["NAME", "B01003_001E", "B19013_001E", "B01003_001M", "B19013_001M", "state", "place"],
+            ["Example city, California", "10000", "-666666666", "50", "-222222222", "06", "12345"]]
+    async def handle(request):
+        return httpx.Response(200, json=rows)
+    client = httpx.AsyncClient
+    monkeypatch.setattr(public.httpx, "AsyncClient", lambda **kwargs: client(transport=httpx.MockTransport(handle)))
+    result = await public.census_context("Example", "CA")
+    population, income = result["observations"]
+    assert population["value"] == 10000 and population["margin_of_error"] == 50
+    assert population["geography_id"] == "1600000US0612345" and population["geography_level"] == "place"
+    assert population["observed_period"] == f"{date.today().year-6}–{date.today().year-2}"
+    assert "api.census.gov" in population["source_url"] and population["retrieved_at"]
+    assert income["value"] is None and income["status"] == "suppressed_or_unavailable"
+    assert (await public.census_context("No match", "CA"))["status"] == "unavailable"
+
+
+@pytest.mark.asyncio
+async def test_land_and_unsupported_asset_profiles_do_not_use_apartment_defaults(monkeypatch):
+    from app.services import market_data as market
+    async def context(*args):
+        return {"observations": [], "status": "unavailable"}
+    monkeypatch.setattr(market, "census_context", context)
+    for kind in ("land", "industrial", "specialty"):
+        result = await market.fetch_market_data("Example", "CA", kind)
+        assert "apartment" not in result["research_url"]
+        assert result["profile_supported"] == (kind != "specialty")
 
 
 @pytest.mark.asyncio
