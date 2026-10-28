@@ -38,7 +38,7 @@ export default async function PortfolioPage() {
             </div>
             <h1 className="text-display tracking-tight">Portfolio</h1>
             <p className="text-sm text-muted-foreground mt-1.5 max-w-xl">
-              Live IRR, DPI, and multiple across your entire investment book.
+              Cash returned and dated valuations across your entire investment book.
             </p>
           </div>
 

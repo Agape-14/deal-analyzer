@@ -74,6 +74,12 @@ export interface Developer {
 
 export interface Investment {
   id: number;
+  developer_id?: number | null;
+  residual_value?: number | null;
+  valuation_date?: string | null;
+  source_analysis_version?: number | null;
+  source_analysis_input_hash?: string | null;
+  terms_context?: Record<string, Record<string, unknown>> | null;
   deal_id: number | null;
   deal_name: string | null;
   project_name: string;
@@ -129,7 +135,10 @@ export interface InvestmentPerformance {
   net_profit: number;
   multiple: number;
   dpi: number;
-  tvpi: number;
+  tvpi: number | null;
+  residual_value?: number | null;
+  valuation_date?: string | null;
+  valuation_available?: boolean;
   irr: number | null;
   years_held: number | null;
   projected_irr: number | null;
@@ -145,7 +154,7 @@ export interface InvestmentPerformance {
 }
 
 export interface PortfolioAnalytics {
-  summary: PortfolioSummary & { overall_irr_pct: number | null; investment_count: number };
+  summary: PortfolioSummary & { overall_irr_pct: number | null; investment_count: number; dpi?: number; tvpi?: number | null; residual_value?: number | null; valuation_date?: string | null; valuation_complete?: boolean; active_position_count?: number; valued_position_count?: number };
   per_investment: InvestmentPerformance[];
   by_status: Array<{ name: string; count: number; invested: number; returned: number; share_pct: number; multiple: number }>;
   by_sponsor: Array<{ name: string; count: number; invested: number; returned: number; share_pct: number; multiple: number }>;

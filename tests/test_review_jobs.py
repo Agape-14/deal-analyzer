@@ -106,6 +106,28 @@ async def test_provider_failures_stop_after_three_attempts_and_notify_once(clien
         assert notices[0].kind == "error"
 
 
+async def test_credit_failure_pauses_once_until_explicit_retry(client, monkeypatch):
+    from app.database import async_session
+    from app.models import ReviewJob, Notification
+    from unittest.mock import AsyncMock
+    import app.services.review_jobs as jobs
+    deal_id = await setup_job(client)
+    execute = AsyncMock(side_effect=RuntimeError("credit balance is too low"))
+    monkeypatch.setattr(jobs, "execute_job", execute)
+    assert await jobs.process_one_job()
+    await make_due(deal_id)
+    assert not await jobs.process_one_job()
+    execute.assert_awaited_once()
+    async with async_session() as db:
+        row = await db.get(ReviewJob, deal_id)
+        assert row.status == "paused" and "credits" in row.error
+        assert len((await db.execute(select(Notification))).scalars().all()) == 1
+        await jobs.enqueue_review(db, deal_id)
+        await db.commit()
+        await db.refresh(row)
+        assert row.status == "queued" and row.error is None
+
+
 async def test_success_records_one_outcome_and_no_more_work(client, monkeypatch):
     from app.database import async_session
     from app.models import ReviewJob, Notification

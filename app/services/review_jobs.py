@@ -37,8 +37,8 @@ def public_pipeline(deal):
         pipeline.update(status="running", step=pipeline.get("step") or "extract", progress_pct=5 if job.status == "queued" else pipeline.get("progress_pct", 10),
             message="Review queued; it will resume automatically." if job.status == "queued" else pipeline.get("message") or "Reading and checking documents.",
             updated_at=job.updated_at.isoformat(), job_status=job.status, attempt=job.attempts)
-    elif job.status == "failed":
-        pipeline.update(status="failed", error=job.error, message="Review stopped after three attempts. Retry when the source or service issue is resolved.", updated_at=job.updated_at.isoformat())
+    elif job.status in {"failed", "paused"}:
+        pipeline.update(status="failed", job_status=job.status, error=job.error, message="Review paused; resolve the reported issue, then retry from Documents." if job.status == "paused" else "Review stopped after bounded retries. Retry when the source or service issue is resolved.", updated_at=job.updated_at.isoformat())
     return pipeline
 
 
@@ -131,6 +131,17 @@ async def execute_job(job):
         return "questions" if (deal.analysis_snapshot or {}).get("questions") else "complete"
 
 
+def nonretryable_reason(error):
+    message = str(error).lower()
+    if any(term in message for term in ("credit balance", "insufficient credit", "billing", "payment required")):
+        return "Provider credits are unavailable. Add credits, then retry from Documents."
+    if getattr(error, "status_code", None) in {401, 403} or any(term in message for term in ("invalid api key", "authentication_error", "api_key environment variable is not set", "api key is required")):
+        return "The review service needs valid credentials. Update its configuration, then retry from Documents."
+    if any(term in message for term in ("password protected", "encrypted document", "unsupported file type", "invalid pdf", "no readable text")):
+        return "The document cannot be read. Replace it with a readable supported file, then retry."
+    return None
+
+
 async def finish_job(job, outcome, error=None):
     from app.services.notifications import emit
     async with async_session() as db:
@@ -138,10 +149,11 @@ async def finish_job(job, outcome, error=None):
         if not row or row.lease_token != job["token"]:
             return
         rerun = row.request_seq != job["seq"]
-        retry = error is not None and job["attempt"] < 3
-        state = "queued" if rerun or retry else "failed" if error else outcome
+        blocked = nonretryable_reason(error) if error else None
+        retry = error is not None and not blocked and job["attempt"] < 3
+        state = "queued" if rerun or retry else "paused" if blocked else "failed" if error else outcome
         result = await db.execute(update(ReviewJob).where(ReviewJob.deal_id == row.deal_id, ReviewJob.lease_token == job["token"])
-            .values(status=case((ReviewJob.request_seq != job["seq"], "queued"), else_=state), lease_token=None, lease_until=None, error=str(error)[:1500] if error else None,
+            .values(status=case((ReviewJob.request_seq != job["seq"], "queued"), else_=state), lease_token=None, lease_until=None, error=blocked or (str(error)[:1500] if error else None),
                     next_attempt_at=utcnow() + timedelta(seconds=2 if rerun else 30 * job["attempt"] if retry else 0), updated_at=utcnow()))
         if result.rowcount != 1:
             return
@@ -153,8 +165,8 @@ async def finish_job(job, outcome, error=None):
                 count = len((deal.analysis_snapshot or {}).get("questions") or [])
                 label = {"read": "Document reading", "extract": "Metric extraction", "verify": "Source verification"}.get(job["mode"], "Document review")
                 await emit(db, "error" if error else "warning" if count else "success", f"{label} {'stopped' if error else 'finished'} - {deal.project_name}",
-                    body="Review could not finish after three attempts. Your previous analysis is preserved; retry from Documents." if error else f"{count} material question groups remain. Open the accepted summary and evidence.",
-                    href=f"/deals/{deal.id}?tab={'questions' if count else 'overview'}", payload={"deal_id": deal.id, "analysis_version": deal.analysis_version, "job_status": state})
+                    body=blocked or ("Review could not finish after bounded retries. Your previous analysis is preserved; retry from Documents." if error else f"{count} material question groups remain. Open the accepted summary and evidence."),
+                    href=f"/deals/{deal.id}?tab={'documents' if error else 'questions' if count else 'overview'}", payload={"deal_id": deal.id, "analysis_version": deal.analysis_version, "job_status": state, "correlation_id": job["token"], "request_seq": job["seq"]})
         await db.commit()
 
 

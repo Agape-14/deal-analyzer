@@ -163,6 +163,7 @@ class Investment(Base):
     deal_id = Column(Integer, ForeignKey("deals.id"), nullable=True, index=True)
     project_name = Column(String(500), default="")  # Can track non-deal investments too
     sponsor_name = Column(String(255), default="")
+    developer_id = Column(Integer, ForeignKey("developers.id"), nullable=True, index=True)
     investment_date = Column(Date, nullable=True)
     amount_invested = Column(Float, default=0)
     shares = Column(Float, default=0)
@@ -174,11 +175,17 @@ class Investment(Base):
     status = Column(String(50), default="active")  # active, exited, defaulted, pending
     exit_date = Column(Date, nullable=True)
     exit_amount = Column(Float, nullable=True)
+    residual_value = Column(Float, nullable=True)
+    valuation_date = Column(Date, nullable=True)
+    source_analysis_version = Column(Integer, nullable=True)
+    source_analysis_input_hash = Column(String(64), nullable=True)
+    terms_context = Column(JSON, nullable=True)
     notes = Column(Text, default="")
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
 
     deal = relationship("Deal", back_populates="investments")
     distributions = relationship("Distribution", back_populates="investment", cascade="all, delete-orphan")
+    developer = relationship("Developer", lazy="selectin")
 
 
 class Notification(Base):

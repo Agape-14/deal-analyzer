@@ -315,6 +315,36 @@ async def reprocess_document(doc_id: int, db: AsyncSession = Depends(get_db)):
     }
 
 
+@router.get("/documents/{doc_id}/excerpt")
+async def document_excerpt(doc_id: int, page: int | None = None, sheet: str | None = None,
+                           cell: str | None = None, expected_hash: str | None = None,
+                           db: AsyncSession = Depends(get_db)):
+    from app.services.document_context import split_text_pages
+    from app.services.document_versions import document_inventory, file_hash
+    import re
+    doc = (await db.execute(select(DealDocument).where(DealDocument.id == doc_id))).scalar_one_or_none()
+    if not doc:
+        raise HTTPException(404, "Source document not found")
+    deal = (await db.execute(select(Deal).where(Deal.id == doc.deal_id, Deal.deleted_at.is_(None)))).scalar_one_or_none()
+    if not deal:
+        raise HTTPException(404, "Deal not found")
+    documents = (await db.execute(select(DealDocument).where(DealDocument.deal_id == doc.deal_id))).scalars().all()
+    text = doc.extracted_text or ""
+    if sheet:
+        markers = list(re.finditer(r"^--- Sheet: (.+) ---\s*$", text, re.M))
+        section = next((text[m.end():markers[i+1].start() if i+1 < len(markers) else len(text)] for i, m in enumerate(markers) if m[1] == sheet), "")
+        if cell:
+            match = re.search(r"(?<![A-Z0-9])" + re.escape(cell.replace("$", "").split(":")[0]) + r"\s*=", section, re.I)
+            if match:
+                section = section[max(0, section.rfind("\n", 0, max(0, match.start()-600))):match.end()+1800]
+    else:
+        section = next((body for n, body in split_text_pages(text) if n == page), "") if page is not None else text
+    return {"document_id": doc.id, "document_name": doc.filename, "page": page, "sheet": sheet,
+            "cell": cell, "text": section[:16000], "truncated": len(section) > 16000,
+            "content_hash": file_hash(doc), "hash_matches": not expected_hash or expected_hash == file_hash(doc),
+            "analysis_version": deal.analysis_version, **document_inventory(documents)[doc.id]}
+
+
 @router.get("/documents/{doc_id}/file")
 async def get_document_file(doc_id: int, db: AsyncSession = Depends(get_db)):
     result = await db.execute(select(DealDocument).where(DealDocument.id == doc_id))

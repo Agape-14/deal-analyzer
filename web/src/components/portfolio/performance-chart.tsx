@@ -1,20 +1,42 @@
 "use client";
 
-import * as React from "react";
-import {
-  Area,
-  AreaChart,
-  CartesianGrid,
-  Line,
-  ComposedChart,
-  ReferenceLine,
-  ResponsiveContainer,
-  Tooltip,
-  XAxis,
-  YAxis,
-} from "recharts";
-import { motion, AnimatePresence } from "framer-motion";
+import Link from "next/link";
+import { motion } from "framer-motion";
+import { Building2, Mail, Phone, ArrowUpRight } from "lucide-react";
 import { Card } from "@/components/ui/card";
+import type { Developer, DealSummary } from "@/lib/types";
+import { cn, fmtPct } from "@/lib/utils";
+
+/**
+ * Sponsor tile with aggregated stats computed client-side from the deals
+ * list (since the backend doesn't return per-developer analytics). Keeps
+ * card height stable whether a sponsor has 0 deals or 30.
+ */
+export function DeveloperCard({
+  developer,
+  deals,
+}: {
+  developer: Developer;
+  deals: DealSummary[];
+}) {
+  const ownDeals = deals.filter((d) => d.developer_id === developer.id);
+  const scored = ownDeals.filter((d) => d.overall_score != null);
+  const avgScore = scored.length
+    ? scored.reduce((a, d) => a + (d.overall_score ?? 0), 0) / scored.length
+    : null;
+  const withReturns = ownDeals.filter(d => d.target_irr != null || d.target_cash_on_cash != null).length;
+
+  const statusCounts = ownDeals.reduce<Record<string, number>>((m, d) => {
+    m[d.status] = (m[d.status] ?? 0) + 1;
+    return m;
+  }, {});
+
+  return (
+    <Link href={`/developers/${developer.id}`} className="block group outline-none">
+      <motion.div layout>
+        <Card
+          elevated
+          className="p-5 transition-all duration-2…14787 tokens truncated…i/card";
 import { cn, fmtDate, fmtMoney, fmtMultiple } from "@/lib/utils";
 import type { PortfolioAnalytics } from "@/lib/types";
 
@@ -22,14 +44,14 @@ type Metric = "cumulative" | "net_position" | "multiple";
 
 const METRICS: Array<{ key: Metric; label: string }> = [
   { key: "cumulative", label: "Invested vs Returned" },
-  { key: "net_position", label: "Net position" },
+  { key: "net_position", label: "Cash balance" },
   { key: "multiple", label: "Multiple over time" },
 ];
 
 /**
  * The hero chart. Switchable between:
  *   - Invested vs Returned (two stacked areas + net line)
- *   - Net position (area that dips below zero during the J-curve)
+ *   - Cash balance (area that dips below zero during the J-curve)
  *   - Multiple (line trending from 0 toward target)
  *
  * Hover gives a scrubbed readout of every metric at that date.
@@ -117,10 +139,10 @@ export function PerformanceChart({ analytics }: { analytics: PortfolioAnalytics 
           <>
             <LegendSwatch color="hsl(var(--destructive))">Cumulative invested</LegendSwatch>
             <LegendSwatch color="hsl(var(--chart-2))">Cumulative returned</LegendSwatch>
-            <LegendLine color="hsl(var(--chart-3))">Net position</LegendLine>
+            <LegendLine color="hsl(var(--chart-3))">Cash balance</LegendLine>
           </>
         )}
-        {metric === "net_position" && <LegendSwatch color="hsl(var(--chart-1))">Net position ({"$"}returned − ${"$"}invested)</LegendSwatch>}
+        {metric === "net_position" && <LegendSwatch color="hsl(var(--chart-1))">Cash balance ({"$"}returned − ${"$"}invested)</LegendSwatch>}
         {metric === "multiple" && (
           <>
             <LegendSwatch color="hsl(var(--primary))">Cumulative multiple</LegendSwatch>

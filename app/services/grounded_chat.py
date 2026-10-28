@@ -24,7 +24,7 @@ def format_fact(fact):
     state = {"manual": "analyst-resolved", "checked": "source-checked", "calculated": "calculated"}[fact["state"]]
     return f"{fact['label']}: {value} ({state}{'; ' + '; '.join(context) if context else ''})."
 
-def answer_from_analysis(analysis, question):
+def answer_from_analysis(analysis, question, documents=()):
     query = question.lower()
     facts, returns = analysis["facts"], analysis["returns"]
     paths, lines = [], []
@@ -32,7 +32,7 @@ def answer_from_analysis(analysis, question):
     asks_questions = bool(re.search(r"risk|missing|question|conflict|uncertain|memo|check", query))
     asks_debt = bool(re.search(r"debt|leverage|loan|ltv|interest|downside", query))
     asks_terms = bool(re.search(r"term|structure|minimum|cost|equity|capital|hold|unit|sponsor|class", query))
-    if asks_returns or not (asks_questions or asks_debt or asks_terms):
+    if asks_returns:
         lines.append("Current headline returns:")
         for key, label in (("target_irr", "IRR"), ("cash_on_cash", "Cash-on-cash return"), ("target_equity_multiple", "Equity multiple")):
             path = returns.get(key + "_path")
@@ -45,6 +45,12 @@ def answer_from_analysis(analysis, question):
         paths.extend(path for path, fact in facts.items() if fact["state"] in ACCEPTED and any(term in path for term in terms))
     for path, fact in facts.items():
         if fact["state"] in ACCEPTED and fact["label"].lower() in query and not path.startswith("target_returns."):
+            paths.append(path)
+    from app.services.evidence_search import search_terms, search_documents
+    wanted = search_terms(query)
+    for path, fact in facts.items():
+        vocabulary = search_terms(fact["label"] + " " + path.replace("_", " "))
+        if fact["state"] in ACCEPTED and wanted & vocabulary and not path.startswith("target_returns."):
             paths.append(path)
     references = []
     for path in dict.fromkeys(paths):
@@ -60,7 +66,7 @@ def answer_from_analysis(analysis, question):
             lines.append("Calculation: " + fact["formula"])
         references.append({"path": path, "state": fact["state"], "evidence": fact.get("evidence", []), "dependencies": fact.get("dependencies", [])})
     questions = analysis.get("questions", [])
-    if asks_questions or asks_returns or not references:
+    if asks_questions or asks_returns:
         if questions:
             lines.append("Open evidence questions:")
             lines.extend(f"• {q['title']}: {q['impact']}" for q in questions)
@@ -68,7 +74,14 @@ def answer_from_analysis(analysis, question):
             lines.append("No material evidence questions are currently recorded. This does not establish investment suitability.")
     if re.search(r"what.*(mean|is)|explain|plain english|difference|leverage|downside", query):
         lines.extend(text for key, text in DEFINITIONS.items() if key in query or (asks_returns and key != "leverage"))
+    excerpts = search_documents(documents, question) if not asks_returns else []
+    if excerpts:
+        lines.append("Reported source excerpts matching your question (not accepted facts or an inferred answer):")
+        for hit in excerpts:
+            location = f"page {hit['page']}" if hit["page"] else " / ".join(str(hit[k]) for k in ("sheet", "cell") if hit.get(k)) or "extracted text; location unavailable"
+            lines.append(f"{hit['document_name']} · {location}\n“{hit['excerpt']}”")
+            references.append({"path": "document_lookup", "state": "reported", "evidence": [hit], "dependencies": []})
     if not references:
         lines.append("No accepted fact answers this question yet. Review the Questions tab or add the relevant source document.")
-    lines.append("Only current reviewed facts are shown. Unspecified class, basis, currency or period remains unspecified.")
+    lines.append(f"Analysis revision {analysis.get('version', 0)}. Reviewed facts and reported excerpts are labeled separately. Unspecified class, basis, currency or period remains unspecified.")
     return "\n\n".join(lines), references

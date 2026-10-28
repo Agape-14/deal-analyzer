@@ -229,7 +229,7 @@ test('developer detail and populated portfolio load through real routes', async 
 test('optional location outage leaves deal summary and navigation available', async ({ page }) => {
   await page.route('**/api/deals/1/location**', route => route.fulfill({ status: 503, contentType: 'application/json', body: JSON.stringify({ detail: 'Synthetic location service outage' }) }));
   await dealPage(page, 1, 'location');
-  await expect(page.getByText(/Synthetic location service outage/)).toBeVisible();
+  await expect(page.getByText(/Synthetic location service outage/).first()).toBeVisible();
   await page.getByRole('tab', { name: 'Summary', exact: true }).click();
   await expect(page.getByRole('heading', { name: 'One reviewed view of the deal', exact: true })).toBeVisible();
 });
@@ -365,6 +365,7 @@ test('portfolio creation, editing, distribution, exit and undo work together', a
   await page.goto('/portfolio');
   await page.getByRole('button', { name: 'Add investment', exact: true }).first().click();
   let drawer = page.getByRole('dialog', { name: 'Add investment', exact: true });
+  await drawer.getByRole('button', { name: 'Manual entry', exact: true }).click();
   await drawer.getByLabel('Project name').fill('Browser Position');
   await drawer.getByLabel('Amount invested').fill('1000');
   await drawer.getByLabel('Investment date').fill('2025-01-01');

@@ -213,13 +213,6 @@ export function LocationTab({
   const lng = bundle?.lng ?? initialLng ?? null;
   const hasCoords = typeof lat === "number" && typeof lng === "number";
 
-  const fmr2br = bundle?.fmr?.rents?.br2 ?? null;
-  const fmrComparison = React.useMemo(() => {
-    if (!fmr2br || !proformaRent || proformaRent <= 0) return null;
-    const delta = ((proformaRent - fmr2br) / fmr2br) * 100;
-    return { fmr2br, proformaRent, delta };
-  }, [fmr2br, proformaRent]);
-
   function toggleCategory(c: PoiCategory) {
     setEnabled((prev) => {
       const next = new Set(prev);
@@ -529,31 +522,8 @@ export function LocationTab({
                 <FmrRow label="2 BR" value={bundle?.fmr?.rents?.br2} highlight />
                 <FmrRow label="3 BR" value={bundle?.fmr?.rents?.br3} />
               </div>
-              {fmrComparison && (
-                <div
-                  className={cn(
-                    "mt-3 p-2.5 rounded-md text-xs ring-1",
-                    fmrComparison.delta > 25
-                      ? "bg-destructive/10 text-destructive ring-destructive/30"
-                      : fmrComparison.delta > 10
-                        ? "bg-warning/10 text-warning ring-warning/30"
-                        : "bg-success/10 text-success ring-success/30",
-                  )}
-                >
-                  <div className="font-medium">
-                    Proforma rent {fmtMoney(proformaRent!)} vs FMR {fmtMoney(fmr2br)}
-                  </div>
-                  <div className="mt-0.5 text-[10px] opacity-90">
-                    {fmrComparison.delta > 0 ? "+" : ""}
-                    {fmrComparison.delta.toFixed(1)}%{" "}
-                    {fmrComparison.delta > 25
-                      ? "above market — aggressive"
-                      : fmrComparison.delta > 10
-                        ? "above market — verify"
-                        : "within market range"}
-                  </div>
-                </div>
-              )}
+              <p className="mt-3 text-xs text-muted-foreground">HUD FMR is a 40th-percentile gross-rent benchmark, including most tenant-paid utilities. It is not a matched asking-rent comparable. Bedroom count, geography and fiscal year must match before using this context.</p>
+              <a className="mt-2 block text-xs underline" href="https://www.huduser.gov/portal/datasets/fmr.html" target="_blank" rel="noreferrer">Source and methodology</a>
             </>
           ) : (
             <div className="text-xs text-muted-foreground">
@@ -577,8 +547,8 @@ export function LocationTab({
         )}
 
         <div className="text-[10px] text-muted-foreground leading-relaxed mt-auto">
-          Map tiles © CARTO / Esri · POI data © OpenStreetMap contributors. All
-          free / unauthenticated sources.
+          Map tiles © CARTO / Esri · POI data © OpenStreetMap contributors.
+          Nearby places are context, not verified rental comparables.
         </div>
       </div>
     </div>

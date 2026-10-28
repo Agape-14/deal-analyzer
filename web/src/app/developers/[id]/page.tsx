@@ -28,13 +28,13 @@ export default async function DeveloperDetailPage({
   }
 
   const [deals, investments] = await Promise.all([
-    api.get<DealSummary[]>("/api/deals").catch(() => [] as DealSummary[]),
-    api.get<Investment[]>("/api/investments/").catch(() => [] as Investment[]),
+    api.get<DealSummary[]>("/api/deals"),
+    api.get<Investment[]>("/api/investments/"),
   ]);
 
   const ownDeals = deals.filter((d) => d.developer_id === developer.id);
   const ownInvestments = investments.filter(
-    (i) => i.sponsor_name && i.sponsor_name.trim().toLowerCase() === developer.name.trim().toLowerCase(),
+    (i) => i.developer_id === developer.id || (i.deal_id != null && ownDeals.some(d => d.id === i.deal_id)),
   );
 
   return (

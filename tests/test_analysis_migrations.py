@@ -36,3 +36,21 @@ def test_analysis_migrations_preserve_legacy_metrics_and_are_idempotent(tmp_path
         assert conn.execute(sa.text("SELECT intake_token FROM deals")).scalar() is None
         assert any(index["name"] == "uq_deals_intake_token" and index["unique"] for index in sa.inspect(conn).get_indexes("deals"))
     engine.dispose()
+
+
+def test_investment_migration_preserves_cash_and_links_deal_sponsor(tmp_path, monkeypatch):
+    engine = sa.create_engine(f"sqlite:///{tmp_path / 'positions.db'}")
+    with engine.begin() as conn:
+        conn.execute(sa.text("CREATE TABLE deals (id INTEGER PRIMARY KEY, developer_id INTEGER)"))
+        conn.execute(sa.text("CREATE TABLE investments (id INTEGER PRIMARY KEY, deal_id INTEGER, amount_invested FLOAT, exit_amount FLOAT)"))
+        conn.execute(sa.text("INSERT INTO deals VALUES (1, 7)"))
+        conn.execute(sa.text("INSERT INTO investments VALUES (1, 1, 1000, 1200), (2, NULL, 2000, NULL)"))
+        spec = importlib.util.spec_from_file_location("context_migration", Path(__file__).parents[1] / "alembic/versions/c211028a007_investment_context.py")
+        migration = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(migration)
+        monkeypatch.setattr(migration, "op", Operations(MigrationContext.configure(conn)))
+        migration.upgrade()
+        migration.upgrade()
+        rows = conn.execute(sa.text("SELECT amount_invested, exit_amount, developer_id, residual_value, valuation_date FROM investments ORDER BY id")).all()
+        assert rows == [(1000, 1200, 7, None, None), (2000, None, None, None, None)]
+    engine.dispose()

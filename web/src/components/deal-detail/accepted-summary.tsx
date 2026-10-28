@@ -4,6 +4,7 @@ import Link from "next/link";
 import { Card } from "@/components/ui/card";
 import type { AnalysisFact, DealDetail } from "@/lib/types";
 import { fmtMoney, fmtPct, fmtMultiple } from "@/lib/utils";
+import { EvidenceViewer } from "./evidence-viewer";
 
 export function factValue(fact?: AnalysisFact, reported = false): string {
   if (!fact || fact.value == null || (!reported && !["checked", "calculated", "manual"].includes(fact.state))) return "Awaiting evidence";
@@ -26,7 +27,7 @@ export function FactEvidence({ fact }: { fact?: AnalysisFact }) {
       {fact.formula && <p>Calculated: {fact.formula}</p>}
       {fact.dependencies.length > 0 && <p>Inputs: {fact.dependencies.map(p => p.split(".").pop()?.replaceAll("_", " ")).join(", ")}</p>}
       {fact.evidence.map((e, i) => <div key={`${e.document_id}-${i}`}>
-        <a className="underline" href={`/api/deals/documents/${e.document_id}/file${e.page ? `#page=${e.page}` : ""}`} target="_blank" rel="noreferrer">{e.document_name}{e.page ? ` · page ${e.page}` : ""}{e.sheet ? ` · ${e.sheet} ${e.cell ?? ""}` : ""}</a>
+        <EvidenceViewer source={e} />
         {e.excerpt && <p className="mt-1 whitespace-pre-wrap">{e.excerpt}</p>}
       </div>)}
       {fact.alternatives.length > 0 && <p>Source alternatives: {fact.alternatives.map(v => typeof v === "object" ? JSON.stringify(v) : String(v)).join("; ")}</p>}
