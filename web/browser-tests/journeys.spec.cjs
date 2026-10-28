@@ -494,10 +494,13 @@ test('linked investment previews the accepted revision and records a dated valua
 });
 
 test('failed history is unavailable rather than an empty conversation and can retry', async ({ page }) => {
-  await page.route('**/api/chat/history/1', route => route.fulfill({ status: 503, contentType: 'application/json', body: JSON.stringify({ detail: 'Synthetic history outage' }) }), { times: 1 });
+  // Keep the outage active through development Strict Mode's extra setup.
+  let historyOutage = true;
+  await page.route('**/api/chat/history/1', route => historyOutage ? route.fulfill({ status: 503, contentType: 'application/json', body: JSON.stringify({ detail: 'Synthetic history outage' }) }) : route.continue());
   await dealPage(page, 1, 'chat');
   await expect(page.getByText(/History is unavailable/)).toBeVisible();
   await expect(page.getByText('Understand the reviewed deal', { exact: true })).toHaveCount(0);
+  historyOutage = false;
   await page.getByRole('button', { name: 'Retry history', exact: true }).click();
   await expect(page.getByText(/History is unavailable/)).toHaveCount(0);
   await expect(page.getByText('Loading history…', { exact: true })).toHaveCount(0);

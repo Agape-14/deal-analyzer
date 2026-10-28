@@ -12,6 +12,9 @@ running frontend and backend commits so a stale service can be identified.
 2. Reviewed dependency locks. Python targets Linux/Python 3.12. The Dependency
    candidate workflow produces a candidate lock for review, without changing
    the accepted lock or deploying anything. Run full regression tests for updates.
+   `.python-version` and Nixpacks now select Python 3.12 to match CI. Verify the
+   runtime selection in the approved staging build before production rollout.
+   The frontend `.nvmrc` selects Node 22, matching its CI runtime.
 3. A current, verified backup and a private staging copy. Apply additive Alembic
    migrations through `c211028a007`; verify counts, document hashes, saved
    analyses, manual locks, distributions and stable sponsor associations.
