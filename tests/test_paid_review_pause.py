@@ -1,5 +1,6 @@
 """A guarded release must not spend credits or block free document workflows."""
 from datetime import timedelta
+from types import SimpleNamespace
 
 import pytest
 
@@ -10,11 +11,13 @@ async def test_pause_is_reported_and_paid_routes_do_not_queue_or_change_deal(cli
     from app.database import async_session
     from app.models import ReviewJob
     monkeypatch.setenv("ANTHROPIC_API_KEY", "synthetic-not-a-real-key")
+    deal_id = (await client.post("/api/deals", json={"project_name": "Paused review"})).json()["id"]
+    suffixes = ("cashflow", "waterfall", "analysis/history")
+    baseline = {suffix: (await client.get(f"/api/deals/{deal_id}/{suffix}")).status_code for suffix in suffixes}
     monkeypatch.setenv("PAID_REVIEW_ENABLED", "0")
     health = (await client.get("/api/healthz")).json()["environment"]["anthropic"]
     assert health["configured"] is False and health["paused"] is True
     assert "paused" in health["message"]
-    deal_id = (await client.post("/api/deals", json={"project_name": "Paused review"})).json()["id"]
     before = (await client.get(f"/api/deals/{deal_id}")).json()
     for action in ("review", "extract", "verify"):
         result = await client.post(f"/api/deals/{deal_id}/{action}")
@@ -23,8 +26,8 @@ async def test_pause_is_reported_and_paid_routes_do_not_queue_or_change_deal(cli
     assert before["metrics"] == after["metrics"] and before["revision"] == after["revision"]
     async with async_session() as db:
         assert await db.get(ReviewJob, deal_id) is None
-    for suffix in ("cashflow", "waterfall", "analysis/history"):
-        assert (await client.get(f"/api/deals/{deal_id}/{suffix}")).status_code == 200
+    for suffix in suffixes:
+        assert (await client.get(f"/api/deals/{deal_id}/{suffix}")).status_code == baseline[suffix]
     assert (await client.get(f"/api/reports/deal/{deal_id}/pdf")).status_code == 200
     assert (await client.post("/api/chat", json={"deal_id": deal_id, "message": "What evidence is available?"})).status_code == 200
 
@@ -45,7 +48,7 @@ async def test_upload_is_read_without_paid_review_and_can_be_previewed(client, m
 async def test_queued_paid_job_pauses_once_but_read_jobs_remain_usable(client, monkeypatch):
     from app.database import async_session
     from app.models import ReviewJob
-    from app.services.review_jobs import enqueue_review, process_one_job, public_pipeline, utcnow
+    from app.services.review_jobs import enqueue_review, process_one_job, utcnow
     from app.services.pipeline_runner import process_pending_deals
     deal_id = (await client.post("/api/deals", json={"project_name": "Queued"})).json()["id"]
     async with async_session() as db:
@@ -78,6 +81,6 @@ async def test_all_provider_entry_points_stop_before_client_or_file_access(monke
     from app.services.deal_extractor_cost_aware import extract_metrics_from_docs as cost_aware
     from app.services.deal_verifier import verify_deal_metrics
     for operation in (extract_metrics_from_docs([], ["/nonexistent.pdf"]),
-                      cost_aware([], ["/nonexistent.pdf"]), verify_deal_metrics(None, None)):
+                      cost_aware([], ["/nonexistent.pdf"]), verify_deal_metrics(SimpleNamespace(metrics={}, documents=[]), None)):
         with pytest.raises(ValueError, match="paused"):
             await operation
