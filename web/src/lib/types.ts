@@ -131,6 +131,7 @@ export interface InvestmentPerformance {
   invested: number;
   total_distributions: number;
   exit_amount: number;
+  additional_exit_proceeds?: number;
   total_returned: number;
   net_profit: number;
   multiple: number;

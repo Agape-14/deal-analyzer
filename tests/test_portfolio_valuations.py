@@ -31,6 +31,7 @@ def test_exit_sale_distributions_count_once_in_all_totals():
     p, summary = investment_performance(inv), portfolio_analytics([inv])["summary"]
     assert p["total_returned"] == summary["total_returned"] == 1300
     assert p["dpi"] == p["tvpi"] == summary["tvpi"] == 1.3
+    assert p["exit_amount"] == 1200 and p["additional_exit_proceeds"] == 0
     assert p["cumulative_timeseries"][-1]["cumulative_distributions"] == 1300
     assert p["irr"] is not None
 

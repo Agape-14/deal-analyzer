@@ -55,6 +55,7 @@ jobs:
             web/dependency-audit.json
       - run: npm ci
       - run: npm run test --if-present
+      - run: npm run typecheck
       - run: npm run build
       - uses: actions/setup-python@v5
         with:

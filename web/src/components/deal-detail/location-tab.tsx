@@ -565,7 +565,7 @@ function totalPois(bundle: LocationBundle): number {
   );
 }
 
-function circleGeoJson(lat: number, lng: number, radiusM: number) {
+function circleGeoJson(lat: number, lng: number, radiusM: number): { type: "Feature"; properties: Record<string, never>; geometry: { type: "Polygon"; coordinates: number[][][] } } {
   // ~64-segment polygon approximating a circle, in WGS84 lat/lng.
   const pts: number[][] = [];
   const R = 6371000;
@@ -585,11 +585,12 @@ function circleGeoJson(lat: number, lng: number, radiusM: number) {
       );
     pts.push([(lng2 * 180) / Math.PI, (lat2 * 180) / Math.PI]);
   }
+  pts[pts.length - 1] = [...pts[0]];
   return {
     type: "Feature",
     properties: {},
     geometry: { type: "Polygon", coordinates: [pts] },
-  } as const;
+  };
 }
 
 function PoiPin({ category, name }: { category: PoiCategory; name: string }) {

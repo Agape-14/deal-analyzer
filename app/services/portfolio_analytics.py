@@ -209,7 +209,8 @@ def investment_performance(inv) -> dict:
         "investment_id": inv.id,
         "invested": invested,
         "total_distributions": round(total_dist, 2),
-        "exit_amount": exit_amount,
+        "exit_amount": float(inv.exit_amount or 0),
+        "additional_exit_proceeds": exit_amount,
         "total_returned": round(total_returned, 2),
         "net_profit": round(total_returned - invested, 2),
         "multiple": multiple,
@@ -249,7 +250,7 @@ def portfolio_analytics(investments: Iterable) -> dict:
         invested = float(inv.amount_invested or 0)
         total_invested += invested
         total_distributions += perf["total_distributions"]
-        total_exit_proceeds += perf["exit_amount"]
+        total_exit_proceeds += perf["additional_exit_proceeds"]
         all_flows.extend(investment_cashflows(inv))
 
         # Group by status

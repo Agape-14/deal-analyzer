@@ -297,7 +297,7 @@ async def portfolio_excel_report(db: AsyncSession = Depends(get_db)):
         ("Total Investments", s["investment_count"]),
         ("Total Invested", s["total_invested"]),
         ("Total Distributions", s["total_distributions"]),
-        ("Total Exit Proceeds", s["total_exit_proceeds"]),
+        ("Additional exit cash (not in distributions)", s["total_exit_proceeds"]),
         ("Total Returned", s["total_returned"]),
         ("Cash returned less invested", s["net_profit"]),
         ("Cash returned multiple / DPI", s["overall_multiple"]),
@@ -316,7 +316,7 @@ async def portfolio_excel_report(db: AsyncSession = Depends(get_db)):
     ws = wb.create_sheet("Investments")
     headers = [
         "ID", "Project", "Sponsor", "Class", "Status",
-        "Invest Date", "Invested", "Distributions", "Exit Amount", "Total Returned",
+        "Invest Date", "Invested", "Distributions", "Additional exit cash", "Total Returned",
         "Cash returned less invested", "Cash returned multiple", "DPI", "Total-value IRR (%)", "Years Held",
         "Projected IRR (%)", "Projected Multiple", "IRR vs Projected (pp)",
         "Pref Return (%)", "Hold Period (yrs)", "Notes",
@@ -332,7 +332,7 @@ async def portfolio_excel_report(db: AsyncSession = Depends(get_db)):
         ws.cell(row=idx, column=6, value=inv.investment_date)
         ws.cell(row=idx, column=7, value=inv.amount_invested)
         ws.cell(row=idx, column=8, value=perf.get("total_distributions"))
-        ws.cell(row=idx, column=9, value=perf.get("exit_amount"))
+        ws.cell(row=idx, column=9, value=perf.get("additional_exit_proceeds"))
         ws.cell(row=idx, column=10, value=perf.get("total_returned"))
         ws.cell(row=idx, column=11, value=perf.get("net_profit"))
         ws.cell(row=idx, column=12, value=perf.get("multiple"))
@@ -440,7 +440,7 @@ async def portfolio_quarterly_pdf(db: AsyncSession = Depends(get_db)):
         ("Total Investments", str(s["investment_count"])),
         ("Total Invested", _fmt_money(s["total_invested"])),
         ("Total Distributions", _fmt_money(s["total_distributions"])),
-        ("Total Exit Proceeds", _fmt_money(s["total_exit_proceeds"])),
+        ("Additional exit cash (not in distributions)", _fmt_money(s["total_exit_proceeds"])),
         ("Total Returned", _fmt_money(s["total_returned"])),
         ("Cash returned less invested", _fmt_money(s["net_profit"])),
         ("Cash returned multiple / DPI", f"{s['overall_multiple']}x"),
@@ -451,7 +451,7 @@ async def portfolio_quarterly_pdf(db: AsyncSession = Depends(get_db)):
 
     story.append(Paragraph("Quarterly Cash Flows", styles["SectionHeading"]))
     if sorted_quarters:
-        table_data = [["Quarter", "New Invested", "Distributions", "Exit Proceeds", "Net Flow"]]
+        table_data = [["Quarter", "New Invested", "Distributions", "Additional exit cash", "Net Flow"]]
         for q, b in sorted_quarters:
             net = b["distributions"] + b["exit"] - b["new_invested"]
             table_data.append([
