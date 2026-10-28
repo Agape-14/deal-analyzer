@@ -1,4 +1,3 @@
-from app.services.portfolio_analytics import additional_exit_proceeds
 """Reports router.
 
 Exposes per-deal and portfolio-level report exports:
@@ -13,6 +12,7 @@ PDF generation uses reportlab, Excel uses openpyxl, JSON/CSV use stdlib.
 """
 
 from __future__ import annotations
+from app.services.portfolio_analytics import additional_exit_proceeds
 
 import csv
 import io

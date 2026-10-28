@@ -450,6 +450,51 @@ test('sign-out and an expired session return to sign-in', async ({ browser }) =>
   await context.close();
 });
 
+test('source search opens the current excerpt without leaving the deal', async ({ page }) => {
+  await dealPage(page);
+  await page.keyboard.press('Control+k');
+  await page.getByPlaceholder('Search deals, sponsors or source evidence…').fill('hold cash');
+  await page.getByRole('option', { name: /Sample Hold · sample-hold.pdf p1/ }).first().click();
+  const viewer = page.getByRole('dialog');
+  await expect(viewer.getByRole('heading', { name: 'sample-hold.pdf · page 1' })).toBeVisible();
+  await expect(viewer.getByText(/Current active source/)).toBeVisible();
+  await expect(viewer.locator('mark')).toContainText('Hold cash-on-cash return: 8.5%');
+  await expect(viewer.getByRole('link', { name: 'Open / download original' })).toBeVisible();
+});
+
+test('linked investment previews the accepted revision and records a dated valuation', async ({ page }) => {
+  await page.goto('/portfolio');
+  await page.getByRole('button', { name: 'Add investment', exact: true }).first().click();
+  const drawer = page.getByRole('dialog');
+  await drawer.getByLabel('Deal', { exact: true }).selectOption('1');
+  await expect(drawer.getByText(/Analysis revision/)).toBeVisible();
+  await drawer.getByLabel('Amount invested', { exact: true }).fill('4321');
+  await drawer.getByLabel('Investment date', { exact: true }).fill('2024-01-01');
+  await drawer.getByText('Optional current valuation', { exact: true }).click();
+  await drawer.getByLabel('Residual value', { exact: true }).fill('4500');
+  await drawer.getByLabel('Valuation date', { exact: true }).fill('2025-01-01');
+  await drawer.getByRole('button', { name: 'Add investment', exact: true }).click();
+  await expect(drawer).toBeHidden();
+  const rows = await (await page.request.get('/api/investments/')).json();
+  const row = rows.find(inv => inv.amount_invested === 4321);
+  expect(row.developer_id).toBe(1);
+  expect(row.source_analysis_version).toBeGreaterThan(0);
+  expect(row.residual_value).toBe(4500);
+  const performance = await (await page.request.get(`/api/investments/${row.id}/performance`)).json();
+  expect(performance.tvpi).toBeGreaterThan(1);
+  expect(performance.dpi).toBe(0);
+  await page.request.delete(`/api/investments/${row.id}`);
+});
+
+test('failed history is unavailable rather than an empty conversation and can retry', async ({ page }) => {
+  await page.route('**/api/chat/history/1', route => route.fulfill({ status: 503, contentType: 'application/json', body: JSON.stringify({ detail: 'Synthetic history outage' }) }), { times: 1 });
+  await dealPage(page, 1, 'chat');
+  await expect(page.getByText(/History is unavailable/)).toBeVisible();
+  await expect(page.getByText('Understand the reviewed deal', { exact: true })).toHaveCount(0);
+  await page.getByRole('button', { name: 'Retry history', exact: true }).click();
+  await expect(page.getByText(/History is unavailable/)).toHaveCount(0);
+});
+
 test('saved deal routes hydrate consistently after repeated reloads', async ({ page }) => {
   test.setTimeout(180000);
   const created = await page.request.post('/api/deals', { data: { project_name: 'Repeated route check' } });
