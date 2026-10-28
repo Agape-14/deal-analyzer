@@ -510,6 +510,7 @@ test('map rendering and sourced public statistics remain separate from rent judg
   await dealPage(page, 1, 'location');
   await expect(page.locator('.maplibregl-canvas')).toBeVisible();
   await expect(page.getByText('123,456', { exact: true })).toBeVisible();
+  await expect(page.getByText('$1,500', { exact: true })).toBeVisible();
   await page.getByText('Source, uncertainty and freshness', { exact: true }).click();
   await expect(page.getByText(/Margin of error: 300 at 90% confidence/)).toBeVisible();
   await expect(page.getByRole('link', { name: 'Census source query', exact: true })).toHaveAttribute('href', 'https://api.census.gov/data/2024/acs/acs5');

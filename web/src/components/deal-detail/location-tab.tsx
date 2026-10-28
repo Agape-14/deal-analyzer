@@ -161,6 +161,7 @@ export function LocationTab({
   const [bundle, setBundle] = React.useState<LocationBundle | null>(null);
   const [loading, setLoading] = React.useState(true);
   const [refreshing, setRefreshing] = React.useState(false);
+  const [mapError, setMapError] = React.useState(false);
   const [enabled, setEnabled] = React.useState<Set<PoiCategory>>(
     new Set(["apartments", "transit", "grocery"]),
   );
@@ -309,6 +310,7 @@ export function LocationTab({
               style={{ width: "100%", height: "100%" }}
               cursor={pinMode ? "crosshair" : undefined}
               onClick={pinMode ? handlePinDrop : undefined}
+              onError={() => setMapError(true)}
             >
               <NavigationControl position="top-right" showCompass={false} />
 
@@ -383,6 +385,7 @@ export function LocationTab({
                 </Popup>
               )}
             </Map>
+            {mapError && <div role="alert" className="absolute bottom-10 left-3 right-3 z-10 rounded-lg border bg-card/95 p-2 text-xs">Some map tiles could not load. Area statistics and saved coordinates remain available. <a className="underline" href={`https://www.openstreetmap.org/?mlat=${lat}&mlon=${lng}#map=14/${lat}/${lng}`} target="_blank" rel="noreferrer">Open this location on a map</a></div>}
 
             {/* Style switcher + radius control overlaid top-left */}
             <div className="absolute top-3 left-3 flex flex-col gap-2">
@@ -508,20 +511,21 @@ export function LocationTab({
           </div>
         </Card>
 
-        {/* Rent comparison */}
+        {/* Rent context */}
         <Card elevated className="p-4">
           <h3 className="text-sm font-semibold mb-2">Rent context</h3>
           {bundle?.fmr && Object.values(bundle.fmr.rents).some(value => typeof value === "number") ? (
             <>
               <div className="text-[11px] text-muted-foreground">
-                HUD Fair Market Rent · {bundle?.fmr?.metro ?? bundle?.fmr?.county ?? "zip " + bundle?.fmr?.zip}
+                HUD Fair Market Rent · monthly gross rent · {bundle?.fmr?.metro ?? bundle?.fmr?.county ?? "zip " + bundle?.fmr?.zip}
                 {bundle?.fmr?.year && <> · {bundle.fmr.year}</>}
               </div>
               <div className="mt-3 grid grid-cols-2 gap-2 text-xs tabular-nums">
                 <FmrRow label="Studio" value={bundle?.fmr?.rents?.studio} />
                 <FmrRow label="1 BR" value={bundle?.fmr?.rents?.br1} />
-                <FmrRow label="2 BR" value={bundle?.fmr?.rents?.br2} highlight />
+                <FmrRow label="2 BR" value={bundle?.fmr?.rents?.br2} />
                 <FmrRow label="3 BR" value={bundle?.fmr?.rents?.br3} />
+                <FmrRow label="4 BR" value={bundle?.fmr?.rents?.br4} />
               </div>
               <p className="mt-3 text-xs text-muted-foreground">HUD FMR is a 40th-percentile gross-rent benchmark, including most tenant-paid utilities. It is not a matched asking-rent comparable. Bedroom count, geography and fiscal year must match before using this context.</p>
               <a className="mt-2 block text-xs underline" href="https://www.huduser.gov/portal/datasets/fmr.html" target="_blank" rel="noreferrer">Source and methodology</a>
@@ -674,7 +678,7 @@ function FmrRow({ label, value, highlight }: { label: string; value?: number | n
       )}
     >
       <span className="text-muted-foreground">{label}</span>
-      <span className="font-semibold tabular-nums">{value ? fmtMoney(value) : "—"}</span>
+      <span className="font-semibold tabular-nums">{value != null ? fmtMoney(value, { compact: false }) : "—"}</span>
     </div>
   );
 }
