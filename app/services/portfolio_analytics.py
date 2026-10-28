@@ -126,7 +126,7 @@ def residual_valuation(inv):
 
 def cashflow_dates_complete(inv):
     return bool(inv.investment_date and all(d.date for d in (inv.distributions or []) if d.amount)
-                and (not inv.exit_amount or inv.exit_date))
+                and (not inv.exit_amount or inv.exit_date) and (inv.status != "exited" or inv.exit_date))
 
 
 def investment_cashflows(inv) -> list[tuple[date, float]]:
@@ -201,7 +201,7 @@ def investment_performance(inv) -> dict:
     actual_irr_pct = round(irr * 100, 2) if irr is not None else None
     irr_vs_projected = (
         round(actual_irr_pct - projected_irr, 2)
-        if actual_irr_pct is not None and projected_irr is not None
+        if inv.status == "exited" and actual_irr_pct is not None and projected_irr is not None
         else None
     )
 

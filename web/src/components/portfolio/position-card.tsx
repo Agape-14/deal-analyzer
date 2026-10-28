@@ -44,7 +44,7 @@ export function PositionCard({
 
   const mult = performance?.multiple ?? investment.actual_multiple ?? 0;
   const multColor =
-    mult >= 1.5
+    investment.status !== "exited" ? "text-foreground" : mult >= 1.5
       ? "text-success"
       : mult >= 1
         ? "text-primary"

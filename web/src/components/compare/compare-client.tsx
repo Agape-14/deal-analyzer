@@ -207,7 +207,7 @@ export function CompareClient({ deals }: { deals: DealSummary[] }) {
   return (
     <div>
       {/* Toolbar */}
-      <div className="mb-5">
+      <details className="mb-4 rounded-lg border p-3"><summary className="cursor-pointer text-sm font-medium">Comparison options · {preset} · {modeValid ? mode : "values"}</summary><div className="mt-3">
         <CompareToolbar
           preset={preset}
           onPreset={(k) => setParams({ preset: k === "exec" ? null : k })}
@@ -221,7 +221,7 @@ export function CompareClient({ deals }: { deals: DealSummary[] }) {
           hasCustom={customKeys.length > 0}
           onOpenCustom={() => setCustomOpen(true)}
         />
-      </div>
+      </div></details>
 
       {/* Actions bar — add deal + export */}
       <div className="flex items-center justify-between mb-5">
@@ -261,6 +261,8 @@ export function CompareClient({ deals }: { deals: DealSummary[] }) {
 
       {details && !loading && !error && (
         <>
+          <p className="mb-3 text-xs text-muted-foreground">Read supported values side by side. On small screens, compare two deals and swipe each row horizontally. Baseline: {details.find(d => d.id === (baselineId ?? selectedIds[0]))?.project_name ?? "first deal"}.</p>
+          {selectedIds.length > 2 && <Button className="mb-3 sm:hidden" size="sm" variant="outline" onClick={() => setParams({ ids: selectedIds.slice(0, 2).join(","), baseline: String(baselineId && selectedIds.slice(0, 2).includes(baselineId) ? baselineId : selectedIds[0]) })}>Focus on first two deals</Button>}
           <DealHeaderRow deals={details} onRemove={removeDeal} cols={cols} />
           {rows.length === 0 ? (
             <Card elevated className="p-10 text-center text-sm text-muted-foreground">

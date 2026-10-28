@@ -10,7 +10,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
 import { api } from "@/lib/api";
-import type { DealSummary, DealDetail, Investment } from "@/lib/types";
+import type { DealSummary, DealDetail, Developer, Investment } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
 /**
@@ -25,6 +25,8 @@ export function NewInvestmentDrawer() {
   const [open, setOpen] = React.useState(false);
   const [submitting, setSubmitting] = React.useState(false);
   const [deals, setDeals] = React.useState<DealSummary[] | null>(null);
+  const [sponsors, setSponsors] = React.useState<Developer[]>([]);
+  const [sponsorsError, setSponsorsError] = React.useState(false);
   const [dealsError, setDealsError] = React.useState(false);
   const [retry, reloadDeals] = React.useReducer(n => n + 1, 0);
   const [preview, setPreview] = React.useState<DealDetail | null>(null);
@@ -33,6 +35,7 @@ export function NewInvestmentDrawer() {
   const [editing, setEditing] = React.useState<Investment | null>(null);
   const [form, setForm] = React.useState({
     deal_id: "",
+    developer_id: "",
     project_name: "",
     sponsor_name: "",
     investment_date: "",
@@ -55,7 +58,7 @@ export function NewInvestmentDrawer() {
       const investment = (event as CustomEvent<Investment>).detail;
       setEditing(investment);
       setMode("manual");
-      setForm({ deal_id: investment.deal_id?.toString() ?? "", project_name: investment.project_name, sponsor_name: investment.sponsor_name,
+      setForm({ deal_id: investment.deal_id?.toString() ?? "", developer_id: investment.developer_id?.toString() ?? "", project_name: investment.project_name, sponsor_name: investment.sponsor_name,
         investment_date: investment.investment_date ?? "", amount_invested: String(investment.amount_invested), investment_class: investment.investment_class ?? "",
         projected_irr: investment.projected_irr?.toString() ?? "", projected_equity_multiple: investment.projected_equity_multiple?.toString() ?? "", hold_period_years: investment.hold_period_years?.toString() ?? "", residual_value: investment.residual_value?.toString() ?? "", valuation_date: investment.valuation_date ?? "" });
       setOpen(true);
@@ -69,6 +72,8 @@ export function NewInvestmentDrawer() {
     if (!open) return;
     let active = true;
     setDealsError(false);
+    setSponsorsError(false);
+    api.get<Developer[]>("/api/developers").then(data => { if (active) setSponsors(data); }).catch(() => { if (active) setSponsorsError(true); });
     api
       .get<DealSummary[]>("/api/deals")
       .then(data => { if (active) { setDeals(data); if (!data.length) setMode("manual"); } })
@@ -90,6 +95,7 @@ export function NewInvestmentDrawer() {
       setMode("manual");
       setForm({
         deal_id: "",
+        developer_id: "",
         project_name: "",
         sponsor_name: "",
         investment_date: "",
@@ -134,6 +140,7 @@ export function NewInvestmentDrawer() {
       } else {
         body.project_name = form.project_name.trim();
         body.sponsor_name = form.sponsor_name.trim();
+        if (!editing?.deal_id) body.developer_id = form.developer_id ? Number(form.developer_id) : null;
       }
       if (form.investment_date) body.investment_date = form.investment_date;
       if (form.investment_class) body.investment_class = form.investment_class;
@@ -208,11 +215,15 @@ export function NewInvestmentDrawer() {
                 />
               </Field>
               <Field label="Sponsor">
-                <Input
+                {editing?.deal_id ? <p className="text-sm">{editing.sponsor_name} · linked through the deal</p> : <select className="w-full h-9 rounded-md border bg-background px-3 text-sm" value={form.developer_id} onChange={e => setForm(f => ({ ...f, developer_id: e.target.value, sponsor_name: sponsors.find(s => String(s.id) === e.target.value)?.name ?? "" }))}><option value="">Custom / unmapped sponsor</option>{sponsors.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}</select>}
+                {!editing?.deal_id && !form.developer_id && <Input
+                  aria-label="Custom sponsor name"
                   value={form.sponsor_name}
                   onChange={(e) => setForm((f) => ({ ...f, sponsor_name: e.target.value }))}
                   placeholder="GP / sponsor"
-                />
+                />}
+                {sponsorsError && <p role="alert" className="text-xs text-warning">Sponsor directory could not load. Reopen to retry; custom names remain unmapped unless uniquely matched.</p>}
+                <p className="text-xs text-muted-foreground">Choose a saved sponsor to retain this relationship after a rename.</p>
               </Field>
             </>
           ) : (

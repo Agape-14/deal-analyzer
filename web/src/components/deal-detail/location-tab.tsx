@@ -511,7 +511,7 @@ export function LocationTab({
         {/* Rent comparison */}
         <Card elevated className="p-4">
           <h3 className="text-sm font-semibold mb-2">Rent context</h3>
-          {fmr2br ? (
+          {bundle?.fmr && Object.values(bundle.fmr.rents).some(value => typeof value === "number") ? (
             <>
               <div className="text-[11px] text-muted-foreground">
                 HUD Fair Market Rent · {bundle?.fmr?.metro ?? bundle?.fmr?.county ?? "zip " + bundle?.fmr?.zip}

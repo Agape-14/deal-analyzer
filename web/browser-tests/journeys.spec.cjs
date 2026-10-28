@@ -196,6 +196,7 @@ test('all three deals compare with matching accepted returns and export', async 
   await expect(page.getByRole('main').getByText('27.5%', { exact: true })).toHaveCount(0);
   await expect(page.getByText(/Best overall/)).toHaveCount(0);
   await expect(page.getByLabel('Leading value for this metric')).toHaveCount(0);
+  await page.getByText(/Comparison options ·/).click();
   await page.getByRole('button', { name: 'Winners', exact: true }).click();
   await expect(page).toHaveURL(/mode=winners/);
   await expect(page.getByText(/Best overall/)).toHaveCount(0);
@@ -409,6 +410,7 @@ test('portfolio creation, editing, distribution, exit and undo work together', a
 
 test('comparison presets, custom rows and incompatible modes remain usable', async ({ page }) => {
   await page.goto('/compare?ids=1,2,3');
+  await page.getByText(/Comparison options ·/).click();
   await expect(page.getByText(/3 deals ·/)).toBeVisible();
   for (const [label, preset] of [['Returns', 'returns'], ['Leverage & structure', 'structure'], ['Risk profile', 'risk'], ['Market & location', 'market'], ['Sponsor quality', 'sponsor'], ['Underwriting conservatism', 'underwriting'], ['All', 'all']]) {
     await page.getByRole('button', { name: label, exact: true }).click();

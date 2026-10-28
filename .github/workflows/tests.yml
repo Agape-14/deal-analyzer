@@ -44,6 +44,19 @@ jobs:
           node-version: "22"
           cache: npm
           cache-dependency-path: web/package-lock.json
+      # Temporary candidate generation; remove after committing the reviewed lock.
+      - name: Resolve maintained frontend dependencies
+        run: npm update --package-lock-only --ignore-scripts
+      - name: Record dependency audit
+        run: npm audit --json > dependency-audit.json
+        continue-on-error: true
+      - uses: actions/upload-artifact@v4
+        with:
+          name: frontend-dependency-candidate
+          path: |
+            web/package.json
+            web/package-lock.json
+            web/dependency-audit.json
       - run: npm ci
       - run: npm run test --if-present
       - run: npm run build
