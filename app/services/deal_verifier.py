@@ -21,7 +21,7 @@ from typing import Any
 import anthropic
 import fitz  # PyMuPDF
 
-from app.config import MODEL_VERIFY
+from app.config import MODEL_VERIFY, require_paid_review_enabled
 from app.services.document_context import (
     documents_fingerprint,
     metrics_sections_fingerprint,
@@ -392,6 +392,7 @@ async def _verify_sections(
 
 async def verify_deal_metrics(deal, db, *, sections: set[str] | None = None) -> dict:
     """Run second-pass verification on extracted metrics."""
+    require_paid_review_enabled()
     from app.services.document_versions import review_documents
     active_docs = review_documents(deal.documents)
     if not active_docs:

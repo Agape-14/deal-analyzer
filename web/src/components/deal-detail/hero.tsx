@@ -44,7 +44,7 @@ type QualityResponse = { summary?: DealQualitySummary; stale_flags?: unknown[]; 
 export function DealHero({ deal }: { deal: DealDetail }) {
   const router = useRouter();
   const { isAnalyst, loading } = useCurrentUser();
-  const { review } = useCapabilities();
+  const { review, reviewMessage } = useCapabilities();
   const metrics = deal.metrics ?? {};
   const [scoring, setScoring] = React.useState(false);
   const [pipelineRunning, setPipelineRunning] = React.useState(false);
@@ -256,7 +256,7 @@ export function DealHero({ deal }: { deal: DealDetail }) {
                     </div>
                     <PipelineNotice status={pipelineStatus} running={pipelineRunning} />
                     <p className="text-[11px] leading-relaxed text-muted-foreground">
-                      {review === "unavailable" ? "Automatic financial review is unavailable. Saved facts, source lookup and manual resolutions still work." : "Review checks current active sources. Configured service credentials do not confirm provider credits. Recalculate score uses saved accepted facts."}
+                      {review === "unavailable" ? reviewMessage || "Automatic financial review is unavailable. Saved facts, source lookup and manual resolutions still work." : "Review checks current active sources. Configured service credentials do not confirm provider credits. Recalculate score uses saved accepted facts."}
                     </p>
                   </div>
                 </details>

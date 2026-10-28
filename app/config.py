@@ -34,6 +34,20 @@ OPUS_48 = "claude-opus-4-8"
 SONNET_46 = "claude-sonnet-4-6"
 HAIKU_45 = "claude-haiku-4-5-20251001"
 
+PAID_REVIEW_PAUSED_MESSAGE = (
+    "Paid AI review is paused until extraction validation is complete. "
+    "Document reading, saved analyses, calculations, exports and source lookup remain available."
+)
+
+
+def paid_review_enabled() -> bool:
+    return os.getenv("PAID_REVIEW_ENABLED", "1").strip().lower() not in {"0", "false", "no"}
+
+
+def require_paid_review_enabled() -> None:
+    if not paid_review_enabled():
+        raise ValueError(PAID_REVIEW_PAUSED_MESSAGE)
+
 # Defaults - highest-accuracy where data correctness matters most.
 MODEL_EXTRACT: str = os.getenv("MODEL_EXTRACT", OPUS_48)
 MODEL_VERIFY: str = os.getenv("MODEL_VERIFY", OPUS_48)
@@ -62,7 +76,8 @@ def environment_status() -> dict[str, dict]:
     itself) can warn that AI-gated features will 503 before the user
     ever clicks the button.
     """
-    anthropic_ok = bool(os.environ.get("ANTHROPIC_API_KEY"))
+    review_enabled = paid_review_enabled()
+    anthropic_ok = bool(os.environ.get("ANTHROPIC_API_KEY")) and review_enabled
     brave_ok = bool(os.environ.get("BRAVE_API_KEY"))
     db_url = os.environ.get("DATABASE_URL") or ""
     is_sqlite = (not db_url) or db_url.startswith("sqlite")
@@ -70,9 +85,10 @@ def environment_status() -> dict[str, dict]:
     return {
         "anthropic": {
             "configured": anthropic_ok,
+            "paused": not review_enabled,
             "affects": ["extract", "verify"],
             "message": (
-                None
+                PAID_REVIEW_PAUSED_MESSAGE if not review_enabled else None
                 if anthropic_ok
                 else "ANTHROPIC_API_KEY is not set - automatic financial extraction and verification are unavailable. Document reading, public context and evidence lookup remain available."
             ),

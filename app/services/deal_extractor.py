@@ -311,6 +311,8 @@ async def extract_metrics_from_docs(doc_texts: list[dict], doc_paths: list[str] 
     Returns:
         Extracted metrics as a dict matching the schema above
     """
+    from app.config import require_paid_review_enabled
+    require_paid_review_enabled()
     api_key = os.environ.get("ANTHROPIC_API_KEY")
     if not api_key:
         raise ValueError("ANTHROPIC_API_KEY not set")

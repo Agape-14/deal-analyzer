@@ -79,7 +79,7 @@ export function DocumentsPanel({
   revision?: number;
 }) {
   const router = useRouter();
-  const { review } = useCapabilities();
+  const { review, reviewMessage } = useCapabilities();
   const [dragActive, setDragActive] = React.useState(false);
   const [docType, setDocType] = React.useState<string>("offering_memo");
   const [uploads, setUploads] = React.useState<UploadState[]>([]);
@@ -323,7 +323,7 @@ export function DocumentsPanel({
             {reviewPending ? "Queuing…" : "Review documents"}
           </Button>
         </div>
-        <p className="mb-4 text-xs text-muted-foreground">{review === "unavailable" ? "Automatic financial review is unavailable. Files can still be saved and read; existing reviewed facts and source lookup remain available." : "Saving and reading a document does not accept its financial claims. Review status and material questions determine what can be used. Queued jobs continue after this page closes."}</p>
+        <p className="mb-4 text-xs text-muted-foreground">{review === "unavailable" ? reviewMessage || "Automatic financial review is unavailable. Files can still be saved and read; existing reviewed facts and source lookup remain available." : "Saving and reading a document does not accept its financial claims. Review status and material questions determine what can be used. Queued jobs continue after this page closes."}</p>
 
         {documents.length === 0 ? (
           <div className="py-10 text-center text-sm text-muted-foreground">

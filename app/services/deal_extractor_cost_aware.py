@@ -13,7 +13,7 @@ import os
 
 import anthropic
 
-from app.config import MODEL_EXTRACT
+from app.config import MODEL_EXTRACT, require_paid_review_enabled
 from app.services.deal_extractor import EXTRACTION_PROMPT, _post_process_metrics
 from app.services.document_context import select_pdf_pages_for_extraction
 from app.services.operation_log import record
@@ -24,6 +24,7 @@ EXTRACT_IMAGE_DPI = int(os.getenv("EXTRACT_IMAGE_DPI", "150"))
 
 async def extract_metrics_from_docs(doc_texts: list[dict], doc_paths: list[str] | None = None) -> dict:
     """Extract metrics using full text plus selected PDF page images."""
+    require_paid_review_enabled()
     api_key = os.environ.get("ANTHROPIC_API_KEY")
     if not api_key:
         raise ValueError("ANTHROPIC_API_KEY not set")

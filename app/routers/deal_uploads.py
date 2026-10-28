@@ -12,6 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.database import async_session, get_db
+from app.config import paid_review_enabled
 from app.models import Deal, DealDocument
 from app.rate_limit import limit
 from app.services.pdf_extractor import extract_pdf
@@ -36,7 +37,7 @@ os.makedirs(UPLOAD_DIR, exist_ok=True)
 MAX_UPLOAD_BYTES = 50 * 1024 * 1024
 ALLOWED_EXTS = {".pdf", ".xlsx", ".xlsm", ".xls", ".csv"}
 SPREADSHEET_EXTS = {".xlsx", ".xlsm", ".xls", ".csv"}
-AUTO_REVIEW_AFTER_UPLOAD = os.getenv("DEAL_REVIEW_AUTO_AFTER_UPLOAD", "1").strip().lower() not in {"0", "false", "no"}
+AUTO_REVIEW_AFTER_UPLOAD = paid_review_enabled() and os.getenv("DEAL_REVIEW_AUTO_AFTER_UPLOAD", "1").strip().lower() not in {"0", "false", "no"}
 
 
 def _env_int(name: str, default: int) -> int:

@@ -7,6 +7,14 @@ running frontend and backend commits so a stale service can be identified.
 
 ## Release gates
 
+A guarded release may ship the UI, deterministic calculations and saved-source
+workflows with the owner's explicit authorization and `PAID_REVIEW_ENABLED=0`.
+This flag blocks paid review routes and provider entry points, pauses queued paid
+work without retry loops, and leaves free document reading and evidence lookup
+available. Keep automatic paid upload review off. The two provider retests and
+independently reviewed real-source accuracy labels below remain required before
+enabling paid AI review. A guarded release does not certify extraction accuracy.
+
 1. Full backend tests, frontend unit tests, production build, production and
    development browser journeys, including repeated saved-deal reloads.
 2. Reviewed dependency locks. Python targets Linux/Python 3.12. The Dependency

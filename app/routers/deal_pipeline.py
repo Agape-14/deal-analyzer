@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.database import async_session, get_db
+from app.config import paid_review_enabled, PAID_REVIEW_PAUSED_MESSAGE
 from app.models import Deal
 from app.rate_limit import limit
 from app.services.canonical_metrics import annotate_canonical_metrics
@@ -278,6 +279,8 @@ async def deal_quality(deal_id: int, db: AsyncSession = Depends(get_db)):
 
 @router.post("/{deal_id}/extract", dependencies=[Depends(limit("ai"))])
 async def extract_deal_metrics(deal_id: int, db: AsyncSession = Depends(get_db)):
+    if not paid_review_enabled():
+        raise HTTPException(503, PAID_REVIEW_PAUSED_MESSAGE)
     result = await db.execute(
         select(Deal).options(selectinload(Deal.documents)).where(Deal.id == deal_id)
     )
@@ -313,6 +316,8 @@ async def extract_deal_metrics(deal_id: int, db: AsyncSession = Depends(get_db))
 
 @router.post("/{deal_id}/review", dependencies=[Depends(limit("ai"))])
 async def review_deal_documents(deal_id: int, db: AsyncSession = Depends(get_db)):
+    if not paid_review_enabled():
+        raise HTTPException(503, PAID_REVIEW_PAUSED_MESSAGE)
     result = await db.execute(
         select(Deal).options(selectinload(Deal.documents)).where(Deal.id == deal_id)
     )
@@ -556,6 +561,8 @@ async def _run_extract_background(deal_id: int):
 
 @router.post("/{deal_id}/verify", dependencies=[Depends(limit("ai"))])
 async def verify_deal_endpoint(deal_id: int, auto_correct: bool = True, db: AsyncSession = Depends(get_db)):
+    if not paid_review_enabled():
+        raise HTTPException(503, PAID_REVIEW_PAUSED_MESSAGE)
     result = await db.execute(
         select(Deal).options(selectinload(Deal.documents)).where(Deal.id == deal_id)
     )

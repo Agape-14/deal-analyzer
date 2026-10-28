@@ -16,6 +16,7 @@ from sqlalchemy import and_, case, or_, select, update
 from sqlalchemy.orm.exc import StaleDataError
 
 from app.database import async_session
+from app.config import paid_review_enabled, require_paid_review_enabled, PAID_REVIEW_PAUSED_MESSAGE
 from app.models import Deal, DealDocument, ReviewJob
 
 log = logging.getLogger("kenyon.review_jobs")
@@ -33,6 +34,10 @@ def public_pipeline(deal):
     job = deal.__dict__.get("review_job")
     if not job:
         return pipeline
+    if job.mode != "read" and not paid_review_enabled() and job.status in {"queued", "running", "paused"}:
+        pipeline.update(status="failed", job_status="paused", error=PAID_REVIEW_PAUSED_MESSAGE,
+            message=PAID_REVIEW_PAUSED_MESSAGE, updated_at=job.updated_at.isoformat())
+        return pipeline
     if job.status in {"queued", "running"}:
         pipeline.update(status="running", step=pipeline.get("step") or "extract", progress_pct=5 if job.status == "queued" else pipeline.get("progress_pct", 10),
             message="Review queued; it will resume automatically." if job.status == "queued" else pipeline.get("message") or "Reading and checking documents.",
@@ -45,6 +50,8 @@ def public_pipeline(deal):
 async def enqueue_review(db, deal_id, *, mode="review", auto_correct=True):
     if mode not in {"review", "extract", "verify", "read"}:
         raise ValueError("Unknown review mode")
+    if mode != "read":
+        require_paid_review_enabled()
     now = utcnow()
     dialect = db.get_bind().dialect.name
     if dialect == "postgresql":
@@ -114,6 +121,7 @@ async def execute_job(job):
         await deal_uploads._extract_document_background(doc_id, path, ext, handoff=False)
     if job["mode"] == "read":
         return "complete"
+    require_paid_review_enabled()
     if job["mode"] == "review":
         await deal_pipeline._run_document_review_background(deal_id)
     elif job["mode"] == "extract":
@@ -133,6 +141,8 @@ async def execute_job(job):
 
 def nonretryable_reason(error):
     message = str(error).lower()
+    if "paid ai review is paused" in message:
+        return PAID_REVIEW_PAUSED_MESSAGE
     if any(term in message for term in ("credit balance", "insufficient credit", "billing", "payment required")):
         return "Provider credits are unavailable. Add credits, then retry from Documents."
     if getattr(error, "status_code", None) in {401, 403} or any(term in message for term in ("invalid api key", "authentication_error", "api_key environment variable is not set", "api key is required")):

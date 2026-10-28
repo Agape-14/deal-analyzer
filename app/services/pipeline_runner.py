@@ -22,6 +22,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 
 from app.database import async_session
+from app.config import paid_review_enabled
 from app.models import Deal
 from app.services.confidence import assess_data_quality, summarize_math_checks
 from app.services.data_integrity import now_iso, staleness_flags, stamp_verification
@@ -79,6 +80,8 @@ async def _run_loop() -> None:
 
 async def process_pending_deals() -> int:
     """Verify and score a small batch of deals that need backend follow-through."""
+    if not paid_review_enabled():
+        return 0
     batch_size = _env_int("DEAL_PIPELINE_BATCH_SIZE", DEFAULT_BATCH_SIZE)
     processed = 0
 

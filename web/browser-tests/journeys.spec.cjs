@@ -310,6 +310,17 @@ test('failed assistant request retains question and can be retried', async ({ pa
   await expect(page.getByText(/Minimum investment: unspecified 25,000/).last()).toBeVisible();
 });
 
+test('paid review pause is visible while saved documents and free source lookup work', async ({ page }) => {
+  const message = 'Paid AI review is paused until extraction validation is complete. Document reading, saved analyses, calculations, exports and source lookup remain available.';
+  await page.route('**/api/healthz', route => route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ status: 'degraded', environment: { anthropic: { configured: false, paused: true, message } } }) }));
+  await dealPage(page, 1, 'documents');
+  await expect(page.getByRole('button', { name: 'Review documents', exact: true })).toBeDisabled();
+  await expect(page.getByText(message, { exact: true }).last()).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Choose files', exact: true })).toBeEnabled();
+  await page.getByRole('tab', { name: /Assistant/ }).click();
+  await expect(page.getByPlaceholder('Ask about accepted returns, terms or missing evidence…')).toBeVisible();
+});
+
 test('completed document review restores controls after Strict Mode setup', async ({ page }) => {
   await page.route('**/api/healthz', route => route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ status: 'ok', environment: { anthropic: { configured: true } } }) }));
   // Test the browser lifecycle only. The provider/review worker is disabled
