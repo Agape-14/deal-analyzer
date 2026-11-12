@@ -12,7 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.database import async_session, get_db
-from app.config import paid_review_enabled
+from app.config import openai_review_configured, paid_review_enabled
 from app.models import Deal, DealDocument
 from app.rate_limit import limit
 from app.services.pdf_extractor import extract_pdf
@@ -37,7 +37,7 @@ os.makedirs(UPLOAD_DIR, exist_ok=True)
 MAX_UPLOAD_BYTES = 50 * 1024 * 1024
 ALLOWED_EXTS = {".pdf", ".xlsx", ".xlsm", ".xls", ".csv"}
 SPREADSHEET_EXTS = {".xlsx", ".xlsm", ".xls", ".csv"}
-AUTO_REVIEW_AFTER_UPLOAD = paid_review_enabled() and os.getenv("DEAL_REVIEW_AUTO_AFTER_UPLOAD", "1").strip().lower() not in {"0", "false", "no"}
+AUTO_REVIEW_AFTER_UPLOAD = (paid_review_enabled() or openai_review_configured()) and os.getenv("DEAL_REVIEW_AUTO_AFTER_UPLOAD", "1").strip().lower() not in {"0", "false", "no"}
 
 
 def _env_int(name: str, default: int) -> int:
@@ -520,7 +520,10 @@ async def _create_document_record_with_retry(
             db.add(doc)
             if AUTO_REVIEW_AFTER_UPLOAD:
                 from app.services.review_jobs import enqueue_review
-                await enqueue_review(db, doc.deal_id)
+                if openai_review_configured():
+                    await enqueue_review(db, doc.deal_id, mode="openai", auto_correct=False)
+                else:
+                    await enqueue_review(db, doc.deal_id)
             await db.commit()
             await db.refresh(doc)
             return doc, False
@@ -664,5 +667,8 @@ async def _auto_review_after_upload(deal_id: int, source_doc_id: int) -> None:
     """Persist the handoff; queue coalescing replaces an in-memory debounce."""
     from app.services.review_jobs import enqueue_review
     async with async_session() as db:
-        await enqueue_review(db, deal_id)
+        if openai_review_configured():
+            await enqueue_review(db, deal_id, mode="openai", auto_correct=False)
+        else:
+            await enqueue_review(db, deal_id)
         await db.commit()

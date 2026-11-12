@@ -16,7 +16,7 @@ def normalized_text(value):
     return re.sub(r"\s+", " ", unicodedata.normalize("NFKC", str(value or ""))).strip().casefold()
 
 
-def numeric_quote_error(value, citation):
+def numeric_quote_error(value, citation, *, allow_workbook_ratio=True):
     """A source quote must at least contain the audited number, with rounding.
 
     This necessary check does not establish its investor class or meaning.
@@ -27,7 +27,7 @@ def numeric_quote_error(value, citation):
     quote = str(citation.get("source_excerpt") or "")
     # Exclude cell addresses so e.g. row 13 cannot substantiate a 13% return.
     quote = re.sub(r"\b[A-Z]{1,3}\$?\d+\s*=", "=", quote, flags=re.I)
-    workbook = bool(citation.get("source_sheet"))
+    workbook = allow_workbook_ratio and bool(citation.get("source_sheet"))
     for match in re.finditer(r"(?<![\w.])(-?\d[\d,]*(?:\.\d+)?)\s*(%|million|billion|mm|[mk])?(?![a-z])", quote, re.I):
         raw, suffix = match.groups()
         raw = raw.replace(",", "")

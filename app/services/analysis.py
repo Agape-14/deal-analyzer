@@ -241,6 +241,7 @@ def build_analysis(metrics, documents=None, property_type="multifamily"):
     contexts = metrics.get("_fact_context") or {}
     facts = {}
     reconciliation = []
+    current_document_set = digest(documents)
     for path, values in flat.items():
         spec = REGISTRY.get(path)
         if not spec:
@@ -265,7 +266,7 @@ def build_analysis(metrics, documents=None, property_type="multifamily"):
             fact.state, fact.reason = "disputed", str(prov.get("verification_note") or "The source check remains unresolved.")
         elif status == "manual":
             fact.state, fact.reason = "manual", "Analyst decision: " + str(prov.get("verification_note") or "Manually resolved; not an independent source check.")
-        elif metrics.get("_verified_document_set") and metrics["_verified_document_set"] != digest(documents):
+        elif (source_set := prov.get("review_document_set") or metrics.get("_verified_document_set")) and source_set != current_document_set:
             fact.state, fact.reason = "reported", "The document package changed and is awaiting another source check."
         elif status == "confirmed" and prov.get("source_check_version") != 1:
             fact.reason = "This older confirmation needs a fresh check of the quoted source text."

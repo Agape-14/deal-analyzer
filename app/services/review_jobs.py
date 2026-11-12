@@ -16,7 +16,7 @@ from sqlalchemy import and_, case, or_, select, update
 from sqlalchemy.orm.exc import StaleDataError
 
 from app.database import async_session
-from app.config import paid_review_enabled, require_paid_review_enabled, PAID_REVIEW_PAUSED_MESSAGE
+from app.config import openai_review_configured, paid_review_enabled, require_paid_review_enabled, PAID_REVIEW_PAUSED_MESSAGE
 from app.models import Deal, DealDocument, ReviewJob
 
 log = logging.getLogger("kenyon.review_jobs")
@@ -34,6 +34,18 @@ def public_pipeline(deal):
     job = deal.__dict__.get("review_job")
     if not job:
         return pipeline
+    if job.mode == "openai":
+        messages = {
+            "queued": "API credit review is queued.",
+            "running": "Reading sources and preparing a review draft.",
+            "complete": "API credit review finished. Open Documents to see the results.",
+            "failed": job.error or "API credit review stopped. Check Documents for details.",
+            "paused": job.error or "API credit review is paused.",
+        }
+        state = "running" if job.status in {"queued", "running"} else "failed" if job.status == "paused" else job.status
+        return {"status": state, "step": "extract", "job_status": job.status, "message": messages.get(job.status, ""),
+                "updated_at": job.updated_at.isoformat(), "error": job.error,
+                "progress_pct": 100 if job.status == "complete" else 10}
     if job.mode != "read" and not paid_review_enabled() and job.status in {"queued", "running", "paused"}:
         pipeline.update(status="failed", job_status="paused", error=PAID_REVIEW_PAUSED_MESSAGE,
             message=PAID_REVIEW_PAUSED_MESSAGE, updated_at=job.updated_at.isoformat())
@@ -48,22 +60,26 @@ def public_pipeline(deal):
 
 
 async def enqueue_review(db, deal_id, *, mode="review", auto_correct=True):
-    if mode not in {"review", "extract", "verify", "read"}:
+    if mode not in {"review", "extract", "verify", "read", "openai"}:
         raise ValueError("Unknown review mode")
-    if mode != "read":
+    if mode == "openai":
+        if not openai_review_configured():
+            raise ValueError("OpenAI document review is not configured.")
+    elif mode != "read":
         require_paid_review_enabled()
     now = utcnow()
+    ready_at = now + timedelta(seconds=20 if mode == "openai" and not auto_correct else 2)
     dialect = db.get_bind().dialect.name
     if dialect == "postgresql":
         from sqlalchemy.dialects.postgresql import insert
     else:
         from sqlalchemy.dialects.sqlite import insert
     stmt = insert(ReviewJob).values(deal_id=deal_id, request_seq=1, mode=mode, status="queued", attempts=0,
-        auto_correct=int(auto_correct), next_attempt_at=now + timedelta(seconds=2), updated_at=now)
+        auto_correct=int(auto_correct), next_attempt_at=ready_at, updated_at=now)
     stmt = stmt.on_conflict_do_update(index_elements=[ReviewJob.deal_id], set_={
         "request_seq": ReviewJob.request_seq + 1, "mode": mode,
         "status": case((ReviewJob.status == "running", "running"), else_="queued"),
-        "attempts": 0, "auto_correct": int(auto_correct), "next_attempt_at": now + timedelta(seconds=2), "updated_at": now, "error": None,
+        "attempts": 0, "auto_correct": int(auto_correct), "next_attempt_at": ready_at, "updated_at": now, "error": None,
     })
     await db.execute(stmt)
 
@@ -121,6 +137,9 @@ async def execute_job(job):
         await deal_uploads._extract_document_background(doc_id, path, ext, handoff=False)
     if job["mode"] == "read":
         return "complete"
+    if job["mode"] == "openai":
+        from app.services.credit_review_job import run_credit_review
+        return await run_credit_review(job)
     require_paid_review_enabled()
     if job["mode"] == "review":
         await deal_pipeline._run_document_review_background(deal_id)
@@ -158,13 +177,13 @@ async def finish_job(job, outcome, error=None):
         row = await db.get(ReviewJob, job["deal_id"])
         if not row or row.lease_token != job["token"]:
             return
-        rerun = row.request_seq != job["seq"]
         blocked = nonretryable_reason(error) if error else None
-        retry = error is not None and not blocked and job["attempt"] < 3
-        state = "queued" if rerun or retry else "paused" if blocked else "failed" if error else outcome
+        retry = job["mode"] != "openai" and error is not None and not blocked and job["attempt"] < 3
+        state = "queued" if retry else "paused" if blocked else "failed" if error else outcome
         result = await db.execute(update(ReviewJob).where(ReviewJob.deal_id == row.deal_id, ReviewJob.lease_token == job["token"])
             .values(status=case((ReviewJob.request_seq != job["seq"], "queued"), else_=state), lease_token=None, lease_until=None, error=blocked or (str(error)[:1500] if error else None),
-                    next_attempt_at=utcnow() + timedelta(seconds=2 if rerun else 30 * job["attempt"] if retry else 0), updated_at=utcnow()))
+                    next_attempt_at=case((ReviewJob.request_seq != job["seq"], ReviewJob.next_attempt_at),
+                        else_=utcnow() + timedelta(seconds=30 * job["attempt"] if retry else 0)), updated_at=utcnow()))
         if result.rowcount != 1:
             return
         await db.refresh(row)
@@ -172,6 +191,13 @@ async def finish_job(job, outcome, error=None):
         if state not in {"queued", "cancelled"}:
             deal = await db.get(Deal, row.deal_id)
             if deal and deal.deleted_at is None:
+                if job["mode"] == "openai":
+                    await emit(db, "error" if error else "success",
+                               f"API credit review {'stopped' if error else 'finished'} - {deal.project_name}",
+                               body=row.error if error else "Open Documents to see the proposed values and source checks.",
+                               href=f"/deals/{deal.id}?tab=documents", payload={"deal_id": deal.id, "job_status": state})
+                    await db.commit()
+                    return
                 count = len((deal.analysis_snapshot or {}).get("questions") or [])
                 label = {"read": "Document reading", "extract": "Metric extraction", "verify": "Source verification"}.get(job["mode"], "Document review")
                 await emit(db, "error" if error else "warning" if count else "success", f"{label} {'stopped' if error else 'finished'} - {deal.project_name}",
@@ -195,8 +221,16 @@ async def process_one_job():
     except asyncio.CancelledError:
         raise  # Lease expiry lets another process resume after shutdown/crash.
     except Exception as exc:
-        log.exception("Review attempt failed for deal %s", job["deal_id"])
-        error = exc
+        if job["mode"] == "openai":
+            from app.services.review_drafts import ReviewError
+            if isinstance(exc, ReviewError):
+                error = exc
+            else:
+                log.warning("API credit review failed for deal %s (%s)", job["deal_id"], type(exc).__name__)
+                error = ReviewError("API credit review stopped. The saved analysis is preserved. Retry from Documents.")
+        else:
+            log.exception("Review attempt failed for deal %s", job["deal_id"])
+            error = exc
     finally:
         pulse.cancel()
         try:

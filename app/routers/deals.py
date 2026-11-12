@@ -94,6 +94,8 @@ class CompareRequest(BaseModel):
 
 def _deal_to_dict(deal: Deal, developer_name: str = None, *, accepted_only=False) -> dict:
     metrics = dict(deal.metrics or {})
+    metrics.pop("_review_draft", None)
+    metrics.pop("_credit_review_attempt", None)
     analysis = analysis_for_deal(deal)
     if accepted_only:
         metrics = dict(analysis["accepted_metrics"])

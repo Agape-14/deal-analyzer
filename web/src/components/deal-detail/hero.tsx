@@ -44,7 +44,7 @@ type QualityResponse = { summary?: DealQualitySummary; stale_flags?: unknown[]; 
 export function DealHero({ deal }: { deal: DealDetail }) {
   const router = useRouter();
   const { isAnalyst, loading } = useCurrentUser();
-  const { review, reviewMessage } = useCapabilities();
+  const { review, reviewMessage, creditReview } = useCapabilities();
   const metrics = deal.metrics ?? {};
   const [scoring, setScoring] = React.useState(false);
   const [pipelineRunning, setPipelineRunning] = React.useState(false);
@@ -87,7 +87,7 @@ export function DealHero({ deal }: { deal: DealDetail }) {
       await api.post(`/api/deals/${deal.id}/review`);
       setPipelineStatus({ status: "running", step: "extract", message: "Document review started. Reading all uploaded documents." });
       toast.success("Document review started", {
-        description: "Reading documents, checking sources, and updating the score.",
+        description: creditReview ? "Reading sources and preparing a draft for approval." : "Reading documents, checking sources, and updating the score.",
         duration: 5000,
       });
 
@@ -97,10 +97,9 @@ export function DealHero({ deal }: { deal: DealDetail }) {
       });
       if (!mountedRef.current) return;
 
-      setPipelineStatus({ status: "complete", step: "score", message: "Document review complete. Values were extracted, source-checked, math-checked, and scored." });
-      toast.success("Document review complete", {
-        description: "Values were extracted, source-checked, math-checked, and scored.",
-      });
+      const message = creditReview ? "API credit review finished. Open Documents to see the draft." : "Values were extracted, source-checked, math-checked, and scored.";
+      setPipelineStatus({ status: "complete", step: creditReview ? "extract" : "score", message });
+      toast.success("Document review complete", { description: message });
       router.refresh();
     } catch (e) {
       const detail = (e as { detail?: string; message?: string })?.detail ?? (e as Error)?.message;
@@ -144,7 +143,7 @@ export function DealHero({ deal }: { deal: DealDetail }) {
     }
   }
 
-  const pipelineLabel = pipelineRunning ? pipelineStepLabel(pipelineStep) : "Review documents again";
+  const pipelineLabel = pipelineRunning ? pipelineStepLabel(pipelineStep) : creditReview ? "Review with API credits" : "Review documents again";
 
   return (
     <FadeIn>

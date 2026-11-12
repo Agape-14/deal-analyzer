@@ -10,7 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.database import async_session, get_db
-from app.config import paid_review_enabled, PAID_REVIEW_PAUSED_MESSAGE
+from app.config import openai_review_configured, openai_review_selected, paid_review_enabled, PAID_REVIEW_PAUSED_MESSAGE
 from app.models import Deal
 from app.rate_limit import limit
 from app.services.canonical_metrics import annotate_canonical_metrics
@@ -285,7 +285,7 @@ async def extract_deal_metrics(deal_id: int, db: AsyncSession = Depends(get_db))
         select(Deal).options(selectinload(Deal.documents)).where(Deal.id == deal_id)
     )
     deal = result.scalar_one_or_none()
-    if not deal:
+    if not deal or deal.deleted_at is not None:
         raise HTTPException(status_code=404, detail="Deal not found")
     if not deal.documents:
         raise HTTPException(status_code=400, detail="No documents uploaded yet")
@@ -316,13 +316,16 @@ async def extract_deal_metrics(deal_id: int, db: AsyncSession = Depends(get_db))
 
 @router.post("/{deal_id}/review", dependencies=[Depends(limit("ai"))])
 async def review_deal_documents(deal_id: int, db: AsyncSession = Depends(get_db)):
-    if not paid_review_enabled():
+    use_openai = openai_review_selected()
+    if use_openai and not openai_review_configured():
+        raise HTTPException(503, "Set the OpenAI API project key or use Review with Codex from Documents.")
+    if not use_openai and not paid_review_enabled():
         raise HTTPException(503, PAID_REVIEW_PAUSED_MESSAGE)
     result = await db.execute(
         select(Deal).options(selectinload(Deal.documents)).where(Deal.id == deal_id)
     )
     deal = result.scalar_one_or_none()
-    if not deal:
+    if not deal or deal.deleted_at is not None:
         raise HTTPException(status_code=404, detail="Deal not found")
     if not deal.documents:
         raise HTTPException(status_code=400, detail="No documents uploaded yet")
@@ -344,7 +347,7 @@ async def review_deal_documents(deal_id: int, db: AsyncSession = Depends(get_db)
             estimated_total_seconds=_estimate_review_seconds(deal),
         ),
     )
-    await enqueue_review(db, deal_id)
+    await enqueue_review(db, deal_id, mode="openai" if use_openai else "review")
     await db.commit()
     return {"message": "Document review started", "status": "started", "deal_id": deal_id}
 

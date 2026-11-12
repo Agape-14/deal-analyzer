@@ -24,6 +24,8 @@ import { cn } from "@/lib/utils";
 import type { DealDocument } from "@/lib/types";
 import { DocumentVersionControls } from "./document-version-controls";
 import { useCapabilities } from "@/lib/capabilities";
+import { useCurrentUser } from "@/lib/auth-client";
+import { ReviewDraftPanel } from "./review-draft-panel";
 
 type UploadState = {
   id: string;
@@ -79,7 +81,11 @@ export function DocumentsPanel({
   revision?: number;
 }) {
   const router = useRouter();
-  const { review, reviewMessage } = useCapabilities();
+  const { review, reviewMessage, creditReview } = useCapabilities();
+  const { isAnalyst } = useCurrentUser();
+  const [reviewRefresh, refreshReview] = React.useReducer((count: number) => count + 1, 0);
+  const primaryDocuments = documents.filter(doc => doc.included_in_review !== false);
+  const packetReady = primaryDocuments.some(doc => doc.has_text) && primaryDocuments.every(doc => !["queued", "extracting"].includes((doc.extraction_quality as ExtractionQuality | undefined)?.status || ""));
   const [dragActive, setDragActive] = React.useState(false);
   const [docType, setDocType] = React.useState<string>("offering_memo");
   const [uploads, setUploads] = React.useState<UploadState[]>([]);
@@ -162,6 +168,7 @@ export function DocumentsPanel({
         headers: { Accept: "application/json" },
       });
       if (!res.ok) throw new Error(await responseErrorMessage(res));
+      refreshReview();
       toast.success("Document review queued", {
         description: "Review continues automatically, including if you close this page.",
       });
@@ -320,10 +327,12 @@ export function DocumentsPanel({
             </p>
           </div>
           <Button size="sm" variant="secondary" disabled={!documents.length || reviewPending || review === "unavailable"} onClick={startDocumentReview}>
-            {reviewPending ? "Queuing…" : "Review documents"}
+            {reviewPending ? "Queuing…" : creditReview ? "Review with API credits" : "Review documents"}
           </Button>
         </div>
-        <p className="mb-4 text-xs text-muted-foreground">{review === "unavailable" ? reviewMessage || "Automatic financial review is unavailable. Files can still be saved and read; existing reviewed facts and source lookup remain available." : "Saving and reading a document does not accept its financial claims. Review status and material questions determine what can be used. Queued jobs continue after this page closes."}</p>
+        <p className="mb-4 text-xs text-muted-foreground">{review === "unavailable" ? reviewMessage || "Automatic financial review is unavailable. Files can still be saved and read; existing reviewed facts and source lookup remain available." : creditReview ? "API credit review prepares a cited draft for approval. Queued reviews continue after you close the page." : "Saving and reading a document does not accept its financial claims. Review status and material questions determine what can be used. Queued jobs continue after this page closes."}</p>
+
+        {isAnalyst && documents.length > 0 && <ReviewDraftPanel dealId={dealId} revision={revision} refreshKey={reviewRefresh} ready={packetReady} />}
 
         {documents.length === 0 ? (
           <div className="py-10 text-center text-sm text-muted-foreground">

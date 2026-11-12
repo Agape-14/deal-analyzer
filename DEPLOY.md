@@ -18,7 +18,9 @@ needs a public domain.
    - Railway auto-detects `railway.json` at the root, which references
      `nixpacks.toml` for Python 3.11 + Tesseract + Poppler.
    - Variables to set:
-     - `ANTHROPIC_API_KEY` — for AI scoring / chat.
+     - `PAID_REVIEW_ENABLED=0` — keep the legacy Anthropic review paused.
+     - `DEAL_REVIEW_PROVIDER=openai` and `OPENAI_API_KEY` — enable the OpenAI review draft. Use a key from the API project in the organization linked to the included credits. Store the key only on the API service.
+     - `DEAL_REVIEW_AUTO_AFTER_UPLOAD=0` — start with manual **Review with API credits** on a representative deal. After confirming its sources and usage, set to `1` to queue a review when primary files are uploaded. The Documents tab also supports a Codex packet download and result import without an API key. Both methods require approval before saving proposed facts.
      - `DB_DIR=/data` — where SQLite lives; see volume step.
        Uploaded PDFs also go here (`/data/uploads/`) by default, so
        they survive redeploys. Override with `UPLOADS_DIR` if you

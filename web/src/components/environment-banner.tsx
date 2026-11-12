@@ -44,7 +44,7 @@ export function EnvironmentBanner() {
   if (!status || status.status === "ok" || !status.environment) return null;
 
   const warnings = Object.entries(status.environment)
-    .filter(([, info]) => info && !info.configured && info.message)
+    .filter(([service, info]) => info && !info.configured && info.message && (service !== "anthropic" || !status.environment?.openai))
     .map(([service, info]) => ({ service, ...info }));
   if (warnings.length === 0) return null;
 
@@ -81,7 +81,7 @@ export function EnvironmentBanner() {
             <details><summary className="cursor-pointer font-medium">Some automatic checks are unavailable. Saved evidence still works.</summary>
             <ul className="mt-2 list-disc list-inside space-y-0.5 text-warning/90">
               {warnings.map((w) => (
-                <li key={w.service}>{w.service === "anthropic" ? w.message || "Automatic document review is unavailable. Saved documents, reviewed facts and the evidence assistant still work." : w.service === "brave_search" ? "Live market search is unavailable. Check the dates and sources of market information." : "A supporting service is unavailable. Try the affected feature again later."}</li>
+                <li key={w.service}>{(w.service === "anthropic" || w.service === "openai") ? w.message || "Automatic document review is unavailable. Saved documents, reviewed facts and the evidence assistant still work." : w.service === "brave_search" ? "Live market search is unavailable. Check the dates and sources of market information." : "A supporting service is unavailable. Try the affected feature again later."}</li>
               ))}
             </ul></details>
           </div>

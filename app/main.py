@@ -40,6 +40,7 @@ from app.rate_limit import describe_policies
 from app.services.json_parser_guard import install_deal_verifier_json_guard
 from app.services.pipeline_runner import start_pipeline_runner, stop_pipeline_runner
 from app.routers import analysis as analysis_router
+from app.routers import review_drafts as review_drafts_router
 from sqlalchemy.orm.exc import StaleDataError
 from app.services.review_jobs import start_review_worker, stop_review_worker
 
@@ -101,6 +102,7 @@ async def stale_analysis_handler(request, exc):
 
 
 app.include_router(analysis_router.router, prefix="/api/deals", tags=["analysis"])
+app.include_router(review_drafts_router.router, prefix="/api/deals", tags=["review"])
 
 
 class EnforceAuthMiddleware(BaseHTTPMiddleware):
@@ -229,7 +231,8 @@ async def healthz():
     """
     env = environment_status()
     auth = describe_auth()
-    degraded = any(not info.get("configured", True) for info in env.values() if "configured" in info)
+    degraded = any(not info.get("configured", True) for name, info in env.items()
+                   if name != "anthropic" or "openai" not in env)
     # Auth being off isn't a crash but it's a real security concern — surface
     # it on healthz so the banner can warn even on an otherwise clean deploy.
     if not auth.get("enabled"):

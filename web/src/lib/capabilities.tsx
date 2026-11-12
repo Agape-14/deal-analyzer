@@ -18,6 +18,8 @@ export function CapabilityProvider({ children }: { children: React.ReactNode }) 
 
 export function useCapabilities() {
   const { health, refresh } = React.useContext(Context);
-  return { health, refresh, reviewMessage: health?.environment?.anthropic?.message,
-    review: health?.environment?.anthropic?.configured === false ? "unavailable" : health ? "configured" : "unknown" };
+  const creditReview = health?.environment?.openai;
+  const configuredReview = creditReview ?? health?.environment?.anthropic;
+  return { health, refresh, creditReview: !!creditReview, reviewMessage: configuredReview?.message,
+    review: configuredReview?.configured === false ? "unavailable" : health ? "configured" : "unknown" };
 }

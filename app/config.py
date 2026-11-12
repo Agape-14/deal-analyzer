@@ -40,8 +40,16 @@ PAID_REVIEW_PAUSED_MESSAGE = (
 )
 
 
+def openai_review_selected() -> bool:
+    return os.getenv("DEAL_REVIEW_PROVIDER", "").strip().lower() == "openai"
+
+
+def openai_review_configured() -> bool:
+    return openai_review_selected() and bool(os.getenv("OPENAI_API_KEY", "").strip())
+
+
 def paid_review_enabled() -> bool:
-    return os.getenv("PAID_REVIEW_ENABLED", "1").strip().lower() not in {"0", "false", "no"}
+    return not openai_review_selected() and os.getenv("PAID_REVIEW_ENABLED", "1").strip().lower() not in {"0", "false", "no"}
 
 
 def require_paid_review_enabled() -> None:
@@ -82,7 +90,13 @@ def environment_status() -> dict[str, dict]:
     db_url = os.environ.get("DATABASE_URL") or ""
     is_sqlite = (not db_url) or db_url.startswith("sqlite")
 
+    openai_status = {"openai": {
+        "configured": openai_review_configured(),
+        "affects": ["review"],
+        "message": None if openai_review_configured() else "Set the OpenAI API project key to enable credit-based review. Review with Codex is available in Documents.",
+    }} if openai_review_selected() else {}
     return {
+        **openai_status,
         "anthropic": {
             "configured": anthropic_ok,
             "paused": not review_enabled,
