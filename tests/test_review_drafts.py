@@ -158,7 +158,8 @@ async def test_responses_preflight_limits_usage_and_preserves_wire_contract(clie
     assert requests == ["/v1/responses/input_tokens", "/v1/responses"]
     assert usage["budget_usd"] == 15
     assert usage["estimated_cost_usd"] == 8.415
-    assert openai_review.output_allowance(input_tokens, 15) == 64_000
+    assert openai_review.output_allowance(input_tokens, 15) > 64_000
+    assert openai_review.output_allowance(10_000, 10) == 128_000
     assert openai_review.estimated_microdollars(272_000, 1_000) == 2_770_000
     assert openai_review.estimated_microdollars(272_001, 1_000) == 5_515_020
 

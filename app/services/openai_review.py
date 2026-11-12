@@ -15,7 +15,7 @@ MAX_INPUT_BYTES = 6_000_000
 CONTEXT_WINDOW = 1_050_000
 LONG_CONTEXT_THRESHOLD = 272_000
 MIN_OUTPUT_TOKENS = 32_000
-MAX_OUTPUT_TOKENS = 64_000
+MAX_OUTPUT_TOKENS = 128_000
 TOKEN_COUNT_BUFFER = 512
 
 
@@ -80,10 +80,10 @@ async def review_with_credits(packet):
         "text": {"format": {"type": "json_schema", "name": "deal_review", "strict": True, "schema": output_schema()}},
     }
     try:
-        async with asyncio.timeout(720):
+        async with asyncio.timeout(1500):
             async with httpx.AsyncClient(base_url="https://api.openai.com/v1/",
                                          headers={"Authorization": f"Bearer {key}"},
-                                         timeout=httpx.Timeout(700, connect=15)) as client:
+                                         timeout=httpx.Timeout(1470, connect=15)) as client:
                 counted = await _request(client, "responses/input_tokens", common)
                 tokens = counted.get("input_tokens")
                 if type(tokens) is not int or tokens <= 0:
