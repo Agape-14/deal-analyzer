@@ -58,7 +58,10 @@ async def test_codex_import_uses_source_cell_and_saves_only_on_approval(client, 
     assert wrong.json()["draft"]["rows"][0]["issue"]
     assert (await client.post(base + "/approve", json=approval(wrong.json()))).status_code == 422
 
-    imported = await client.post(base + "/draft", json=cited_result(packet))
+    proposal = cited_result(packet)
+    deferred = {**proposal["facts"][0], "path": "project_details.unit_count", "source_cell": "C2", "value": 125}
+    proposal["facts"].append(deferred)
+    imported = await client.post(base + "/draft", json=proposal)
     assert imported.status_code == 200, imported.text
     view = imported.json()
     assert not view["draft"]["rows"][0]["issue"]
@@ -71,7 +74,9 @@ async def test_codex_import_uses_source_cell_and_saves_only_on_approval(client, 
     after = (await client.get(f"/api/deals/{deal_id}")).json()
     assert after["analysis"]["facts"][PATH]["value"] == 500000
     assert after["analysis"]["facts"][PATH]["state"] == "checked"
-    assert (await client.get(base + "/draft")).json()["draft"] is None
+    remaining = (await client.get(base + "/draft")).json()["draft"]
+    assert remaining and not remaining["stale"]
+    assert [row["path"] for row in remaining["rows"]] == ["project_details.unit_count"]
 
 
 async def test_codex_result_is_bound_to_sources_and_does_not_replace_locked_values(client):
@@ -175,6 +180,13 @@ async def test_openai_upload_reviews_once_and_never_falls_back_to_anthropic(clie
     assert view["draft"]["usage"]["estimated_cost_usd"] == 0.01
     assert len(calls) == 1
 
+    assert (await client.post(base + "/review")).status_code == 200
+    await make_due(deal_id)
+    assert await process_one_job()
+    assert len(calls) == 1
+
+    current = (await client.get(base + "/review/draft")).json()
+    assert (await client.post(base + "/review/approve", json=approval(current))).status_code == 200
     assert (await client.post(base + "/review")).status_code == 200
     await make_due(deal_id)
     assert await process_one_job()

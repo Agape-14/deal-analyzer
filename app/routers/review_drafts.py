@@ -83,8 +83,8 @@ async def approve_draft(deal_id: int, approval: ReviewApproval, db: AsyncSession
         raise HTTPException(422, "Some selected values have unresolved source checks.")
     record = deal.metrics[DRAFT_KEY]
     result = ReviewResult.model_validate(record["result"])
-    metrics = apply_rows(deal, docs, rows)
-    _refresh_integrity(deal, metrics)
+    _refresh_integrity(deal, apply_rows(deal, docs, rows))
+    metrics = deal.metrics
     new_package_id = package_identity(deal, docs)
     remaining = [fact for fact in result.facts if fact.path not in paths]
     if remaining:
