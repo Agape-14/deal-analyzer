@@ -44,7 +44,7 @@ export function EnvironmentBanner() {
   if (!status || status.status === "ok" || !status.environment) return null;
 
   const warnings = Object.entries(status.environment)
-    .filter(([service, info]) => info && !info.configured && info.message && (service !== "anthropic" || !status.environment?.openai))
+    .filter(([service, info]) => info && !info.configured && info.message && (service !== "anthropic" || (!status.environment?.openai && !status.environment?.codex)))
     .map(([service, info]) => ({ service, ...info }));
   if (warnings.length === 0) return null;
 

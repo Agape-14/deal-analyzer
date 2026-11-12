@@ -19,7 +19,9 @@ export function CapabilityProvider({ children }: { children: React.ReactNode }) 
 export function useCapabilities() {
   const { health, refresh } = React.useContext(Context);
   const creditReview = health?.environment?.openai;
+  const codexOnly = !!health?.environment?.codex;
   const configuredReview = creditReview ?? health?.environment?.anthropic;
-  return { health, refresh, creditReview: !!creditReview, reviewMessage: configuredReview?.message,
-    review: configuredReview?.configured === false ? "unavailable" : health ? "configured" : "unknown" };
+  const review = codexOnly || configuredReview?.configured === false ? "unavailable" : health ? "configured" : "unknown";
+  return { health, refresh, creditReview: !!creditReview, codexFirst: codexOnly || !!creditReview || review === "unavailable",
+    reviewMessage: codexOnly ? null : configuredReview?.message, review };
 }

@@ -7,7 +7,7 @@ import { Button } from "@/components/ui/button";
 import { api } from "@/lib/api";
 
 const CODEX_LINK = "codex://new?prompt=" + encodeURIComponent(
-  "I will attach a Deal Analyzer review packet. Read its instructions and output schema, then review the source documents in the packet. Save the resulting JSON object as deal-review-result.json so I can import it into Deal Analyzer.",
+  "I will attach a Deal Analyzer review packet. Follow its instructions and output schema. Compare every proposed fact with its cited source and cross-check figures across the packet. Save the resulting JSON object as deal-review-result.json so I can import it into Deal Analyzer.",
 );
 
 type Row = {
@@ -128,15 +128,15 @@ export function ReviewDraftPanel({ dealId, revision, refreshKey, ready }: {
   }
 
   return (
-    <section className="mb-5 space-y-3 rounded-xl border border-border/70 bg-muted/20 p-4" aria-label="Review with Codex and review drafts">
+    <section className="mb-5 space-y-3 rounded-xl border border-border/70 bg-muted/20 p-4" id="codex-review" aria-label="Review with Codex and review drafts">
       <div>
         <h4 className="text-sm font-semibold">Review with Codex</h4>
         <p className="mt-1 text-xs text-muted-foreground">
-          Download the packet, attach it in Codex, then import the result here.
+          Download the packet and attach it in Codex. Choose <strong>GPT-6 Astra</strong> with <strong>Extra High</strong> reasoning if available, then import the result here.
         </p>
       </div>
       <div className="flex flex-wrap gap-2">
-        {ready && <Button asChild variant="outline" size="sm">
+        {ready && <Button asChild size="sm">
           <a href={base + "/packet"}><Download className="mr-1.5 h-3.5 w-3.5" />Download packet</a>
         </Button>}
         <Button asChild variant="outline" size="sm"><a href={CODEX_LINK}>Open Codex</a></Button>

@@ -81,7 +81,7 @@ export function DocumentsPanel({
   revision?: number;
 }) {
   const router = useRouter();
-  const { review, reviewMessage, creditReview } = useCapabilities();
+  const { review, reviewMessage, creditReview, codexFirst } = useCapabilities();
   const { isAnalyst } = useCurrentUser();
   const [reviewRefresh, refreshReview] = React.useReducer((count: number) => count + 1, 0);
   const primaryDocuments = documents.filter(doc => doc.included_in_review !== false);
@@ -326,13 +326,25 @@ export function DocumentsPanel({
                 : `${documents.length} file${documents.length === 1 ? "" : "s"} on this deal.`}
             </p>
           </div>
-          <Button size="sm" variant="secondary" disabled={!documents.length || reviewPending || review === "unavailable"} onClick={startDocumentReview}>
-            {reviewPending ? "Queuing…" : creditReview ? "Review with API credits" : "Review documents"}
-          </Button>
+          {isAnalyst && !codexFirst && <Button size="sm" variant="secondary" disabled={!documents.length || reviewPending || review !== "configured"} onClick={startDocumentReview}>
+            {reviewPending ? "Queuing…" : "Review documents"}
+          </Button>}
         </div>
-        <p className="mb-4 text-xs text-muted-foreground">{review === "unavailable" ? reviewMessage || "Automatic financial review is unavailable. Files can still be saved and read; existing reviewed facts and source lookup remain available." : creditReview ? "API credit review prepares a cited draft for approval. Queued reviews continue after you close the page." : "Saving and reading a document does not accept its financial claims. Review status and material questions determine what can be used. Queued jobs continue after this page closes."}</p>
 
         {isAnalyst && documents.length > 0 && <ReviewDraftPanel dealId={dealId} revision={revision} refreshKey={reviewRefresh} ready={packetReady} />}
+        {isAnalyst && documents.length > 0 && creditReview && (
+          <details className="mb-5 rounded-lg border border-border/70 px-3 py-2">
+            <summary className="cursor-pointer text-sm font-medium">Review options</summary>
+            <div className="mt-2 flex flex-wrap items-center justify-between gap-2">
+              <p className="text-xs text-muted-foreground">
+                {review === "unavailable" ? reviewMessage : "GPT-6 Astra checks the source package and prepares a cited draft for approval."}
+              </p>
+              <Button size="sm" variant="outline" disabled={!packetReady || reviewPending || review !== "configured"} onClick={startDocumentReview}>
+                {reviewPending ? "Queuing…" : "Review with API credits"}
+              </Button>
+            </div>
+          </details>
+        )}
 
         {documents.length === 0 ? (
           <div className="py-10 text-center text-sm text-muted-foreground">

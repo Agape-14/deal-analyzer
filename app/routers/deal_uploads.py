@@ -37,7 +37,11 @@ os.makedirs(UPLOAD_DIR, exist_ok=True)
 MAX_UPLOAD_BYTES = 50 * 1024 * 1024
 ALLOWED_EXTS = {".pdf", ".xlsx", ".xlsm", ".xls", ".csv"}
 SPREADSHEET_EXTS = {".xlsx", ".xlsm", ".xls", ".csv"}
-AUTO_REVIEW_AFTER_UPLOAD = (paid_review_enabled() or openai_review_configured()) and os.getenv("DEAL_REVIEW_AUTO_AFTER_UPLOAD", "1").strip().lower() not in {"0", "false", "no"}
+_auto_review_uploads = os.getenv("DEAL_REVIEW_AUTO_AFTER_UPLOAD", "").strip().lower()
+AUTO_REVIEW_AFTER_UPLOAD = (
+    paid_review_enabled() and _auto_review_uploads not in {"0", "false", "no"}
+    or openai_review_configured() and _auto_review_uploads in {"1", "true", "yes"}
+)
 
 
 def _env_int(name: str, default: int) -> int:

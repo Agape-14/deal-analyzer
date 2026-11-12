@@ -40,8 +40,12 @@ PAID_REVIEW_PAUSED_MESSAGE = (
 )
 
 
+def document_review_provider() -> str:
+    return os.getenv("DEAL_REVIEW_PROVIDER", "").strip().lower() or "anthropic"
+
+
 def openai_review_selected() -> bool:
-    return os.getenv("DEAL_REVIEW_PROVIDER", "").strip().lower() == "openai"
+    return document_review_provider() == "openai"
 
 
 def openai_review_configured() -> bool:
@@ -49,7 +53,7 @@ def openai_review_configured() -> bool:
 
 
 def paid_review_enabled() -> bool:
-    return not openai_review_selected() and os.getenv("PAID_REVIEW_ENABLED", "1").strip().lower() not in {"0", "false", "no"}
+    return document_review_provider() == "anthropic" and os.getenv("PAID_REVIEW_ENABLED", "1").strip().lower() not in {"0", "false", "no"}
 
 
 def require_paid_review_enabled() -> None:
@@ -97,6 +101,7 @@ def environment_status() -> dict[str, dict]:
     }} if openai_review_selected() else {}
     return {
         **openai_status,
+        **({"codex": {"configured": True, "affects": ["review"]}} if document_review_provider() == "codex" else {}),
         "anthropic": {
             "configured": anthropic_ok,
             "paused": not review_enabled,

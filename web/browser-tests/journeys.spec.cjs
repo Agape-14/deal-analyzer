@@ -124,7 +124,8 @@ test('documents disclose duplicate contents and preserve original PDF access', a
   await dialog.getByRole('button', { name: 'Close', exact: true }).click();
 });
 
-test('Codex packet download and cited result approval work from Documents', async ({ page }) => {
+test('Codex review comes first with API credits available under review options', async ({ page }) => {
+  await page.route('**/api/healthz', route => route.fulfill({ json: { status: 'ok', environment: { openai: { configured: true } } } }));
   const created = await page.request.post('/api/deals', { data: { project_name: 'Browser Codex Review' } });
   expect(created.ok()).toBeTruthy();
   const { id } = await created.json();
@@ -135,6 +136,13 @@ test('Codex packet download and cited result approval work from Documents', asyn
   const base = `/api/deals/${id}/review`;
   await expect.poll(async () => (await page.request.get(base + '/packet')).status()).toBe(200);
   await dealPage(page, id, 'documents');
+
+  await expect(page.getByRole('link', { name: 'Review with Codex', exact: true })).toBeVisible();
+  await expect(page.getByText('GPT-6 Astra', { exact: true })).toBeVisible();
+  const apiReview = page.getByRole('button', { name: 'Review with API credits', exact: true });
+  await expect(apiReview).toBeHidden();
+  await page.getByText('Review options', { exact: true }).click();
+  await expect(apiReview).toBeEnabled();
 
   const codex = page.getByRole('link', { name: 'Open Codex', exact: true });
   await expect(codex).toHaveAttribute('href', /^codex:\/\/new\?prompt=/);
@@ -353,8 +361,10 @@ test('paid review pause is visible while saved documents and free source lookup 
   const message = 'Paid AI review is paused until extraction validation is complete. Document reading, saved analyses, calculations, exports and source lookup remain available.';
   await page.route('**/api/healthz', route => route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ status: 'degraded', environment: { anthropic: { configured: false, paused: true, message } } }) }));
   await dealPage(page, 1, 'documents');
-  await expect(page.getByRole('button', { name: 'Review documents', exact: true })).toBeDisabled();
-  await expect(page.getByText(message, { exact: true }).last()).toBeVisible();
+  await expect(page.getByRole('link', { name: 'Review with Codex', exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Review documents', exact: true })).toHaveCount(0);
+  await page.getByText('Some automatic checks are unavailable. Saved evidence still works.', { exact: true }).click();
+  await expect(page.getByText(message, { exact: true })).toBeVisible();
   await expect(page.getByRole('button', { name: 'Choose files', exact: true })).toBeEnabled();
   await page.getByRole('tab', { name: /Assistant/ }).click();
   await expect(page.getByPlaceholder('Ask about accepted returns, terms or missing evidence…')).toBeVisible();

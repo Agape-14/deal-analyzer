@@ -232,7 +232,7 @@ async def healthz():
     env = environment_status()
     auth = describe_auth()
     degraded = any(not info.get("configured", True) for name, info in env.items()
-                   if name != "anthropic" or "openai" not in env)
+                   if name != "anthropic" or not {"openai", "codex"}.intersection(env))
     # Auth being off isn't a crash but it's a real security concern — surface
     # it on healthz so the banner can warn even on an otherwise clean deploy.
     if not auth.get("enabled"):

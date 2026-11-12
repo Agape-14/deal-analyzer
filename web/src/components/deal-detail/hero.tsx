@@ -44,7 +44,7 @@ type QualityResponse = { summary?: DealQualitySummary; stale_flags?: unknown[]; 
 export function DealHero({ deal }: { deal: DealDetail }) {
   const router = useRouter();
   const { isAnalyst, loading } = useCurrentUser();
-  const { review, reviewMessage, creditReview } = useCapabilities();
+  const { review, codexFirst } = useCapabilities();
   const metrics = deal.metrics ?? {};
   const [scoring, setScoring] = React.useState(false);
   const [pipelineRunning, setPipelineRunning] = React.useState(false);
@@ -87,7 +87,7 @@ export function DealHero({ deal }: { deal: DealDetail }) {
       await api.post(`/api/deals/${deal.id}/review`);
       setPipelineStatus({ status: "running", step: "extract", message: "Document review started. Reading all uploaded documents." });
       toast.success("Document review started", {
-        description: creditReview ? "Reading sources and preparing a draft for approval." : "Reading documents, checking sources, and updating the score.",
+        description: "Reading documents, checking sources, and updating the score.",
         duration: 5000,
       });
 
@@ -97,8 +97,8 @@ export function DealHero({ deal }: { deal: DealDetail }) {
       });
       if (!mountedRef.current) return;
 
-      const message = creditReview ? "API credit review finished. Open Documents to see the draft." : "Values were extracted, source-checked, math-checked, and scored.";
-      setPipelineStatus({ status: "complete", step: creditReview ? "extract" : "score", message });
+      const message = "Values were extracted, source-checked, math-checked, and scored.";
+      setPipelineStatus({ status: "complete", step: "score", message });
       toast.success("Document review complete", { description: message });
       router.refresh();
     } catch (e) {
@@ -143,7 +143,7 @@ export function DealHero({ deal }: { deal: DealDetail }) {
     }
   }
 
-  const pipelineLabel = pipelineRunning ? pipelineStepLabel(pipelineStep) : creditReview ? "Review with API credits" : "Review documents again";
+  const pipelineLabel = pipelineRunning ? pipelineStepLabel(pipelineStep) : "Review documents again";
 
   return (
     <FadeIn>
@@ -221,6 +221,11 @@ export function DealHero({ deal }: { deal: DealDetail }) {
                   Deal summary
                 </a>
               </Button>
+              {showAnalystTools && codexFirst && totalDocs > 0 && (
+                <Button size="sm" asChild className="justify-center">
+                  <a href={`/deals/${deal.id}?tab=documents#codex-review`}>Review with Codex</a>
+                </Button>
+              )}
               <Button size="sm" variant="outline" asChild className="justify-center">
                 <a href={`/api/reports/deal/${deal.id}/pdf`} target="_blank" rel="noreferrer">
                   <FileDown className="h-4 w-4" />
@@ -244,10 +249,12 @@ export function DealHero({ deal }: { deal: DealDetail }) {
                       <p className="mt-2 text-xs leading-relaxed text-muted-foreground">{reviewSummary}</p>
                     </div>
                     <div className="grid gap-2">
-                      <Button size="sm" onClick={runPipeline} disabled={pipelineRunning || scoring || review === "unavailable"} className="justify-center">
-                        {pipelineRunning ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
-                        {pipelineLabel}
-                      </Button>
+                      {!codexFirst && (
+                        <Button size="sm" onClick={runPipeline} disabled={pipelineRunning || scoring || review !== "configured"} className="justify-center">
+                          {pipelineRunning ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
+                          {pipelineLabel}
+                        </Button>
+                      )}
                       <Button size="sm" variant="secondary" onClick={runScore} disabled={scoring || pipelineRunning}>
                         {scoring ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
                         {scoring ? "Calculating..." : "Recalculate score"}
@@ -255,7 +262,7 @@ export function DealHero({ deal }: { deal: DealDetail }) {
                     </div>
                     <PipelineNotice status={pipelineStatus} running={pipelineRunning} />
                     <p className="text-[11px] leading-relaxed text-muted-foreground">
-                      {review === "unavailable" ? reviewMessage || "Automatic financial review is unavailable. Saved facts, source lookup and manual resolutions still work." : "Review checks current active sources. Configured service credentials do not confirm provider credits. Recalculate score uses saved accepted facts."}
+                      Recalculate score uses saved accepted facts.
                     </p>
                   </div>
                 </details>

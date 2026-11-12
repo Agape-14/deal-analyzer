@@ -19,8 +19,10 @@ needs a public domain.
      `nixpacks.toml` for Python 3.11 + Tesseract + Poppler.
    - Variables to set:
      - `PAID_REVIEW_ENABLED=0` — keep the legacy Anthropic review paused.
-     - `DEAL_REVIEW_PROVIDER=openai` and `OPENAI_API_KEY` — enable the OpenAI review draft. Use a key from the API project in the organization linked to the included credits. Store the key only on the API service.
-     - `DEAL_REVIEW_AUTO_AFTER_UPLOAD=0` — start with manual **Review with API credits** on a representative deal. After confirming its sources and usage, set to `1` to queue a review when primary files are uploaded. The Documents tab also supports a Codex packet download and result import without an API key. Both methods require approval before saving proposed facts.
+     - `DEAL_REVIEW_PROVIDER=codex` — start with **Review with Codex** in Documents. Select **GPT-6 Astra** with **Extra High** reasoning in Codex when available. The user imports the cited result and approves the proposed values.
+     - For optional API reviews, set `DEAL_REVIEW_PROVIDER=openai` and `OPENAI_API_KEY` on the API service. Use a project key from the organization linked to the included credits. Codex remains the first option, and **Review options** contains the manual API action.
+     - `DEAL_REVIEW_MAX_USD=10` — adjustable per-request budget for GPT-6 Astra at Extra High reasoning. Set a positive whole dollar amount. The app counts input tokens first and accounts for long-context rates. The default is $10, with no silent truncation or lower-model fallback.
+     - `DEAL_REVIEW_AUTO_AFTER_UPLOAD=0` — uploads are read locally for the Codex packet. Set to `1` only if you want to queue OpenAI reviews automatically once that provider is configured.
      - `DB_DIR=/data` — where SQLite lives; see volume step.
        Uploaded PDFs also go here (`/data/uploads/`) by default, so
        they survive redeploys. Override with `UPLOADS_DIR` if you

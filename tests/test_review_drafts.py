@@ -47,9 +47,13 @@ def approval(draft):
 
 
 async def test_codex_import_uses_source_cell_and_saves_only_on_approval(client, monkeypatch):
-    monkeypatch.setenv("PAID_REVIEW_ENABLED", "0")
+    monkeypatch.setenv("PAID_REVIEW_ENABLED", "1")
+    monkeypatch.setenv("DEAL_REVIEW_PROVIDER", "codex")
+    monkeypatch.setenv("OPENAI_API_KEY", "fake-project-key")
+    assert (await client.get("/api/healthz")).json()["environment"]["codex"]["configured"] is True
     deal_id = await upload_csv(client)
     base = f"/api/deals/{deal_id}/review"
+    assert (await client.post(base)).status_code == 503
     packet = await packet_for(client, base)
 
     # 125 is in the verbatim quote but in the neighboring cell.
@@ -108,34 +112,61 @@ async def test_responses_preflight_limits_usage_and_preserves_wire_contract(clie
     monkeypatch.setenv("OPENAI_API_KEY", "fake-project-key")
     real_client = httpx.AsyncClient
     requests = []
-    input_tokens = openai_review.MAX_INPUT_TOKENS + 1
+    monkeypatch.delenv("DEAL_REVIEW_MAX_USD", raising=False)
+    input_tokens = 420_000
 
     def handle(request):
         requests.append(request.url.path)
         data = json.loads(request.content)
-        assert data["model"] == openai_review.MODEL
+        assert data["model"] == "gpt-6-astra"
         assert data["text"]["format"]["strict"] is True
         if request.url.path.endswith("/input_tokens"):
             return httpx.Response(200, json={"input_tokens": input_tokens})
         assert data["store"] is False
         assert data["service_tier"] == "default"
-        assert data["max_output_tokens"] == 12000
+        assert data["reasoning"] == {"effort": "xhigh"}
+        assert data["truncation"] == "disabled"
+        assert data["max_output_tokens"] == openai_review.output_allowance(input_tokens, openai_review.review_budget_usd())
         return httpx.Response(200, json={"status": "completed",
             "output": [{"type": "message", "content": [{"type": "output_text",
                 "text": json.dumps({"package_id": "a" * 64, "facts": []})}]}],
-            "usage": {"input_tokens": 1000, "output_tokens": 200}})
+            "usage": {"input_tokens": input_tokens, "output_tokens": 200}})
 
     monkeypatch.setattr(openai_review.httpx, "AsyncClient",
         lambda **kwargs: real_client(**kwargs, transport=httpx.MockTransport(handle)))
-    with pytest.raises(ReviewError, match="budget"):
+    with pytest.raises(ReviewError, match=r"\$10 limit"):
         await openai_review.review_with_credits({"package_id": "a" * 64})
     assert requests == ["/v1/responses/input_tokens"]
+
     requests.clear()
-    input_tokens = 1000
+    input_tokens = 300_000
     result, usage = await openai_review.review_with_credits({"package_id": "a" * 64})
     assert result.package_id == "a" * 64
     assert requests == ["/v1/responses/input_tokens", "/v1/responses"]
-    assert usage["estimated_cost_usd"] == 0.002
+    assert usage["budget_usd"] == 10
+    assert usage["estimated_cost_usd"] == 6.015
+    allowance = openai_review.output_allowance(input_tokens, 10)
+    assert openai_review.MIN_OUTPUT_TOKENS <= allowance < openai_review.MAX_OUTPUT_TOKENS
+    buffered_input = input_tokens + openai_review.TOKEN_COUNT_BUFFER
+    assert openai_review.estimated_microdollars(buffered_input, allowance) <= 10_000_000
+    assert openai_review.estimated_microdollars(buffered_input, allowance + 1) > 10_000_000
+
+    requests.clear()
+    input_tokens = 420_000
+    monkeypatch.setenv("DEAL_REVIEW_MAX_USD", "15")
+    _, usage = await openai_review.review_with_credits({"package_id": "a" * 64})
+    assert requests == ["/v1/responses/input_tokens", "/v1/responses"]
+    assert usage["budget_usd"] == 15
+    assert usage["estimated_cost_usd"] == 8.415
+    assert openai_review.output_allowance(input_tokens, 15) == 64_000
+    assert openai_review.estimated_microdollars(272_000, 1_000) == 2_770_000
+    assert openai_review.estimated_microdollars(272_001, 1_000) == 5_515_020
+
+    requests.clear()
+    monkeypatch.setenv("DEAL_REVIEW_MAX_USD", "invalid")
+    with pytest.raises(ReviewError, match="positive whole dollar amount"):
+        await openai_review.review_with_credits({"package_id": "a" * 64})
+    assert requests == []
 
 
 async def make_due(deal_id):
