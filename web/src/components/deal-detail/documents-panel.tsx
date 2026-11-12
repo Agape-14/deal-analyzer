@@ -467,6 +467,7 @@ export function DocumentsPanel({
         >
           <input
             ref={inputRef}
+            aria-label="Upload deal documents"
             type="file"
             multiple
             accept={ACCEPTED_UPLOAD_TYPES}

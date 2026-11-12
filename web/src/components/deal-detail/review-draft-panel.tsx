@@ -143,7 +143,7 @@ export function ReviewDraftPanel({ dealId, revision, refreshKey, ready }: {
         <Button type="button" variant="outline" size="sm" disabled={working} onClick={() => fileInput.current?.click()}>
           <FileUp className="mr-1.5 h-3.5 w-3.5" />Import result
         </Button>
-        <input ref={fileInput} type="file" accept=".json,application/json" className="hidden" onChange={event => void importResult(event.target.files?.[0])} />
+        <input ref={fileInput} aria-label="Import Codex review result" type="file" accept=".json,application/json" className="hidden" onChange={event => void importResult(event.target.files?.[0])} />
       </div>
       {!ready && <p className="text-xs text-muted-foreground">The packet is available after the primary documents are read.</p>}
       {running && <p className="text-xs text-muted-foreground" role="status">API credit review {state?.job?.status === "queued" ? "queued" : "in progress"}…</p>}

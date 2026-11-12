@@ -63,7 +63,7 @@ async def test_codex_import_uses_source_cell_and_saves_only_on_approval(client, 
     view = imported.json()
     assert not view["draft"]["rows"][0]["issue"]
     before = (await client.get(f"/api/deals/{deal_id}")).json()
-    assert PATH not in before["analysis"]["facts"]
+    assert before["analysis"]["facts"][PATH]["value"] is None
     assert "_review_draft" not in before["metrics"]
     saved = await client.post(base + "/approve", json=approval(view))
     assert saved.status_code == 200, saved.text

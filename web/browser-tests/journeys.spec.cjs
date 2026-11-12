@@ -124,11 +124,50 @@ test('documents disclose duplicate contents and preserve original PDF access', a
   await dialog.getByRole('button', { name: 'Close', exact: true }).click();
 });
 
+test('Codex packet download and cited result approval work from Documents', async ({ page }) => {
+  const created = await page.request.post('/api/deals', { data: { project_name: 'Browser Codex Review' } });
+  expect(created.ok()).toBeTruthy();
+  const { id } = await created.json();
+  const uploaded = await page.request.post(`/api/deals/${id}/documents/upload`, { multipart: {
+    file: { name: 'review-terms.csv', mimeType: 'text/csv', buffer: Buffer.from('Term,Value\nMinimum investment,40000\n') },
+  } });
+  expect(uploaded.ok()).toBeTruthy();
+  const base = `/api/deals/${id}/review`;
+  await expect.poll(async () => (await page.request.get(base + '/packet')).status()).toBe(200);
+  await dealPage(page, id, 'documents');
+
+  const codex = page.getByRole('link', { name: 'Open Codex', exact: true });
+  await expect(codex).toHaveAttribute('href', /^codex:\/\/new\?prompt=/);
+  const [download] = await Promise.all([
+    page.waitForEvent('download'), page.getByRole('link', { name: 'Download packet', exact: true }).click(),
+  ]);
+  expect(download.suggestedFilename()).toBe(`deal-${id}-review-packet.json`);
+  const { packet } = JSON.parse(await fs.readFile(await download.path(), 'utf8'));
+  const source = packet.sources[0];
+  const excerpt = source.text.split('\n').find(line => line.includes('B2=40000'));
+  expect(excerpt).toBeTruthy();
+  const result = { package_id: packet.package_id, facts: [{
+    path: 'deal_structure.minimum_investment', value: 40000, currency: 'USD',
+    source_doc_id: source.id, source_sheet: 'CSV', source_cell: 'B2', source_excerpt: excerpt,
+  }] };
+  await page.getByLabel('Import Codex review result').setInputFiles({
+    name: 'deal-review-result.json', mimeType: 'application/json', buffer: Buffer.from(JSON.stringify(result)),
+  });
+  await expect(page.getByRole('heading', { name: 'Codex review draft' })).toBeVisible();
+  await expect(page.getByRole('checkbox', { name: 'Minimum investment · 40,000' })).toBeChecked();
+  await expect(page.getByText(excerpt, { exact: true })).toBeVisible();
+  await page.getByRole('button', { name: 'Apply 1 value', exact: true }).click();
+  await expect(page.getByText(/1 value applied/)).toBeVisible();
+  const deal = await (await page.request.get(`/api/deals/${id}`)).json();
+  expect(deal.analysis.facts['deal_structure.minimum_investment']).toMatchObject({ value: 40000, state: 'checked' });
+  expect((await page.request.delete(`/api/deals/${id}`)).ok()).toBeTruthy();
+});
+
 test('spreadsheet limitations are visible and duplicate upload is idempotent', async ({ page }) => {
   await dealPage(page, 2, 'documents');
   await expect(page.getByText(/Uses 2 external workbook links/)).toBeVisible();
   await expect(page.getByText(/Some spreadsheet rows or columns exceed/)).toBeVisible();
-  const input = page.locator('input[type=file]');
+  const input = page.getByLabel('Upload deal documents');
   const file = { name: 'browser-upload.csv', mimeType: 'text/csv', buffer: Buffer.from('Metric,Value\nUnits,42\n') };
   await input.setInputFiles(file);
   await expect(page.getByText('Document uploaded', { exact: true })).toBeVisible();
