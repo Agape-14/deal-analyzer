@@ -2,10 +2,10 @@ import asyncio
 import hashlib
 import logging
 import os
+import subprocess
 import uuid
-
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, UploadFile, File, Form
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 from sqlalchemy import select, update
 from sqlalchemy.exc import OperationalError, IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -34,6 +34,7 @@ UPLOAD_DIR = os.environ.get(
 )
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 
+PDF_PREVIEW_SLOTS = asyncio.Semaphore(2)
 MAX_UPLOAD_BYTES = 50 * 1024 * 1024
 ALLOWED_EXTS = {".pdf", ".xlsx", ".xlsm", ".xls", ".csv"}
 SPREADSHEET_EXTS = {".xlsx", ".xlsm", ".xls", ".csv"}
@@ -356,14 +357,7 @@ async def get_document_file(doc_id: int, db: AsyncSession = Depends(get_db)):
     doc = result.scalar_one_or_none()
     if not doc:
         raise HTTPException(status_code=404, detail="Document not found")
-    if not doc.file_path or not os.path.exists(doc.file_path):
-        raise HTTPException(status_code=410, detail="Original file is no longer available on disk.")
-
-    real = os.path.realpath(doc.file_path)
-    upload_root = os.path.realpath(UPLOAD_DIR)
-    if not real.startswith(upload_root + os.sep):
-        raise HTTPException(status_code=404, detail="Document not found")
-
+    real = _original_path(doc)
     ext = os.path.splitext(real)[1].lower()
     media_type = MEDIA_TYPES.get(ext, "application/octet-stream")
     disposition = "inline" if ext == ".pdf" else "attachment"
@@ -377,6 +371,55 @@ async def get_document_file(doc_id: int, db: AsyncSession = Depends(get_db)):
             "Content-Security-Policy": "frame-ancestors 'self'",
         },
     )
+
+
+@router.get("/documents/{doc_id}/preview/{page_number}", dependencies=[Depends(limit("read"))])
+async def preview_pdf_page(doc_id: int, page_number: int, db: AsyncSession = Depends(get_db)):
+    doc = await db.scalar(select(DealDocument).join(Deal).where(
+        DealDocument.id == doc_id, Deal.deleted_at.is_(None),
+    ))
+    if not doc:
+        raise HTTPException(404, "Document not found")
+    path = _original_path(doc)
+    if os.path.splitext(path)[1].lower() != ".pdf":
+        raise HTTPException(415, "Page previews are available for PDFs.")
+    if page_number < 1:
+        raise HTTPException(404, "Page not found")
+    await db.rollback()
+    try:
+        async with PDF_PREVIEW_SLOTS:
+            image = await asyncio.to_thread(_render_pdf_page, path, page_number)
+    except (OSError, subprocess.SubprocessError):
+        raise HTTPException(422, "This PDF page cannot be previewed. Open or download the original.") from None
+    if image is None:
+        raise HTTPException(404, "Page not found")
+    return Response(content=image, media_type="image/png", headers={"Cache-Control": "private, no-store"})
+
+
+def _original_path(doc: DealDocument) -> str:
+    if not doc.file_path:
+        raise HTTPException(410, "Original file is no longer available on disk.")
+    real = os.path.realpath(doc.file_path)
+    upload_root = os.path.realpath(UPLOAD_DIR)
+    if not real.startswith(upload_root + os.sep):
+        raise HTTPException(404, "Document not found")
+    if not os.path.isfile(real):
+        raise HTTPException(410, "Original file is no longer available on disk.")
+    return real
+
+
+def _render_pdf_page(path: str, page_number: int) -> bytes | None:
+    # Render in an isolated process so a damaged upload cannot crash the API.
+    page = str(page_number)
+    result = subprocess.run(
+        ["pdftoppm", "-f", page, "-l", page, "-scale-to", "1800", "-png", "-singlefile", path],
+        capture_output=True, timeout=15, check=False,
+    )
+    if result.stdout.startswith(b"\x89PNG\r\n\x1a\n") and result.returncode == 0:
+        return result.stdout
+    if b"Wrong page range" in result.stderr:
+        return None
+    raise subprocess.SubprocessError("PDF page rendering failed")
 
 
 def _document_payload(doc: DealDocument) -> dict:

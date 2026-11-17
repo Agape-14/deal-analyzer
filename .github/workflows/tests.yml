@@ -64,6 +64,8 @@ jobs:
       # Browser tooling is test-only; leave the application dependency lock intact.
       - run: npm install --prefix "$RUNNER_TEMP/browser-tools" --no-save --package-lock=false @playwright/test@1.58.2
       - run: node "$RUNNER_TEMP/browser-tools/node_modules/playwright/cli.js" install --with-deps chromium
+      - name: Install PDF renderer
+        run: sudo apt-get install -y poppler-utils
       - name: Browser journeys with disposable synthetic data
         id: browsers
         run: NODE_PATH="$RUNNER_TEMP/browser-tools/node_modules" node "$RUNNER_TEMP/browser-tools/node_modules/@playwright/test/cli.js" test --config=playwright.config.cjs

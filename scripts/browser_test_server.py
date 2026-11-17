@@ -96,11 +96,13 @@ async def seed():
         pdf = canvas.Canvas(str(pdf_path))
         pdf.drawString(60, 760, "Synthetic test document - Sample Hold")
         pdf.drawString(60, 730, "Hold cash-on-cash return: 8.5%. Optional sale IRR: 27.5%.")
+        pdf.showPage()
+        pdf.drawString(60, 760, "Synthetic second page - Sample Hold")
         pdf.save()
         digest = hashlib.sha256(pdf_path.read_bytes()).hexdigest()
         for doc_id in (1, 2):
             db.add(DealDocument(id=doc_id, deal_id=1, filename="sample-hold.pdf", file_path=str(pdf_path),
-                file_sha256=digest, content_fingerprint=digest, page_count=1, doc_type="offering_memo",
+                file_sha256=digest, content_fingerprint=digest, page_count=2, doc_type="offering_memo",
                 extracted_text="--- Page 1 ---\nHold cash-on-cash return: 8.5%. Optional sale IRR: 27.5%."))
         csv_path = uploads / "sample-terms.csv"
         csv_path.write_text("Metric,Value\nUnits,20\n", encoding="utf-8")
