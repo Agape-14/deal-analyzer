@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { motion, AnimatePresence } from "framer-motion";
 import { X, AlertCircle, AlertTriangle, CheckCircle2, ExternalLink } from "lucide-react";
-import { cn, fmtPct, fmtMultiple } from "@/lib/utils";
+import { cn } from "@/lib/utils";
 import type { DealDetail } from "@/lib/types";
 
 /**
@@ -11,7 +11,6 @@ import type { DealDetail } from "@/lib/types";
  *   - project + sponsor + city/state
  *   - overall score (big colored number)
  *   - validation-flag chips (red/yellow/green counts)
- *   - quick stats (IRR / Multiple)
  *   - remove-from-comparison button
  *
  * Stays sticky below the page header so metrics always line up under their
@@ -98,16 +97,6 @@ export function DealHeaderRow({
                       {deal.overall_score != null ? deal.overall_score.toFixed(1) : "—"}
                     </div>
                     <div className="text-[9px] uppercase tracking-wider text-muted-foreground mt-1">Score</div>
-                  </div>
-                  <div className="text-right text-[11px] tabular-nums leading-tight">
-                    <div>
-                      <span className="text-muted-foreground">IRR </span>
-                      <span className="font-medium">{fmtPct(deal.target_irr)}</span>
-                    </div>
-                    <div>
-                      <span className="text-muted-foreground">Mult </span>
-                      <span className="font-medium">{fmtMultiple(deal.target_equity_multiple)}</span>
-                    </div>
                   </div>
                 </div>
 

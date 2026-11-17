@@ -21,8 +21,12 @@ export function returnContext(fact?: AnalysisFact): string {
     identity.period === "unspecified" ? "Period unspecified" : identity.period].join(" · ");
 }
 
+export function isReturnMetric(row: MetricRow): boolean {
+  return row.group === "Returns" || row.key === "preferred_return";
+}
+
 export function compatibleRow(deals: DealDetail[], row: MetricRow): boolean {
-  if (row.group !== "Returns") return true;
+  if (!isReturnMetric(row)) return true;
   const facts = deals.map(deal => rowFact(deal, row)).filter((fact): fact is AnalysisFact => !!fact && fact.value != null && ["manual", "checked", "calculated"].includes(fact.state));
   if (facts.length < 2) return false;
   const keys = ["unit", "scenario", "investor_class", "basis", "period"] as const;

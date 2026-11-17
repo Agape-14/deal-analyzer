@@ -40,7 +40,9 @@ from app.rate_limit import describe_policies
 from app.services.json_parser_guard import install_deal_verifier_json_guard
 from app.services.pipeline_runner import start_pipeline_runner, stop_pipeline_runner
 from app.routers import analysis as analysis_router
+from app.routers import financing_measures as financing_measures_router
 from app.routers import review_drafts as review_drafts_router
+from app.routers import return_schedules as return_schedules_router
 from sqlalchemy.orm.exc import StaleDataError
 from app.services.review_jobs import start_review_worker, stop_review_worker
 
@@ -102,7 +104,9 @@ async def stale_analysis_handler(request, exc):
 
 
 app.include_router(analysis_router.router, prefix="/api/deals", tags=["analysis"])
+app.include_router(financing_measures_router.router, prefix="/api/deals", tags=["analysis"])
 app.include_router(review_drafts_router.router, prefix="/api/deals", tags=["review"])
+app.include_router(return_schedules_router.router, prefix="/api/deals", tags=["analysis"])
 
 
 class EnforceAuthMiddleware(BaseHTTPMiddleware):

@@ -32,7 +32,10 @@ async def test_return_values_agree_in_detail_compare_and_exports(client):
             "hold_scenario": {"cash_on_cash_return": 8},
             "sale_scenario": {"sale_irr": 22, "sale_equity_multiple": 2.4, "is_hypothetical": True}},
         "deal_structure": {"ltv": 60},
-        "_provenance": {"target_returns.hold_scenario.cash_on_cash_return": {"status": "manual"}},
+        "_provenance": {"target_returns.hold_scenario.cash_on_cash_return": {"status": "manual", "verification_note": "Project model, page 4."}},
+        "_fact_context": {"target_returns.hold_scenario.cash_on_cash_return": {
+            "investor_class": "Class B", "basis": "net", "period": "Year 2 after stabilization",
+        }},
     }
     await client.put(f"/api/deals/{a}", json={"metrics": metrics, "scores": {"overall": None}, "notes": "A < B & C"})
     await client.put(f"/api/deals/{b}", json={"metrics": {"target_returns": {"target_irr": 15}, "deal_structure": {"ltv": 80}}})
@@ -47,6 +50,10 @@ async def test_return_values_agree_in_detail_compare_and_exports(client):
     sheet = openpyxl.load_workbook(io.BytesIO(xlsx.content)).active
     rows = {row[0].value: row for row in sheet.iter_rows() if row[0].value}
     assert rows["Target IRR"][2].value is None
+    assert rows["Cash-on-Cash"][2].value == 8
+    assert "Class B" in rows["Cash-on-Cash Context"][2].value
+    assert "Year 2 after stabilization" in rows["Cash-on-Cash Context"][2].value
+    assert "Project model, page 4." in rows["Cash-on-Cash Evidence"][2].value
     assert rows["LTV"][1].fill.fill_type is None  # High leverage is not a winner.
     pdf = await client.get(f"/api/reports/deal/{a}/pdf")
     assert pdf.status_code == 200
@@ -54,6 +61,10 @@ async def test_return_values_agree_in_detail_compare_and_exports(client):
         text = "".join(page.get_text() for page in document)
     assert "22.00%" not in text
     assert "8.00%" in text
+    assert "Class B" in text
+    assert "Calculation basis: net" in text
+    assert "Year 2 after stabilization" in " ".join(text.split())
+    assert "Project model, page 4." in text
     assert "Not scored" in text
     assert "A < B & C" in text
 

@@ -7,7 +7,7 @@ import { cn, fmtMoney, fmtMultiple, fmtPct } from "@/lib/utils";
 import type { DealDetail } from "@/lib/types";
 import { getValueAt, type MetricRow } from "./presets";
 import { findExtrema, formatValue, normalize, toNumber, type CellValue } from "./value-format";
-import { compatibleRow, rowFact, returnContext } from "./comparison-context";
+import { compatibleRow, isReturnMetric, rowFact, returnContext } from "./comparison-context";
 
 export type CompareMode = "values" | "winners" | "deltas" | "normalized";
 
@@ -137,23 +137,42 @@ function RowLine({
             {row.hint}
           </div>
         )}
-        {!compatible && row.group === "Returns" && <p className="mt-1 text-[10px] text-warning">Different or unspecified context · values only</p>}
+        {!compatible && isReturnMetric(row) && <p className="mt-1 text-[10px] text-warning">Different or unspecified context · values only</p>}
       </div>
 
-      {cells.map((cell, index) => (
-        <div key={cell.dealId} className="min-w-0">
-        <Cell
-          row={row}
-          cell={cell}
-          cells={cells}
-          mode={compatible ? mode : "values"}
-          isWinner={winners.has(cell.dealId)}
-          isLoser={losers.has(cell.dealId)}
-          baselineCell={baseline ? cells.find((c) => c.dealId === baseline.id) ?? null : null}
-        />
-        {row.group === "Returns" && cell.num != null && <p className="mt-1 text-[10px] text-right leading-relaxed text-muted-foreground">{returnContext(rowFact(deals[index], row))}</p>}
-        </div>
-      ))}
+      {cells.map((cell, index) => {
+        const deal = deals[index];
+        const fact = rowFact(deal, row);
+        return (
+          <div key={cell.dealId} className="min-w-0">
+            <Cell
+              row={row}
+              cell={cell}
+              cells={cells}
+              mode={compatible ? mode : "values"}
+              isWinner={winners.has(cell.dealId)}
+              isLoser={losers.has(cell.dealId)}
+              baselineCell={baseline ? cells.find((c) => c.dealId === baseline.id) ?? null : null}
+            />
+            {cell.num != null && isReturnMetric(row) && (
+              <div className="mt-1 text-right text-[10px] leading-relaxed text-muted-foreground">
+                <p>{returnContext(fact)}</p>
+                {fact?.state === "manual" && fact.reason && (
+                  <details className="mt-1">
+                    <summary className="cursor-pointer">Review note</summary>
+                    <p className="mt-1 break-words">{fact.reason}</p>
+                  </details>
+                )}
+              </div>
+            )}
+            {cell.num != null && row.key === "debt_amount" && (
+              <p className="mt-1 text-right text-[10px] leading-relaxed text-muted-foreground">
+                {deal.analysis?.financing?.debt_amount_kind ? deal.analysis.financing.debt_amount_label : "Debt basis unspecified"}
+              </p>
+            )}
+          </div>
+        );
+      })}
     </motion.div>
   );
 }

@@ -1,3 +1,5 @@
+import type { FinancingAnalysis } from './financing-measures';
+
 export type DealStatus = "reviewing" | "interested" | "passed" | "committed" | "closed";
 
 export interface DealSummary {
@@ -45,6 +47,15 @@ export interface AnalysisQuestion {
   issues: Array<{ path: string; reason: string; state: string }>;
 }
 
+export interface ReturnSchedule {
+  investor_class: string;
+  equity_basis: string;
+  period_basis: string;
+  assumptions: string;
+  rows: Array<{ year: number; cash_on_cash_pct: number | null; note: string; source_excerpt: string; source_cell?: string | null }>;
+  evidence: AnalysisFact["evidence"];
+}
+
 export interface DealAnalysis {
   schema_version: number;
   version: number;
@@ -54,8 +65,10 @@ export interface DealAnalysis {
   primary_strategy: string;
   investor_class: string;
   facts: Record<string, AnalysisFact>;
+  financing?: FinancingAnalysis;
   questions: AnalysisQuestion[];
   returns: CanonicalReturnSummary;
+  return_schedule?: ReturnSchedule | null;
   coverage: { accepted: number; checked: number; manual: number; calculated: number; total: number };
   unclassified_paths: string[];
 }

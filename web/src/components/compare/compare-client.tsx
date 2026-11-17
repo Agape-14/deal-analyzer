@@ -14,6 +14,7 @@ import { DealPicker } from "./deal-picker";
 import { DealHeaderRow } from "./deal-header-row";
 import { MetricsTable, type CompareMode } from "./metrics-table";
 import { CustomPresetDrawer, readCustomPreset } from "./custom-preset-drawer";
+import { ReturnScheduleTable } from "@/components/deal-detail/return-schedule-panel";
 
 const VALID_MODES: CompareMode[] = ["values", "winners", "deltas", "normalized"];
 
@@ -25,8 +26,8 @@ const VALID_MODES: CompareMode[] = ["values", "winners", "deltas", "normalized"]
  *   ?baseline=1      — baseline deal for delta mode
  *
  * Fetching the detailed compare data uses /api/deals/compare which returns
- * full DealDetail objects (metrics + scores). We keep a tiny in-memory cache
- * keyed by the comma-sorted id list so flipping between presets is instant.
+ * full DealDetail objects (metrics + scores). Changing the selection reloads
+ * its latest saved revisions.
  */
 export function CompareClient({ deals }: { deals: DealSummary[] }) {
   const router = useRouter();
@@ -70,8 +71,6 @@ export function CompareClient({ deals }: { deals: DealSummary[] }) {
   const [error, setError] = React.useState<string | null>(null);
   const [retryCount, setRetryCount] = React.useState(0);
 
-  const cacheRef = React.useRef(new Map<string, DealDetail[]>());
-
   // Load custom preset once on mount
   React.useEffect(() => {
     const c = readCustomPreset();
@@ -86,13 +85,6 @@ export function CompareClient({ deals }: { deals: DealSummary[] }) {
     if (selectedIds.length < 2) {
       return;
     }
-    const key = [...selectedIds].sort((a, b) => a - b).join(",");
-    const cached = cacheRef.current.get(key);
-    if (cached) {
-      // Re-order to match the ids in the URL (user-visible order)
-      setDetails(reorder(cached, selectedIds));
-      return;
-    }
     const controller = new AbortController();
     let active = true;
     setLoading(true);
@@ -103,7 +95,6 @@ export function CompareClient({ deals }: { deals: DealSummary[] }) {
       })
       .then((res) => {
         if (!active) return;
-        cacheRef.current.set(key, res.deals);
         setDetails(reorder(res.deals, selectedIds));
       })
       .catch((e) => {
@@ -276,6 +267,20 @@ export function CompareClient({ deals }: { deals: DealSummary[] }) {
               baselineId={mode === "deltas" ? baselineId ?? selectedIds[0] : null}
               cols={cols}
             />
+          )}
+          {details.some(deal => deal.analysis?.return_schedule) && (
+            <section className="mt-6 grid gap-4" aria-label="Year-by-year return projections">
+              <h2 className="text-base font-semibold">Year-by-year return projections</h2>
+              {details.map(deal => {
+                const schedule = deal.analysis?.return_schedule;
+                return schedule ? (
+                  <Card key={deal.id} className="space-y-3 p-4">
+                    <h3 className="text-sm font-semibold">{deal.project_name}</h3>
+                    <ReturnScheduleTable schedule={schedule} />
+                  </Card>
+                ) : null;
+              })}
+            </section>
           )}
         </>
       )}

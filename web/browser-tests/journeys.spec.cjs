@@ -175,6 +175,28 @@ test('Codex review comes first with API credits available under review options',
   await expect(page.getByRole('heading', { name: 'Codex review draft' })).toBeVisible();
   await expect(page.getByRole('checkbox', { name: 'Minimum investment · 40,000' })).toBeChecked();
   await expect(page.getByText(excerpt, { exact: true })).toBeVisible();
+
+  await page.getByRole('button', { name: 'Paste JSON', exact: true }).click();
+  const reviewJson = page.getByRole('textbox', { name: 'Codex review JSON', exact: true });
+  const checkPaste = page.getByRole('button', { name: 'Check pasted result', exact: true });
+  await expect(reviewJson).toBeFocused();
+  await expect(checkPaste).toBeDisabled();
+  await reviewJson.fill('not a JSON result');
+  await checkPaste.click();
+  await expect(page.getByText('Use the JSON object that Codex produced.', { exact: true })).toBeVisible();
+
+  await reviewJson.fill(JSON.stringify({ ...result, package_id: '0'.repeat(64) }));
+  await checkPaste.click();
+  await expect(page.getByText('This result is for a different or older source package. Download a new packet.', { exact: true })).toBeVisible();
+  await expect(page.getByRole('checkbox', { name: 'Minimum investment · 40,000' })).toBeChecked();
+
+  await reviewJson.fill('```json\n' + JSON.stringify(result) + '\n```');
+  await checkPaste.click();
+  await expect(reviewJson).toBeHidden();
+  await expect(page.getByText(excerpt, { exact: true })).toBeVisible();
+  const pending = await (await page.request.get(`/api/deals/${id}`)).json();
+  expect(pending.analysis.accepted_metrics.deal_structure?.minimum_investment ?? null).toBeNull();
+
   await page.getByRole('button', { name: 'Apply 1 value', exact: true }).click();
   await expect(page.getByText(/1 value applied/)).toBeVisible();
   const deal = await (await page.request.get(`/api/deals/${id}`)).json();
@@ -242,6 +264,99 @@ test('unsupported models show reasons and assistant works without provider credi
   await expect(page.getByText(/IRR: Unavailable in the current reviewed analysis/)).toBeVisible();
   await expect(page.getByPlaceholder('Ask about accepted returns, terms or missing evidence…')).toBeEnabled();
 });
+test('new deal reviews PDF and workbook through Codex paste, Summary, Compare, and exports', async ({ page }) => {
+  const { execFileSync } = require('node:child_process');
+  const artifacts = JSON.parse(execFileSync('python', ['-c', [
+    'from base64 import b64encode',
+    'from io import BytesIO',
+    'import json',
+    'from openpyxl import Workbook',
+    'from reportlab.pdfgen.canvas import Canvas',
+    'pdf = BytesIO()',
+    'memo = Canvas(pdf)',
+    'memo.drawString(60, 720, "Minimum investment: $60,000")',
+    'memo.drawString(60, 690, "Investment strategy: hold")',
+    'memo.save()',
+    'workbook = BytesIO()',
+    'model = Workbook()',
+    'model.active.title = "Underwriting"',
+    'model.active.append(["Apartment units", 42])',
+    'model.save(workbook)',
+    'print(json.dumps({"pdf": b64encode(pdf.getvalue()).decode(), "xlsx": b64encode(workbook.getvalue()).decode()}))',
+  ].join('\n')], { encoding: 'utf8' }));
+
+  const created = await page.request.post('/api/deals', { data: { project_name: 'Mixed Sources Pilot' } });
+  expect(created.ok()).toBeTruthy();
+  const { id } = await created.json();
+  const base = '/api/deals/' + id;
+  try {
+    for (const [name, mimeType, encoded] of [
+      ['pilot-offering.pdf', 'application/pdf', artifacts.pdf],
+      ['pilot-underwriting.xlsx', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', artifacts.xlsx],
+    ]) {
+      const upload = await page.request.post(base + '/documents/upload', {
+        multipart: { file: {name, mimeType, buffer: Buffer.from(encoded, 'base64')} },
+      });
+      expect(upload.ok()).toBeTruthy();
+    }
+
+    await expect.poll(async () => (await page.request.get(base + '/review/packet')).status()).toBe(200);
+    const { packet } = await (await page.request.get(base + '/review/packet')).json();
+    const memo = packet.sources.find(source => source.filename === 'pilot-offering.pdf');
+    const model = packet.sources.find(source => source.filename === 'pilot-underwriting.xlsx');
+    expect(memo.text).toContain('Minimum investment: $60,000');
+    expect(model.text).toContain('A1=Apartment units | B1=42');
+    const result = { package_id: packet.package_id, facts: [
+      {path: 'deal_structure.minimum_investment', value: 60000, currency: 'USD',
+        source_doc_id: memo.id, source_page: 1, source_excerpt: 'Minimum investment: $60,000'},
+      {path: 'project_details.unit_count', value: 42,
+        source_doc_id: model.id, source_sheet: 'Underwriting', source_cell: 'B1', source_excerpt: 'A1=Apartment units | B1=42'},
+    ] };
+
+    await dealPage(page, id, 'documents');
+    await page.getByRole('button', { name: 'Paste JSON', exact: true }).click();
+    await page.getByRole('textbox', { name: 'Codex review JSON' }).fill(JSON.stringify(result));
+    await page.getByRole('button', { name: 'Check pasted result', exact: true }).click();
+    await expect(page.getByRole('heading', { name: 'Codex review draft' })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Apply 2 values', exact: true })).toBeEnabled();
+    const before = await (await page.request.get(base)).json();
+    expect(before.analysis.facts['project_details.unit_count'].value).toBeNull();
+    await page.getByRole('button', { name: 'Apply 2 values', exact: true }).click();
+    await expect(page.getByText(/2 values applied/)).toBeVisible();
+
+    await page.getByRole('tab', { name: 'Summary', exact: true }).click();
+    const summary = page.getByRole('tabpanel', { name: 'Summary', exact: true });
+    await expect(summary.getByText('$60K', { exact: true })).toBeVisible();
+    await expect(summary.getByText('42', { exact: true })).toBeVisible();
+    const deal = await (await page.request.get(base)).json();
+    expect(deal.analysis.facts['deal_structure.minimum_investment']).toMatchObject({value: 60000, state: 'checked'});
+    expect(deal.analysis.facts['project_details.unit_count'].evidence[0]).toMatchObject({sheet: 'Underwriting', cell: 'B1'});
+    const report = await page.request.get('/api/reports/deal/' + id + '/pdf');
+    expect(report.ok()).toBeTruthy();
+    const reportText = execFileSync('pdftotext', ['-', '-'], {input: await report.body(), encoding: 'utf8'});
+    expect(reportText).toContain('$60,000');
+    expect(reportText).toMatch(/Unit Count\s+42/);
+
+    await page.goto('/compare?ids=' + id + ',1');
+    const minRow = page.getByTestId('compare-row-min_investment');
+    await expect(minRow.getByText('$60K', { exact: true })).toBeVisible();
+    const compare = await page.request.post('/api/deals/compare', {data: {deal_ids: [id, 1]}});
+    expect((await compare.json()).deals[0].analysis.facts['project_details.unit_count'].value).toBe(42);
+    const exported = await page.request.post('/api/deals/compare/export', {data: {deal_ids: [id, 1]}});
+    expect(exported.ok()).toBeTruthy();
+    const minimum = execFileSync('python', ['-c', [
+      'from io import BytesIO',
+      'from openpyxl import load_workbook',
+      'import sys',
+      'sheet = load_workbook(BytesIO(sys.stdin.buffer.read())).active',
+      'print(next(row[1] for row in sheet.values if row[0] == "Minimum Investment"))',
+    ].join('\n')], {input: await exported.body(), encoding: 'utf8'}).trim();
+    expect(minimum).toBe('60000');
+  } finally {
+    expect((await page.request.delete(base)).ok()).toBeTruthy();
+  }
+});
+
 test('all three deals compare with matching accepted returns and export', async ({ page }, info) => {
   await page.goto('/compare');
   await page.getByRole('button', { name: 'Pick deals', exact: true }).click();

@@ -32,6 +32,9 @@ from app.models import Deal, Developer, Investment
 from app.services.portfolio_analytics import portfolio_analytics
 from app.services.canonical_metrics import canonical_return_summary
 from app.services.analysis import analysis_for_deal, effective_scores
+from app.services.financial_presentation import (
+    RETURN_LABELS, accepted_return_fact, return_context, return_evidence, schedule_context, source_reference,
+)
 
 router = APIRouter()
 
@@ -107,6 +110,12 @@ def _metric_table(pairs: list[tuple[str, str]]):
     return t
 
 
+def _pdf_return_value(display, fact, styles):
+    details = "<br/>".join(escape(part) for part in (display, return_context(fact), return_evidence(fact)) if part)
+    from reportlab.platypus import Paragraph
+    return Paragraph(details, styles["Small"])
+
+
 # ===== Deal PDF =====
 
 @router.get("/deal/{deal_id}/pdf")
@@ -130,6 +139,7 @@ async def deal_pdf_report(deal_id: int, db: AsyncSession = Depends(get_db)):
     ds = metrics.get("deal_structure", {}) or {}
     tr = metrics.get("target_returns", {}) or {}
     returns = analysis["returns"]
+    financing = analysis.get("financing") or {}
     pd_ = metrics.get("project_details", {}) or {}
     fp = metrics.get("financial_projections", {}) or {}
     ml = metrics.get("market_location", {}) or {}
@@ -185,24 +195,53 @@ async def deal_pdf_report(deal_id: int, db: AsyncSession = Depends(get_db)):
         ("Minimum Investment", _fmt_money(ds.get("minimum_investment"))),
         ("Total Project Cost", _fmt_money(ds.get("total_project_cost"))),
         ("Total Equity", _fmt_money(ds.get("total_equity_required"))),
-        ("Debt Amount", _fmt_money(ds.get("debt_amount"))),
+        (Paragraph(escape(financing.get("debt_amount_label") or "Debt amount"), styles["Small"]), _fmt_money(ds.get("debt_amount"))),
         ("LTV", _fmt_pct(ds.get("ltv"))),
         ("Interest Rate", _fmt_pct(ds.get("interest_rate"))),
         ("Hold Period", f"{ds['hold_period_years']} years" if ds.get("hold_period_years") else "—"),
-        ("Preferred Return", _fmt_pct(ds.get("preferred_return"))),
+        ("Preferred Return", _pdf_return_value(_fmt_pct(ds["preferred_return"]), analysis["facts"].get("deal_structure.preferred_return"), styles)
+         if ds.get("preferred_return") is not None else "—"),
         ("GP Co-Invest", str(ds.get("gp_coinvest") or "—")),
         ("Asset Mgmt Fee", _fmt_pct(ds.get("fees_asset_mgmt"))),
     ]))
 
-    # Target returns
+    reviewed_financing = [item for item in financing.get("measures", []) if item.get("state") == "checked"]
+    if reviewed_financing:
+        story.append(Paragraph("Construction Financing", styles["SectionHeading"]))
+        for item in reviewed_financing:
+            story.append(Paragraph(f"<b>{escape(item['label'])}</b> · {_fmt_money(item['amount'])}", styles["BodyText"]))
+            reference = source_reference(item.get("evidence"))
+            note = " · ".join(part for part in (reference, item.get("note")) if part)
+            if note:
+                story.append(Paragraph(escape(note), styles["Small"]))
+
+    # Each accepted return carries its own context. Legacy facts can retain a
+    # source note even when no structured context was recorded.
     story.append(Paragraph("Target Returns", styles["SectionHeading"]))
-    story.append(_metric_table([
-        ("Target IRR", _fmt_pct(returns.get("target_irr"))),
-        ("Target Equity Multiple", f"{returns['target_equity_multiple']}x" if returns.get("target_equity_multiple") is not None else "—"),
-        ("Cash-on-Cash", _fmt_pct(returns.get("cash_on_cash"))),
-        ("Avg Annual Return", _fmt_pct(tr.get("target_avg_annual_return"))),
-        ("Projected Profit", _fmt_money(tr.get("projected_profit"))),
-    ]))
+    return_rows = []
+    for key, label in RETURN_LABELS:
+        value = returns.get(key)
+        display = f"{value}x" if key == "target_equity_multiple" and value is not None else _fmt_pct(value)
+        if value is None:
+            return_rows.append((label, display))
+            continue
+        fact = accepted_return_fact(analysis, key)
+        return_rows.append((label, _pdf_return_value(display, fact, styles)))
+    return_rows.append(("Projected Profit", _fmt_money(tr.get("projected_profit"))))
+    story.append(_metric_table(return_rows))
+
+    schedule = analysis.get("return_schedule")
+    if schedule:
+        story.append(Paragraph("Projected Cash-on-Cash by Year", styles["SectionHeading"]))
+        for context in (schedule_context(schedule), schedule.get("assumptions"), source_reference(schedule["evidence"])):
+            if context:
+                story.append(Paragraph(escape(context), styles["Small"]))
+        rows = []
+        for period in schedule["rows"]:
+            value = _fmt_pct(period["cash_on_cash_pct"]) if period["cash_on_cash_pct"] is not None else "Not projected"
+            details = " · ".join(part for part in (value, period.get("note")) if part)
+            rows.append((f"Year {period['year']}", Paragraph(escape(details), styles["Small"])))
+        story.append(_metric_table(rows))
 
     # Project details
     story.append(Paragraph("Project Details", styles["SectionHeading"]))

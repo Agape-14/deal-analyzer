@@ -15,6 +15,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.services.canonical_metrics import canonical_return_summary, primary_strategy
+from app.services.return_schedules import SCHEDULE_KEY, project_return_schedule
 
 SCHEMA_VERSION = 5
 ACCEPTED = {"checked", "calculated", "manual"}
@@ -97,6 +98,9 @@ def input_fingerprint(metrics, documents, property_type):
     keys = {k: v for k, v in metrics.items() if not k.startswith("_") and k != "validation_flags"}
     for key in ("_provenance", "_locks", "_fact_context", "_analysis_context", "_verified_document_set"):
         keys[key] = metrics.get(key)
+    for key in (SCHEDULE_KEY, "_financing_measures"):
+        if key in metrics:
+            keys[key] = metrics[key]
     if isinstance(keys.get("_provenance"), dict):
         keys["_provenance"] = {p: {k: v for k, v in meta.items() if k not in {"confidence", "extracted_at", "verified_at"}} for p, meta in keys["_provenance"].items() if isinstance(meta, dict)}
     return digest(clean_json({"schema": SCHEMA_VERSION, "metrics": keys, "documents": documents, "property_type": property_type}))
@@ -335,6 +339,10 @@ def build_analysis(metrics, documents=None, property_type="multifamily"):
     accepted["_fact_context"] = contexts
     selection = metrics.get("_analysis_context") or {}
     selected_class = selection.get("investor_class", "unspecified")
+    hold_strategy = strategy in {"hold", "hold_with_sale_option"}
+    schedule = project_return_schedule(metrics, documents) if hold_strategy else None
+    if schedule and selected_class != "unspecified" and selected_class.casefold() != schedule["investor_class"].casefold():
+        schedule = None
     classes = {f.identity.investor_class for p, f in facts.items() if p.startswith("target_returns.") and f.identity.investor_class != "unspecified"}
     ambiguous_class = len(classes) > 1 and selected_class not in classes
     for path, fact in facts.items():
@@ -350,6 +358,10 @@ def build_analysis(metrics, documents=None, property_type="multifamily"):
         for key in ("target_irr", "target_equity_multiple", "cash_on_cash"):
             returns[key] = None
             returns[key + "_path"] = None
+    if schedule:
+        # A reviewed series supplies the hold projection without selecting one year as the headline.
+        returns["cash_on_cash"] = None
+        returns["cash_on_cash_path"] = None
 
     required = {"deal_structure.total_project_cost", "deal_structure.total_equity_required", "deal_structure.debt_amount", "deal_structure.minimum_investment"}
     if property_type in {"multifamily", "mixed-use", "development"}:
@@ -359,11 +371,11 @@ def build_analysis(metrics, documents=None, property_type="multifamily"):
     material = required | {p for p in facts if p.startswith("target_returns.") and p.split(".")[-1] not in {"primary_strategy", "total_project_profit"}}
     # Optional alternate scenarios remain inspectable, not mandatory chores.
     material = {p for p in material if not (".sale_scenario." in p and strategy.startswith("hold")) and not (".hold_scenario." in p and strategy == "sale")}
-    if strategy in {"hold", "hold_with_sale_option"}:
+    if hold_strategy:
         # A hold summary needs a cash yield, not every historic IRR/multiple
         # alias or an optional exit calculation. Keep those facts in Analysis.
         material = {p for p in material if not p.startswith("target_returns.")}
-        if returns.get("cash_on_cash") is None:
+        if returns.get("cash_on_cash") is None and not schedule:
             candidates = ("target_returns.hold_scenario.cash_on_cash_return", "target_returns.target_cash_on_cash",
                           "target_returns.hold_scenario.distribution_yield", "target_returns.distribution_yield")
             material.add(next((p for p in candidates if p in facts and facts[p].value is not None), candidates[0]))
@@ -381,17 +393,21 @@ def build_analysis(metrics, documents=None, property_type="multifamily"):
         grouped[group_for(path)].append({"path": path, "reason": fact.reason, "state": fact.state})
     if strategy == "unknown":
         grouped["Returns"].append({"path": "target_returns.primary_strategy", "reason": "Identify whether the primary strategy is hold or sale before comparing returns.", "state": "missing"})
-    if ambiguous_class:
+    if ambiguous_class and not schedule:
         grouped["Returns"].append({"path": "_analysis_context.investor_class", "reason": "Choose the investor class these returns should represent.", "state": "disputed"})
-    if not any(returns.get(k) is not None for k in ("target_irr", "cash_on_cash", "target_equity_multiple")) and not grouped["Returns"]:
+    if not schedule and not any(returns.get(k) is not None for k in ("target_irr", "cash_on_cash", "target_equity_multiple")) and not grouped["Returns"]:
         grouped["Returns"].append({"path": "target_returns.target_irr", "reason": "No source-supported return is available for the primary strategy.", "state": "missing"})
     questions = [{"id": digest({"area": area, "issues": issues})[:16], "area": area, "title": f"Resolve {area.lower()}", "issues": issues,
                   "impact": "The summary remains incomplete until these evidence or calculation questions are resolved."} for area, issues in sorted(grouped.items()) if issues]
     coverage = {"accepted": sum(f.state in ACCEPTED for f in facts.values()), "checked": sum(f.state == "checked" for f in facts.values()),
                 "manual": sum(f.state == "manual" for f in facts.values()), "calculated": sum(f.state == "calculated" for f in facts.values()), "total": len(facts)}
+    from app.services.financing_measures import project_financing
+
+    financing = project_financing(metrics, documents, (accepted.get("deal_structure") or {}).get("debt_amount"))
     return clean_json({"schema_version": SCHEMA_VERSION, "input_hash": input_fingerprint(metrics, documents, property_type), "version": 0,
             "status": "questions" if questions else "ready", "primary_strategy": strategy, "investor_class": selected_class,
             "facts": {p: f.model_dump() for p, f in sorted(facts.items())}, "returns": returns, "accepted_metrics": accepted,
+            "return_schedule": schedule, "financing": financing,
             "questions": questions, "coverage": coverage, "documents": documents,
             "unclassified_paths": sorted(p for p in flat if p not in REGISTRY)})
 

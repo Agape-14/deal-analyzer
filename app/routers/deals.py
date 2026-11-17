@@ -19,6 +19,9 @@ from app.services.cashflow_projector import project_cash_flows
 from app.services.waterfall_calculator import waterfall_from_deal
 from app.services.canonical_metrics import canonical_return_summary
 from app.services.analysis import analysis_for_deal, effective_scores
+from app.services.financial_presentation import (
+    RETURN_LABELS, accepted_return_fact, return_context, return_evidence, schedule_context, source_reference,
+)
 from app.services.data_integrity import quality_summary
 from app.services.location_intelligence import build_location_bundle
 
@@ -214,6 +217,13 @@ async def update_deal(deal_id: int, data: DealUpdate, db: AsyncSession = Depends
 
     update_data = data.model_dump(exclude_unset=True)
     update_data.pop("expected_revision", None)
+    if update_data.get("metrics") is not None:
+        metrics = update_data["metrics"]
+        stored = deal.metrics or {}
+        for key in ("_return_schedule", "_financing_measures"):
+            metrics.pop(key, None)
+            if key in stored:
+                metrics[key] = stored[key]
     if "developer_id" in update_data and update_data["developer_id"] is not None:
         sponsor = await db.get(Developer, update_data["developer_id"])
         if not sponsor or sponsor.deleted_at is not None:
@@ -565,6 +575,26 @@ async def compare_deals(data: CompareRequest, db: AsyncSession = Depends(get_db)
     return {"deals": comparison}
 
 
+def _write_comparison_sheet(sheet, headers, rows, widths):
+    from openpyxl.styles import Alignment, Font, PatternFill
+    from openpyxl.utils import get_column_letter
+
+    sheet.append(headers)
+    for cell in sheet[1]:
+        cell.font = Font(bold=True, color="FFFFFF")
+        cell.fill = PatternFill(start_color="1a1a2e", end_color="1a1a2e", fill_type="solid")
+    for index, width in enumerate(widths, 1):
+        sheet.column_dimensions[get_column_letter(index)].width = width
+    for row_number, values in enumerate(rows, 2):
+        for column, value in enumerate(values, 1):
+            cell = sheet.cell(row_number, column, value)
+            if isinstance(value, str):
+                cell.data_type = "s"
+                cell.alignment = Alignment(vertical="top", wrap_text=True)
+    sheet.freeze_panes = "C2"
+    sheet.auto_filter.ref = sheet.dimensions
+
+
 @router.post("/compare/export")
 async def export_comparison(data: CompareRequest, db: AsyncSession = Depends(get_db)):
     """Export deal comparison as Excel."""
@@ -573,6 +603,7 @@ async def export_comparison(data: CompareRequest, db: AsyncSession = Depends(get
 
     deals = await _comparison_deals(data, db)
 
+    analyses = {deal.id: analysis_for_deal(deal) for deal in deals}
     wb = openpyxl.Workbook()
     ws = wb.active
     ws.title = "Deal Comparison"
@@ -594,11 +625,12 @@ async def export_comparison(data: CompareRequest, db: AsyncSession = Depends(get
 
     for col_idx, deal in enumerate(deals, 2):
         cell = ws.cell(row=1, column=col_idx, value=deal.project_name)
+        cell.data_type = "s"
         cell.font = header_font
         cell.fill = header_fill
         cell.border = thin_border
         cell.alignment = Alignment(horizontal="center")
-        ws.column_dimensions[openpyxl.utils.get_column_letter(col_idx)].width = 22
+        ws.column_dimensions[openpyxl.utils.get_column_letter(col_idx)].width = 36
 
     # Define metric rows by section
     sections = [
@@ -611,54 +643,63 @@ async def export_comparison(data: CompareRequest, db: AsyncSession = Depends(get
             ("Financials Score", lambda d: (effective_scores(d).get("financials") or {}).get("score")),
         ]),
         ("DEAL STRUCTURE", [
-            ("Investment Class", lambda d: (analysis_for_deal(d)["accepted_metrics"].get("deal_structure") or {}).get("investment_class")),
-            ("Minimum Investment", lambda d: (analysis_for_deal(d)["accepted_metrics"].get("deal_structure") or {}).get("minimum_investment")),
-            ("Total Project Cost", lambda d: (analysis_for_deal(d)["accepted_metrics"].get("deal_structure") or {}).get("total_project_cost")),
-            ("Total Equity", lambda d: (analysis_for_deal(d)["accepted_metrics"].get("deal_structure") or {}).get("total_equity_required")),
-            ("Debt Amount", lambda d: (analysis_for_deal(d)["accepted_metrics"].get("deal_structure") or {}).get("debt_amount")),
-            ("LTV", lambda d: (analysis_for_deal(d)["accepted_metrics"].get("deal_structure") or {}).get("ltv")),
-            ("Interest Rate", lambda d: (analysis_for_deal(d)["accepted_metrics"].get("deal_structure") or {}).get("interest_rate")),
-            ("Hold Period (yrs)", lambda d: (analysis_for_deal(d)["accepted_metrics"].get("deal_structure") or {}).get("hold_period_years")),
-            ("Preferred Return", lambda d: (analysis_for_deal(d)["accepted_metrics"].get("deal_structure") or {}).get("preferred_return")),
-            ("GP Co-Invest", lambda d: (analysis_for_deal(d)["accepted_metrics"].get("deal_structure") or {}).get("gp_coinvest")),
-            ("Asset Mgmt Fee", lambda d: (analysis_for_deal(d)["accepted_metrics"].get("deal_structure") or {}).get("fees_asset_mgmt")),
+            ("Investment Class", lambda d: (analyses[d.id]["accepted_metrics"].get("deal_structure") or {}).get("investment_class")),
+            ("Minimum Investment", lambda d: (analyses[d.id]["accepted_metrics"].get("deal_structure") or {}).get("minimum_investment")),
+            ("Total Project Cost", lambda d: (analyses[d.id]["accepted_metrics"].get("deal_structure") or {}).get("total_project_cost")),
+            ("Total Equity", lambda d: (analyses[d.id]["accepted_metrics"].get("deal_structure") or {}).get("total_equity_required")),
+            ("Debt Amount", lambda d: (analyses[d.id]["accepted_metrics"].get("deal_structure") or {}).get("debt_amount")),
+            ("Debt Basis", lambda d: (analyses[d.id].get("financing") or {}).get("debt_amount_label") if
+             (analyses[d.id]["accepted_metrics"].get("deal_structure") or {}).get("debt_amount") is not None else None),
+            ("LTV", lambda d: (analyses[d.id]["accepted_metrics"].get("deal_structure") or {}).get("ltv")),
+            ("Interest Rate", lambda d: (analyses[d.id]["accepted_metrics"].get("deal_structure") or {}).get("interest_rate")),
+            ("Hold Period (yrs)", lambda d: (analyses[d.id]["accepted_metrics"].get("deal_structure") or {}).get("hold_period_years")),
+            ("Preferred Return", lambda d: (analyses[d.id]["accepted_metrics"].get("deal_structure") or {}).get("preferred_return")),
+            ("Preferred Return Context", lambda d: return_context(analyses[d.id]["facts"].get("deal_structure.preferred_return"))
+             if (analyses[d.id]["accepted_metrics"].get("deal_structure") or {}).get("preferred_return") is not None else None),
+            ("GP Co-Invest", lambda d: (analyses[d.id]["accepted_metrics"].get("deal_structure") or {}).get("gp_coinvest")),
+            ("Asset Mgmt Fee", lambda d: (analyses[d.id]["accepted_metrics"].get("deal_structure") or {}).get("fees_asset_mgmt")),
         ]),
         ("TARGET RETURNS", [
-            ("Target IRR", lambda d: analysis_for_deal(d)["returns"].get("target_irr")),
-            ("Equity Multiple", lambda d: analysis_for_deal(d)["returns"].get("target_equity_multiple")),
-            ("Cash-on-Cash", lambda d: analysis_for_deal(d)["returns"].get("cash_on_cash")),
-            ("Avg Annual Return", lambda d: (analysis_for_deal(d)["accepted_metrics"].get("target_returns") or {}).get("target_avg_annual_return")),
-            ("Projected Profit", lambda d: (analysis_for_deal(d)["accepted_metrics"].get("target_returns") or {}).get("projected_profit")),
+            row
+            for key, label in RETURN_LABELS
+            for row in (
+                (label, lambda d, key=key: analyses[d.id]["returns"].get(key)),
+                (f"{label} Context", lambda d, key=key: return_context(accepted_return_fact(analyses[d.id], key))
+                 if analyses[d.id]["returns"].get(key) is not None else None),
+                (f"{label} Evidence", lambda d, key=key: return_evidence(accepted_return_fact(analyses[d.id], key))),
+            )
+        ] + [
+            ("Projected Profit", lambda d: (analyses[d.id]["accepted_metrics"].get("target_returns") or {}).get("projected_profit")),
         ]),
         ("PROJECT DETAILS", [
-            ("Unit Count", lambda d: (analysis_for_deal(d)["accepted_metrics"].get("project_details") or {}).get("unit_count")),
-            ("Total SqFt", lambda d: (analysis_for_deal(d)["accepted_metrics"].get("project_details") or {}).get("total_sqft")),
-            ("Price/Unit", lambda d: (analysis_for_deal(d)["accepted_metrics"].get("project_details") or {}).get("price_per_unit")),
-            ("Price/SqFt", lambda d: (analysis_for_deal(d)["accepted_metrics"].get("project_details") or {}).get("price_per_sqft")),
-            ("Construction Type", lambda d: (analysis_for_deal(d)["accepted_metrics"].get("project_details") or {}).get("construction_type")),
-            ("Entitlement Status", lambda d: (analysis_for_deal(d)["accepted_metrics"].get("project_details") or {}).get("entitlement_status")),
+            ("Unit Count", lambda d: (analyses[d.id]["accepted_metrics"].get("project_details") or {}).get("unit_count")),
+            ("Total SqFt", lambda d: (analyses[d.id]["accepted_metrics"].get("project_details") or {}).get("total_sqft")),
+            ("Price/Unit", lambda d: (analyses[d.id]["accepted_metrics"].get("project_details") or {}).get("price_per_unit")),
+            ("Price/SqFt", lambda d: (analyses[d.id]["accepted_metrics"].get("project_details") or {}).get("price_per_sqft")),
+            ("Construction Type", lambda d: (analyses[d.id]["accepted_metrics"].get("project_details") or {}).get("construction_type")),
+            ("Entitlement Status", lambda d: (analyses[d.id]["accepted_metrics"].get("project_details") or {}).get("entitlement_status")),
         ]),
         ("CONSTRUCTION COSTS", [
-            ("Total Project Cost", lambda d: (analysis_for_deal(d)["accepted_metrics"].get("construction_costs") or {}).get("total_project_cost")),
-            ("Total Cost/Unit", lambda d: (analysis_for_deal(d)["accepted_metrics"].get("construction_costs") or {}).get("total_project_cost_per_unit")),
-            ("Hard Costs Total", lambda d: (analysis_for_deal(d)["accepted_metrics"].get("construction_costs") or {}).get("hard_costs_total")),
-            ("Hard Costs/Unit", lambda d: (analysis_for_deal(d)["accepted_metrics"].get("construction_costs") or {}).get("hard_costs_per_unit")),
-            ("Hard Costs/SqFt", lambda d: (analysis_for_deal(d)["accepted_metrics"].get("construction_costs") or {}).get("hard_costs_per_sqft")),
-            ("Land Cost", lambda d: (analysis_for_deal(d)["accepted_metrics"].get("construction_costs") or {}).get("land_cost_total")),
-            ("Land Cost/Unit", lambda d: (analysis_for_deal(d)["accepted_metrics"].get("construction_costs") or {}).get("land_cost_per_unit")),
-            ("Soft Costs", lambda d: (analysis_for_deal(d)["accepted_metrics"].get("construction_costs") or {}).get("soft_costs_total")),
-            ("Contingency", lambda d: (analysis_for_deal(d)["accepted_metrics"].get("construction_costs") or {}).get("contingency_total")),
-            ("Contingency %", lambda d: (analysis_for_deal(d)["accepted_metrics"].get("construction_costs") or {}).get("contingency_pct")),
-            ("Financing Costs", lambda d: (analysis_for_deal(d)["accepted_metrics"].get("construction_costs") or {}).get("financing_costs_total")),
-            ("Developer Fee", lambda d: (analysis_for_deal(d)["accepted_metrics"].get("construction_costs") or {}).get("developer_fee_total")),
+            ("Total Project Cost", lambda d: (analyses[d.id]["accepted_metrics"].get("construction_costs") or {}).get("total_project_cost")),
+            ("Total Cost/Unit", lambda d: (analyses[d.id]["accepted_metrics"].get("construction_costs") or {}).get("total_project_cost_per_unit")),
+            ("Hard Costs Total", lambda d: (analyses[d.id]["accepted_metrics"].get("construction_costs") or {}).get("hard_costs_total")),
+            ("Hard Costs/Unit", lambda d: (analyses[d.id]["accepted_metrics"].get("construction_costs") or {}).get("hard_costs_per_unit")),
+            ("Hard Costs/SqFt", lambda d: (analyses[d.id]["accepted_metrics"].get("construction_costs") or {}).get("hard_costs_per_sqft")),
+            ("Land Cost", lambda d: (analyses[d.id]["accepted_metrics"].get("construction_costs") or {}).get("land_cost_total")),
+            ("Land Cost/Unit", lambda d: (analyses[d.id]["accepted_metrics"].get("construction_costs") or {}).get("land_cost_per_unit")),
+            ("Soft Costs", lambda d: (analyses[d.id]["accepted_metrics"].get("construction_costs") or {}).get("soft_costs_total")),
+            ("Contingency", lambda d: (analyses[d.id]["accepted_metrics"].get("construction_costs") or {}).get("contingency_total")),
+            ("Contingency %", lambda d: (analyses[d.id]["accepted_metrics"].get("construction_costs") or {}).get("contingency_pct")),
+            ("Financing Costs", lambda d: (analyses[d.id]["accepted_metrics"].get("construction_costs") or {}).get("financing_costs_total")),
+            ("Developer Fee", lambda d: (analyses[d.id]["accepted_metrics"].get("construction_costs") or {}).get("developer_fee_total")),
         ]),
         ("FINANCIAL PROJECTIONS", [
-            ("Stabilized NOI", lambda d: (analysis_for_deal(d)["accepted_metrics"].get("financial_projections") or {}).get("stabilized_noi")),
-            ("Entry Cap Rate", lambda d: (analysis_for_deal(d)["accepted_metrics"].get("financial_projections") or {}).get("entry_cap_rate")),
-            ("Exit Cap Rate", lambda d: (analysis_for_deal(d)["accepted_metrics"].get("financial_projections") or {}).get("exit_cap_rate")),
-            ("Avg Rent/Unit", lambda d: (analysis_for_deal(d)["accepted_metrics"].get("financial_projections") or {}).get("avg_rent_per_unit")),
-            ("Rent Growth", lambda d: (analysis_for_deal(d)["accepted_metrics"].get("financial_projections") or {}).get("rent_growth_assumption")),
-            ("Occupancy", lambda d: (analysis_for_deal(d)["accepted_metrics"].get("financial_projections") or {}).get("occupancy_assumption")),
+            ("Stabilized NOI", lambda d: (analyses[d.id]["accepted_metrics"].get("financial_projections") or {}).get("stabilized_noi")),
+            ("Entry Cap Rate", lambda d: (analyses[d.id]["accepted_metrics"].get("financial_projections") or {}).get("entry_cap_rate")),
+            ("Exit Cap Rate", lambda d: (analyses[d.id]["accepted_metrics"].get("financial_projections") or {}).get("exit_cap_rate")),
+            ("Avg Rent/Unit", lambda d: (analyses[d.id]["accepted_metrics"].get("financial_projections") or {}).get("avg_rent_per_unit")),
+            ("Rent Growth", lambda d: (analyses[d.id]["accepted_metrics"].get("financial_projections") or {}).get("rent_growth_assumption")),
+            ("Occupancy", lambda d: (analyses[d.id]["accepted_metrics"].get("financial_projections") or {}).get("occupancy_assumption")),
         ]),
     ]
 
@@ -679,7 +720,11 @@ async def export_comparison(data: CompareRequest, db: AsyncSession = Depends(get
                 val = getter(deal)
                 cell = ws.cell(row=row, column=col_idx, value=val)
                 cell.border = thin_border
-                cell.alignment = Alignment(horizontal="center")
+                if isinstance(val, str):
+                    cell.data_type = "s"
+                    cell.alignment = Alignment(vertical="top", wrap_text=True)
+                else:
+                    cell.alignment = Alignment(horizontal="center")
                 if isinstance(val, (int, float)):
                     values.append((col_idx, val))
 
@@ -693,6 +738,33 @@ async def export_comparison(data: CompareRequest, db: AsyncSession = Depends(get
                     ws.cell(row=row, column=worst_col).fill = red_fill
             row += 1
         row += 1  # Space between sections
+
+    projections = []
+    debt_measures = []
+    for deal in deals:
+        analysis = analyses[deal.id]
+        schedule = analysis.get("return_schedule")
+        if schedule:
+            for projection in schedule["rows"]:
+                projections.append((
+                    deal.project_name, projection["year"], projection["cash_on_cash_pct"],
+                    schedule_context(schedule), projection.get("note"), schedule.get("assumptions"),
+                    source_reference(schedule["evidence"]),
+                ))
+        for measure in (analysis.get("financing") or {}).get("measures", []):
+            if measure.get("state") == "checked":
+                debt_measures.append((
+                    deal.project_name, measure["label"], measure["amount"], measure["currency"], measure.get("note"),
+                    source_reference(measure.get("evidence")),
+                ))
+    if projections:
+        _write_comparison_sheet(wb.create_sheet("Return Projections"), (
+            "Deal", "Year", "Annual cash-on-cash (%)", "Context", "Year note", "Assumptions", "Source",
+        ), projections, (28, 9, 26, 56, 38, 56, 38))
+    if debt_measures:
+        _write_comparison_sheet(wb.create_sheet("Construction Financing"), (
+            "Deal", "Metric", "Amount", "Currency", "Note", "Source",
+        ), debt_measures, (28, 36, 17, 12, 52, 38))
 
     # Save to bytes
     buffer = io.BytesIO()
