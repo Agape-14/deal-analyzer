@@ -44,8 +44,10 @@ jobs:
           node-version: "22"
           cache: npm
           cache-dependency-path: web/package-lock.json
-      - name: Record dependency audit
-        run: npm audit --audit-level=high --json > dependency-audit.json
+      - name: Record and verify dependency audit
+        run: |
+          npm audit --audit-level=high --json > dependency-audit.json || test -s dependency-audit.json
+          node scripts/check-dependency-audit.cjs
       - uses: actions/upload-artifact@v4
         if: always()
         with:
