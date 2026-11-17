@@ -47,6 +47,7 @@ jobs:
       - name: Record dependency audit
         run: npm audit --audit-level=high --json > dependency-audit.json
       - uses: actions/upload-artifact@v4
+        if: always()
         with:
           name: frontend-dependency-review
           path: |
