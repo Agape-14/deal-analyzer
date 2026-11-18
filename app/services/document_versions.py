@@ -60,6 +60,9 @@ def document_payloads(documents):
         unread_images = [str(d["page"]) for d in diagnostics if d.get("image_text_unread")]
         if unread_images:
             warnings.append(f"Large images on pages {', '.join(unread_images)} could not be fully read. Review the original for tables or figures missing from the extracted text.")
+        weak_pages = [str(page["page"]) for page in diagnostics if page.get("source") == "ocr_weak"]
+        if weak_pages:
+            warnings.append(f"Text on pages {', '.join(weak_pages)} was only partially recognized. Review the original for missing text or figures.")
         links = max((d.get("external_workbook_links", 0) for d in diagnostics), default=0)
         if links:
             warnings.append(f"Uses {links} external workbook links. Saved values can be checked, but formulas cannot be fully recalculated without the linked workbooks.")
@@ -68,6 +71,8 @@ def document_payloads(documents):
         omitted = max((d.get("omitted_sheets", 0) for d in diagnostics), default=0)
         if omitted:
             warnings.append(f"{omitted} spreadsheet sheets exceed the reading limit and were not read. Review the original file.")
+        if "[formula has no cached value]" in (getattr(doc, "extracted_text", "") or ""):
+            warnings.append("Some workbook formulas have no saved values. Recalculate and save the original workbook to read those results.")
         result.append({
             "id": doc.id, "filename": doc.filename, "doc_type": doc.doc_type,
             "page_count": doc.page_count, "upload_date": doc.upload_date.isoformat() if doc.upload_date else None,

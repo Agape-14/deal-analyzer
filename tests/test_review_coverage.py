@@ -142,5 +142,10 @@ def test_group_absence_cannot_be_approved_from_an_unread_or_partial_source():
     assert "Read every active source completely" in coverage_rows([document], result)[0]["issue"]
     document.extraction_quality = {"status": "error"}
     assert coverage_rows([document], result)[0]["issue"]
+    document.extraction_quality = {"status": "extracted", "page_diagnostics": [{"page": 2, "source": "ocr_weak"}]}
+    assert "Read every active source completely" in coverage_rows([document], result)[0]["issue"]
     document.extraction_quality = {"status": "extracted"}
     assert coverage_rows([document], result)[0]["issue"] == ""
+    document.extracted_text = "A1=Hard costs | B1=[formula has no cached value]"
+    document.filename = "Budget.xlsx"
+    assert "Read every active source completely" in coverage_rows([document], result)[0]["issue"]

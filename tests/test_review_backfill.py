@@ -76,8 +76,10 @@ async def test_backfill_dry_run_apply_and_exact_replay_preserve_unselected_rows(
     assert detail["analysis"]["facts"]["deal_structure.minimum_investment"]["value"] == 100000
     assert detail["analysis"]["financing"]["debt_amount_kind"] == "draw"
     remaining = (await client.get(f"/api/deals/{item['deal_id']}/review/draft")).json()["draft"]
+    assert not remaining["stale"]
     assert [row["path"] for row in remaining["rows"]] == ["project_details.unit_count"]
     assert remaining["rows"][0]["issue"]
+    assert saved["deals"][0]["remaining_review_rows"] == 1
     replay = await module.execute_plan(plan, engine=engine, apply=True)
     assert replay["deals"][0]["status"] == "already_applied"
     assert (await client.get(f"/api/deals/{item['deal_id']}")).json()["revision"] == detail["revision"]

@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import copy
 import json
 from pathlib import Path
 import sys
@@ -30,7 +31,7 @@ from app.routers.return_schedules import ReturnScheduleUpdate, save_return_sched
 from app.routers.review_drafts import ReviewApproval, approve_draft
 from app.services.analysis import analysis_for_deal, digest, effective_scores
 from app.services.canonical_metrics import get_path
-from app.services.document_context import sha256_file
+from app.services.document_context import documents_fingerprint, sha256_file
 from app.services.document_versions import file_hash, review_documents
 from app.services.financial_presentation import optional_sale_returns
 from app.services.review_drafts import (
@@ -220,6 +221,12 @@ async def _save_deal(db, item, deal, docs, summary, plan_hash, report):
             draft_id=deal.metrics[DRAFT_KEY]["id"], expected_revision=deal.revision,
             paths=item.approve_paths,
         ), db)
+    remaining = copy.deepcopy((deal.metrics or {}).get(DRAFT_KEY))
+    remaining_is_current = (
+        isinstance(remaining, dict)
+        and (remaining.get("result") or {}).get("package_id") == package_identity(deal, docs)
+    )
+    remaining_sources = documents_fingerprint(docs)
     if item.financing is not None:
         data = FinancingUpdate.model_validate(_payload(item.financing, deal.revision))
         await save_financing_measures(deal.id, data, db)
@@ -229,6 +236,20 @@ async def _save_deal(db, item, deal, docs, summary, plan_hash, report):
     if item.return_schedule is not None:
         data = ReturnScheduleUpdate.model_validate(_payload(item.return_schedule, deal.revision))
         await save_return_schedule(deal.id, data, db)
+    docs = await load_documents(db, deal.id)
+    if remaining_is_current and documents_fingerprint(docs) == remaining_sources:
+        updated = ReviewResult.model_validate(remaining["result"]).model_copy(
+            update={"package_id": package_identity(deal, docs)},
+        )
+        rows = validate_rows(deal, docs, updated)
+        deal.metrics = {**(deal.metrics or {}), DRAFT_KEY: draft_record(
+            updated, remaining["provider"], remaining.get("usage"),
+        )}
+        summary["remaining_review_rows"] = len(rows)
+        summary["remaining_review_blocked"] = [{"path": row["path"], "issue": row["issue"]}
+                                                for row in rows if row["issue"]]
+    elif remaining:
+        summary["remaining_review_stale"] = True
     final_package = package_identity(deal, docs)
     receipts = {**((deal.metrics or {}).get(RECEIPT_KEY) or {}),
                 plan_hash: {"final_package_id": final_package}}
