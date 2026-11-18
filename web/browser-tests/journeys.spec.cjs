@@ -94,7 +94,8 @@ test('hold summary withholds unrelated exit returns and stale status claims', as
   const accepted = await (await page.request.get('/api/deals/1')).json();
   expect(accepted.target_irr).toBeNull();
   expect(accepted.target_equity_multiple).toBeNull();
-  await expect(main.getByText('8.5%', { exact: true })).toBeVisible();
+  const summary = main.getByRole('tabpanel', { name: 'Summary', exact: true });
+  await expect(summary.getByText('8.5%', { exact: true })).toBeVisible();
   await expect(main.getByText('27.5%', { exact: true })).toHaveCount(0);
   await expect(main.getByText(/4\.(25|3)x/)).toHaveCount(0);
   await expect(main.getByRole('heading', { name: 'Investment considerations' })).toHaveCount(0);

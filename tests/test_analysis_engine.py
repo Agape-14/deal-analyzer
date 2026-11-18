@@ -123,6 +123,23 @@ def test_explicit_different_investor_classes_do_not_mix():
     assert result["returns"]["target_irr"] is None
 
 
+def test_unaccepted_and_optional_exit_classes_do_not_hide_accepted_hold_return():
+    metrics = manual_metrics()
+    hold = "target_returns.hold_scenario.cash_on_cash_return"
+    forecast = "target_returns.hold_scenario.target_irr"
+    exit_path = "target_returns.sale_scenario.sale_irr"
+    metrics["target_returns"]["hold_scenario"]["target_irr"] = 14
+    metrics["target_returns"]["sale_scenario"] = {"sale_irr": 17}
+    metrics["_provenance"][exit_path] = {"status": "manual"}
+    metrics["_fact_context"] = {hold: {"investor_class": "Class A"}, forecast: {"investor_class": "Class B"},
+                                exit_path: {"investor_class": "Class C"}}
+    analysis = build_analysis(metrics)
+    assert analysis["facts"][forecast]["state"] == "reported"
+    assert analysis["facts"][exit_path]["state"] == "manual"
+    assert analysis["returns"]["cash_on_cash"] == 8
+    assert analysis["returns"]["target_irr"] is None
+
+
 @pytest.mark.parametrize("value", [True, float("nan"), float("inf"), "8-12%"])
 def test_non_numeric_point_values_cannot_become_headlines(value):
     metrics = manual_metrics()

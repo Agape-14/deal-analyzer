@@ -377,13 +377,16 @@ def build_analysis(metrics, documents=None, property_type="multifamily"):
     schedule = project_return_schedule(metrics, documents) if hold_strategy else None
     if schedule and selected_class != "unspecified" and selected_class.casefold() != schedule["investor_class"].casefold():
         schedule = None
-    classes = {f.identity.investor_class for p, f in facts.items() if p.startswith("target_returns.") and f.identity.investor_class != "unspecified"}
+    scenario = "hold" if hold_strategy else strategy
+    returns_for_scenario = [fact for path, fact in facts.items()
+                            if path.startswith("target_returns.") and fact.identity.unit in {"percent", "multiple"}
+                            and fact.state in ACCEPTED and fact.identity.scenario in {"unspecified", scenario}]
+    classes = {fact.identity.investor_class for fact in returns_for_scenario if fact.identity.investor_class != "unspecified"}
     ambiguous_class = len(classes) > 1 and selected_class not in classes
     for path, fact in facts.items():
         if not path.startswith("target_returns.") or fact.identity.unit == "text":
             continue
-        scenario = fact.identity.scenario
-        wrong_scenario = scenario != "unspecified" and scenario != ("hold" if strategy in {"hold", "hold_with_sale_option"} else strategy)
+        wrong_scenario = fact.identity.scenario not in {"unspecified", scenario}
         wrong_class = ambiguous_class or (selected_class != "unspecified" and fact.identity.investor_class not in {selected_class})
         superseded_yield = schedule is not None and fact.identity.metric in {"cash_on_cash", "distribution_yield"}
         if wrong_scenario or wrong_class or superseded_yield:
