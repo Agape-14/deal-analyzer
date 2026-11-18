@@ -88,16 +88,30 @@ test('dashboard filters and separates IRR from cash yield without fake exposure'
   await page.screenshot({ path: info.outputPath('dashboard.png'), fullPage: true });
 });
 
-test('hold summary withholds unrelated exit returns and stale status claims', async ({ page }, info) => {
+test('hold summary keeps primary returns distinct from the accepted optional sale scenario', async ({ page }, info) => {
   await dealPage(page);
   const main = page.getByRole('main');
   const accepted = await (await page.request.get('/api/deals/1')).json();
   expect(accepted.target_irr).toBeNull();
   expect(accepted.target_equity_multiple).toBeNull();
   const summary = main.getByRole('tabpanel', { name: 'Summary', exact: true });
-  await expect(summary.getByText('8.5%', { exact: true })).toBeVisible();
-  await expect(main.getByText('27.5%', { exact: true })).toHaveCount(0);
-  await expect(main.getByText(/4\.(25|3)x/)).toHaveCount(0);
+  const headline = main.getByRole('heading', { level: 1 }).locator('..');
+  const published = summary.getByRole('heading', { name: 'Published returns', exact: true }).locator('..');
+  await expect(published.getByText('8.5%', { exact: true })).toBeVisible();
+  for (const primary of [headline, published]) {
+    await expect(primary.getByText(/27\.5%|4\.(25|3)x/)).toHaveCount(0);
+  }
+  const optional = summary.getByRole('heading', { name: 'Optional sale scenario', exact: true }).locator('..');
+  for (const [path, value] of [
+    ['target_returns.sale_scenario.sale_irr', /27\.5%/],
+    ['target_returns.sale_scenario.sale_equity_multiple', /4\.(25|3)x/],
+  ]) {
+    expect(accepted.analysis.facts[path].state).toBe('manual');
+    expect(accepted.analysis.facts[path].identity.scenario).toBe('sale');
+    const alternate = optional.getByRole('listitem').filter({ hasText: value });
+    await expect(alternate).toBeVisible();
+    await expect(alternate.getByText(/^sale ·/)).toBeVisible();
+  }
   await expect(main.getByRole('heading', { name: 'Investment considerations' })).toHaveCount(0);
   await page.getByRole('tab', { name: 'Questions', exact: true }).click();
   await expect(page.getByText(/No material questions remain/)).toBeVisible();
