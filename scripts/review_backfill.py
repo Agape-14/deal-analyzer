@@ -29,7 +29,8 @@ from app.routers.deal_uploads import reprocess_document
 from app.routers.financing_measures import FinancingUpdate, save_financing_measures
 from app.routers.return_schedules import ReturnScheduleUpdate, save_return_schedule
 from app.routers.review_drafts import ReviewApproval, approve_draft
-from app.services.analysis import analysis_for_deal, digest, effective_scores
+from app.services.analysis import analysis_for_deal, build_analysis, digest, effective_scores, return_review_binding
+from app.services.analysis_store import document_manifest
 from app.services.canonical_metrics import get_path
 from app.services.document_context import documents_fingerprint, sha256_file
 from app.services.document_versions import file_hash, review_documents
@@ -37,6 +38,7 @@ from app.services.financial_presentation import optional_sale_returns
 from app.services.review_drafts import (
     DRAFT_KEY, ReviewResult, draft_record, load_documents, package_identity, validate_rows,
 )
+from app.services.return_schedules import active_sources_fingerprint
 
 
 RECEIPT_KEY = "_review_backfill_receipts"
@@ -120,8 +122,8 @@ def _payload(data, revision):
     return {**data, "expected_revision": revision}
 
 
-def _analysis_summary(deal):
-    analysis = analysis_for_deal(deal)
+def _analysis_summary(deal, analysis=None):
+    analysis = analysis if analysis is not None else analysis_for_deal(deal)
     metrics = analysis["accepted_metrics"]
     budget_paths = {
         "total_project_cost": ("deal_structure.total_project_cost", "construction_costs.total_project_cost"),
@@ -153,6 +155,45 @@ def _analysis_summary(deal):
         "return_schedule_rows": len((analysis.get("return_schedule") or {}).get("rows") or []),
         "score_coverage": effective_scores(deal).get("coverage") or {},
     }
+
+
+def _return_baseline(deal, docs):
+    metrics = deal.metrics or {}
+    manifest = document_manifest(docs)
+    analysis = build_analysis(metrics, manifest, deal.property_type)
+    projected = _analysis_summary(deal, analysis)
+    return_fields = (
+        "primary_strategy", "published_returns", "published_return_contexts", "return_schedule_rows",
+    )
+    result = {key: projected[key] for key in return_fields}
+    displayed = _analysis_summary(deal)
+    result["displayed"] = {key: displayed[key] for key in return_fields}
+    schedule = metrics.get("_return_schedule")
+    result["schedule_record_exists"] = isinstance(schedule, dict)
+    result["schedule_source_set_current"] = (
+        schedule.get("review_document_set") == active_sources_fingerprint(manifest)
+        if isinstance(schedule, dict) else None
+    )
+    result["selected_investor_class"] = analysis["investor_class"]
+    published_paths = {analysis["returns"].get(f"{key}_path")
+                       for key in ("target_irr", "cash_on_cash", "target_equity_multiple")}
+    result["scoped_return_records"] = {}
+    for path, record in (metrics.get("_return_reviews") or {}).items():
+        if not isinstance(record, dict) or record.get("action") != "scope":
+            continue
+        fact = analysis["facts"].get(path)
+        binding_current = bool(fact and record.get("binding") == return_review_binding(metrics, path, fact["value"]))
+        source_set_current = record.get("document_set") == active_sources_fingerprint(manifest)
+        result["scoped_return_records"][path] = {
+            "binding_current": binding_current,
+            "source_set_current": source_set_current,
+            "context_applied": bool(binding_current and source_set_current and fact
+                                    and fact["state"] in {"checked", "calculated", "manual"}
+                                    and all(fact["identity"].get(key) == value
+                                            for key, value in (record.get("context") or {}).items())),
+            "published": path in published_paths,
+        }
+    return result
 
 
 async def _lock_targets(db, plan):
@@ -297,7 +338,18 @@ async def execute_plan(plan: BackfillPlan, *, engine, apply=False):
                     checked_targets.append((item, deal, docs, repeated, summary))
                 for item, deal, docs, repeated, summary in checked_targets:
                     if not repeated:
+                        if not apply:
+                            summary["return_baseline"] = _return_baseline(deal, docs)
                         await _save_deal(db, item, deal, docs, summary, plan_hash, report)
+                        if not apply:
+                            after = _return_baseline(deal, await load_documents(db, deal.id))
+                            summary["return_after"] = after
+                            summary["return_changes"] = {
+                                key: summary["return_baseline"][key] != after[key]
+                                for key in ("primary_strategy", "published_returns", "published_return_contexts",
+                                            "return_schedule_rows", "schedule_record_exists", "scoped_return_records",
+                                            "displayed")
+                            }
             if apply:
                 await connection.commit()
                 report["status"] = "applied"

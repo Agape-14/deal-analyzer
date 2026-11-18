@@ -63,6 +63,8 @@ async def test_backfill_dry_run_apply_and_exact_replay_preserve_unselected_rows(
     assert preview["status"] == "validated"
     assert preview["deals"][0]["revision"] == before["revision"]
     assert preview["deals"][0]["projected_revision"] > before["revision"]
+    assert not any(preview["deals"][0]["return_changes"].values())
+    assert preview["deals"][0]["return_baseline"]["schedule_record_exists"] is False
     assert preview["deals"][0]["analysis"]["accepted_fact_count"] > 0
     assert any(row["issue"] and not row["selected"] for row in preview["deals"][0]["review"])
     after_preview = (await client.get(f"/api/deals/{item['deal_id']}")).json()
