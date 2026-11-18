@@ -11,6 +11,14 @@ BAD_STATUSES = {"wrong", "missing", "unverifiable", "stale", "math_failed"}
 REVIEWED_STATUSES = {"manual", "confirmed", "calculated"}
 HOLD_STRATEGIES = {"hold", "long_term_hold", "hold_with_sale_option"}
 SALE_STRATEGIES = {"sale", "merchant_build", "sale_after_stabilization"}
+HOLD_CASH_YIELD_PATHS = (
+    "target_returns.hold_scenario.cash_on_cash_return",
+    "target_returns.hold_scenario.target_cash_on_cash",
+    "target_returns.target_cash_on_cash",
+    "target_returns.cash_on_cash_return",
+    "target_returns.hold_scenario.distribution_yield",
+    "target_returns.distribution_yield",
+)
 
 
 def get_path(data: Dict[str, Any] | None, path: str) -> Any:
@@ -229,15 +237,7 @@ def canonical_return_summary(metrics: Dict[str, Any] | None) -> Dict[str, Any]:
                     *hold_multiple_paths,
                 ),
             ),
-            pick_metric_detail(
-                metrics,
-                (
-                    "target_returns.hold_scenario.cash_on_cash_return",
-                    "target_returns.target_cash_on_cash",
-                    "target_returns.hold_scenario.distribution_yield",
-                    "target_returns.distribution_yield",
-                ),
-            ),
+            pick_metric_detail(metrics, HOLD_CASH_YIELD_PATHS),
         )
 
     if strategy == "sale":

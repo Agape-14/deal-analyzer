@@ -7,7 +7,7 @@ import { Button } from "@/components/ui/button";
 import { api } from "@/lib/api";
 
 const CODEX_LINK = "codex://new?prompt=" + encodeURIComponent(
-  "I will attach a Deal Analyzer review packet. Follow its instructions and output schema. Compare every proposed fact with its cited source and cross-check figures across the packet. Save the resulting JSON object as deal-review-result.json so I can import it into Deal Analyzer.",
+  "I will attach a Deal Analyzer review packet. Follow its instructions and output schema. Check each quote and compare the figures across sources. Return one JSON code block so I can use Paste JSON in Deal Analyzer.",
 );
 const MAX_RESULT_BYTES = 512_000;
 

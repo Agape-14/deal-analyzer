@@ -12,8 +12,10 @@ type ReturnMetricDeal = {
 const TRUE_IRR_PATHS = ["target_returns.target_irr", "target_returns.net_irr"];
 const CASH_YIELD_PATHS = [
   "target_returns.target_cash_on_cash",
+  "target_returns.cash_on_cash_return",
   "target_returns.distribution_yield",
   "target_returns.hold_scenario.cash_on_cash_return",
+  "target_returns.hold_scenario.target_cash_on_cash",
   "target_returns.hold_scenario.distribution_yield",
 ];
 const MULTIPLE_PATHS = ["target_returns.target_equity_multiple", "target_returns.net_equity_multiple"];

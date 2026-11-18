@@ -42,9 +42,11 @@ Use these checks to catch misclassification. Do not calculate or substitute
 missing figures, take uncached spreadsheet formulas as values, or combine figures
 for different scenarios, periods, investor classes, or debt phases. Omit any
 value whose label, unit, or source cannot be supported. Record context only when
-the source supports it. Use lower-case scenario
-(hold or sale), basis (net or gross), investor class (lp, gp or project), and
-debt phase (construction, permanent or bridge). Use ISO currency codes.
+the source supports it. Use lower-case scenario (hold or sale) and debt phase
+(construction, permanent or bridge). Use the named investor class from the
+source if available, or lp, gp, or project when it describes a generic role.
+Describe calculation basis and timing using the source's terms. Use net or
+gross only when stated. Use ISO currency codes.
 Return the supplied package_id and a JSON object conforming to the output schema.
 """
 
@@ -134,7 +136,7 @@ def review_packet(deal, docs):
 
 def codex_packet(packet):
     return json.dumps(
-        {"instructions": INSTRUCTIONS + "Save the JSON object as deal-review-result.json for import.",
+        {"instructions": INSTRUCTIONS + "Return the JSON object in one JSON code block for Paste JSON. For file import, save the same object as deal-review-result.json.",
          "output_schema": output_schema(), "packet": packet}, ensure_ascii=False, indent=2,
     )
 

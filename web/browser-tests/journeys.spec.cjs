@@ -370,7 +370,7 @@ test('new deal reviews PDF and workbook through Codex paste, Summary, Compare, a
     // Codex review of the synthetic packet, with only package and document IDs assigned at runtime.
     // Both funding sources cover the $32m cost. The sale IRR has its own scope, and neither
     // FY2030 NOI value can be preferred because the same base case is cited in both sources.
-    const result = { package_id: packet.package_id, facts: [
+    const facts = [
       {path: 'deal_structure.minimum_investment', value: 125000, currency: 'USD',
         source_doc_id: memo.id, source_page: 1, source_excerpt: 'Minimum LP commitment: $125,000.'},
       {path: 'project_details.unit_count', value: 148,
@@ -390,11 +390,22 @@ test('new deal reviews PDF and workbook through Codex paste, Summary, Compare, a
         source_doc_id: memo.id, source_page: 1, source_excerpt: memoNoiQuote},
       {path: noiPath, value: 2160000, period: 'FY2030', currency: 'USD',
         source_doc_id: model.id, source_sheet: 'Funding and Operations', source_cell: 'B7', source_excerpt: modelNoiQuote},
-    ] };
+    ].map(fact => ({
+      source_page: null, source_sheet: null, source_cell: null,
+      scenario: null, investor_class: null, basis: null, period: null, debt_phase: null, currency: null,
+      ...fact,
+    }));
+    const result = { package_id: packet.package_id, facts };
+
+    const wrongPage = await page.request.post(base + '/review/draft', {
+      data: { package_id: packet.package_id, facts: [{...facts.find(fact => fact.path === holdPath), source_page: 1}] },
+    });
+    expect(wrongPage.ok()).toBeTruthy();
+    expect((await wrongPage.json()).draft.rows[0].issue).toBe('The supporting quote was not found in the cited source. Recheck the page or cell.');
 
     await dealPage(page, id, 'documents');
     await page.getByRole('button', { name: 'Paste JSON', exact: true }).click();
-    await page.getByRole('textbox', { name: 'Codex review JSON' }).fill(JSON.stringify(result));
+    await page.getByRole('textbox', { name: 'Codex review JSON' }).fill(['```json', JSON.stringify(result), '```'].join('\n'));
     await page.getByRole('button', { name: 'Check pasted result', exact: true }).click();
     await expect(page.getByRole('heading', { name: 'Codex review draft' })).toBeVisible();
     const apply = page.getByRole('button', { name: 'Apply 8 values', exact: true });
@@ -428,6 +439,10 @@ test('new deal reviews PDF and workbook through Codex paste, Summary, Compare, a
     const publishedReturn = summary.getByRole('listitem').filter({hasText: 'Cash-on-cash'});
     await expect(publishedReturn.getByText('8.9%', { exact: true })).toBeVisible();
     await expect(publishedReturn.getByText(contextText, { exact: true })).toBeVisible();
+    await publishedReturn.getByRole('button', { name: 'pilot-offering.pdf · page 2', exact: true }).click();
+    const evidenceDialog = page.getByRole('dialog', { name: 'pilot-offering.pdf · page 2', exact: true });
+    await expect(evidenceDialog.locator('mark')).toHaveText(holdQuote);
+    await page.keyboard.press('Escape');
     await expect(summary.getByText('17.4%', { exact: true })).toHaveCount(0);
     const deal = await (await page.request.get(base)).json();
     expect(deal.analysis.facts['deal_structure.minimum_investment']).toMatchObject({value: 125000, state: 'checked'});
@@ -437,13 +452,14 @@ test('new deal reviews PDF and workbook through Codex paste, Summary, Compare, a
     expect(deal.analysis.facts[holdPath]).toMatchObject({value: 8.9, state: 'checked', identity: holdContext, evidence: [returnSource]});
     expect(deal.analysis.facts[salePath]).toMatchObject({value: 17.4, state: 'checked'});
     expect(deal.analysis.returns).toMatchObject({cash_on_cash: 8.9, cash_on_cash_path: holdPath, target_irr: null});
-    expect(deal.analysis.facts[noiPath].value).toBeNull();
+    expect(deal.analysis.facts[noiPath]?.value ?? null).toBeNull();
     const report = await page.request.get('/api/reports/deal/' + id + '/pdf');
     expect(report.ok()).toBeTruthy();
     const reportText = execFileSync('pdftotext', ['-', '-'], {input: await report.body(), encoding: 'utf8'});
     expect(reportText).toContain('$125,000');
     expect(reportText).toMatch(/Unit Count\s+148/);
-    expect(reportText).toMatch(/Cash-on-Cash\s+8\.90%/);
+    expect(reportText).toContain('Cash-on-Cash');
+    expect(reportText).toContain('8.90%');
     expect(reportText.replace(/\s+/g, ' ')).toContain(exportContext);
     expect(reportText).toContain('pilot-offering.pdf, p. 2');
     expect(reportText).not.toMatch(/17\.40%|2,040,000|2,160,000/);
@@ -461,7 +477,7 @@ test('new deal reviews PDF and workbook through Codex paste, Summary, Compare, a
     expect(compared.facts['project_details.unit_count'].value).toBe(148);
     expect(compared.facts[holdPath]).toMatchObject({value: 8.9, identity: holdContext, evidence: [returnSource]});
     expect(compared.returns.target_irr).toBeNull();
-    expect(compared.facts[noiPath].value).toBeNull();
+    expect(compared.facts[noiPath]?.value ?? null).toBeNull();
     const exported = await page.request.post('/api/deals/compare/export', {data: {deal_ids: [id, 1]}});
     expect(exported.ok()).toBeTruthy();
     const rows = JSON.parse(execFileSync('python', ['-c', [

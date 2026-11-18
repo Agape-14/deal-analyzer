@@ -14,7 +14,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from app.services.canonical_metrics import canonical_return_summary, primary_strategy
+from app.services.canonical_metrics import HOLD_CASH_YIELD_PATHS, canonical_return_summary, primary_strategy
 from app.services.return_schedules import SCHEDULE_KEY, active_sources_fingerprint, project_return_schedule
 
 SCHEMA_VERSION = 5
@@ -411,9 +411,8 @@ def build_analysis(metrics, documents=None, property_type="multifamily"):
         # alias or an optional exit calculation. Keep those facts in Analysis.
         material = {p for p in material if not p.startswith("target_returns.")}
         if returns.get("cash_on_cash") is None and not schedule:
-            candidates = ("target_returns.hold_scenario.cash_on_cash_return", "target_returns.target_cash_on_cash",
-                          "target_returns.hold_scenario.distribution_yield", "target_returns.distribution_yield")
-            material.add(next((p for p in candidates if p in facts and facts[p].value is not None), candidates[0]))
+            material.add(next((p for p in HOLD_CASH_YIELD_PATHS if p in facts and facts[p].value is not None),
+                              HOLD_CASH_YIELD_PATHS[0]))
     grouped = defaultdict(list)
     for issue in reconciliation:
         grouped[issue.get("area", group_for(issue["path"]))].append({k: v for k, v in issue.items() if k != "area"})

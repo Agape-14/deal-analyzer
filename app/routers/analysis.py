@@ -188,7 +188,7 @@ class WithheldReturn(ReturnReview):
 
 
 def cited_return_value(data: ScopedReturn, fact):
-    quote = data.source_excerpt
+    quote = data.source_excerpt.replace("−", "-")
     if data.source_cell:
         cell = re.escape(data.source_cell)
         match = re.search(rf"(?<![A-Za-z0-9]){cell}\s*=([^|\r\n]*)", quote, re.I)
