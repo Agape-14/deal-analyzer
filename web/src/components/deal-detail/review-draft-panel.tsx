@@ -18,7 +18,7 @@ type Row = {
   value: string | number;
   current: unknown;
   issue: string;
-  evidence: { source_doc_name?: string; source_page?: number; source_sheet?: string; source_cell?: string; source_excerpt?: string };
+  evidence: { source_doc_name?: string; source_page?: number; source_sheet?: string; source_cell?: string; source_excerpt?: string; source_value_note?: string };
   context: Record<string, string>;
 };
 
@@ -249,6 +249,7 @@ export function ReviewDraftPanel({ dealId, revision, refreshKey, ready }: {
                           {Object.values(row.context).length > 0 && <p>{Object.values(row.context).join(" · ")}</p>}
                           <p>{[row.evidence.source_doc_name, location].filter(Boolean).join(" · ")}</p>
                           {row.evidence.source_excerpt && <blockquote className="border-l border-border pl-2">{row.evidence.source_excerpt}</blockquote>}
+                          {row.evidence.source_value_note && <p>{row.evidence.source_value_note}</p>}
                           {row.issue && <p className="text-warning">{row.issue}</p>}
                         </div>
                       </li>

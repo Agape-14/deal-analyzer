@@ -57,6 +57,9 @@ def document_payloads(documents):
         quality = doc.extraction_quality or {}
         warnings = []
         diagnostics = quality.get("page_diagnostics") or []
+        unread_images = [str(d["page"]) for d in diagnostics if d.get("image_text_unread")]
+        if unread_images:
+            warnings.append(f"Large images on pages {', '.join(unread_images)} could not be fully read. Review the original for tables or figures missing from the extracted text.")
         links = max((d.get("external_workbook_links", 0) for d in diagnostics), default=0)
         if links:
             warnings.append(f"Uses {links} external workbook links. Saved values can be checked, but formulas cannot be fully recalculated without the linked workbooks.")

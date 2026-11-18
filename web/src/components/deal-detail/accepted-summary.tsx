@@ -8,6 +8,17 @@ import { EvidenceViewer } from "./evidence-viewer";
 import { ReturnContextPanel } from "./return-context-panel";
 import { ReturnSchedulePanel } from "./return-schedule-panel";
 import { FinancingMeasuresPanel } from "./financing-measures-panel";
+import { ScoreBreakdown } from "./score-breakdown";
+
+const detailSections = [
+  { prefix: "deal_structure.", title: "Investment and financing terms" },
+  { prefix: "project_details.", title: "Project details" },
+  { prefix: "construction_costs.", title: "Construction costs" },
+  { prefix: "financial_projections.", title: "Financial projections" },
+  { prefix: "underwriting_checks.", title: "Underwriting" },
+  { prefix: "market_location.", title: "Market and location" },
+  { prefix: "sponsor_evaluation.", title: "Sponsor" },
+] as const;
 
 export function factValue(fact?: AnalysisFact, reported = false): string {
   if (!fact || fact.value == null || (!reported && !["checked", "calculated", "manual"].includes(fact.state))) return "Awaiting evidence";
@@ -64,6 +75,7 @@ export function AcceptedSummary({ deal }: { deal: DealDetail }) {
       </details>
       {intake && <details className="mt-3 text-xs text-muted-foreground"><summary className="cursor-pointer">Deal details from your documents</summary><div className="mt-2 space-y-2">{intake.name_origin === "filename" && !intake.auto_fields?.project_name && <p>The deal title comes from the first filename. You can rename it in Analysis.</p>}{Object.entries(intake.auto_fields ?? {}).map(([key, meta]) => <p key={key}>{key.replaceAll("_", " ")}: {meta.sources.map((source, index) => <a key={index} className="underline mr-2" href={`/api/deals/documents/${source.document_id}/file${source.page ? `#page=${source.page}` : ""}`} target="_blank" rel="noreferrer">{source.document_name}{source.page ? ` · page ${source.page}` : ""}</a>)}</p>)}{!!intake.identity_conflicts?.length && <p className="text-warning">Conflicting document labels: {intake.identity_conflicts.map(key => key.replaceAll("_", " ")).join(", ")}. Check these details in Analysis.</p>}</div></details>}
     </Card>
+    <ScoreBreakdown scores={deal.scores ?? {}} />
     <ReturnContextPanel deal={deal} />
     <ReturnSchedulePanel deal={deal} />
     <Card className="p-5 md:p-6"><h2 className="text-lg font-semibold">Capital, terms and operations</h2>
@@ -75,6 +87,20 @@ export function AcceptedSummary({ deal }: { deal: DealDetail }) {
       })}</div>
       {pendingPaths.length > 0 && <details className="mt-4 border-t border-border pt-3 text-sm"><summary className="cursor-pointer text-muted-foreground">{pendingPaths.length} terms awaiting evidence</summary><div className="mt-3 grid gap-3 sm:grid-cols-2">{pendingPaths.map(path => <div key={path}><span className="text-xs text-muted-foreground">{facts[path]?.label ?? path.split(".").pop()?.replaceAll("_", " ")}</span><FactEvidence fact={facts[path]} /></div>)}</div></details>}
     </Card>
+    {detailSections.map(({ prefix, title }) => {
+      const entries = Object.entries(facts).filter(([path, fact]) => path.startsWith(prefix)
+        && !acceptedPaths.includes(path) && fact.value != null && ["checked", "calculated", "manual"].includes(fact.state));
+      if (!entries.length) return null;
+      return <Card key={prefix} className="p-5 md:p-6"><h2 className="text-lg font-semibold">{title}</h2>
+        <div className="mt-4 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">{entries.map(([path, fact]) => (
+          <div key={path} className={typeof fact.value === "string" && fact.value.length > 100 ? "sm:col-span-2 lg:col-span-3" : ""}>
+            <div className="text-xs text-muted-foreground">{fact.label}</div>
+            <div className="mt-1 text-sm font-medium whitespace-pre-wrap break-words">{factValue(fact)}</div>
+            <FactEvidence fact={fact} />
+          </div>
+        ))}</div>
+      </Card>;
+    })}
     <FinancingMeasuresPanel deal={deal} financing={analysis.financing} debtAmount={acceptedDebtAmount} />
     <p className="text-sm text-muted-foreground">Upload missing or newer evidence in <Link className="underline" href={`/deals/${deal.id}?tab=documents`}>Documents</Link>. Reported values, optional context, projections and audit details remain under Analysis.</p>
   </div>;

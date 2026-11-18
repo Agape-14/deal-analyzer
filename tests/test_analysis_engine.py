@@ -273,6 +273,144 @@ def test_scores_exclude_unknown_and_unsupported_source_fields():
     assert changed["input_policy"] == "accepted-facts-v1"
 
 
+def test_partial_scores_use_observed_categories_without_neutral_fill():
+    from types import SimpleNamespace
+    from app.services.analysis import score_accepted_deal
+    metrics = manual_metrics()
+    metrics["deal_structure"]["ltv"] = 65
+    metrics["_provenance"]["deal_structure.ltv"] = {"status": "manual"}
+    # An unrelated missing capital term does not erase source-supported risk or returns.
+    del metrics["deal_structure"]["minimum_investment"]
+    scores = score_accepted_deal(SimpleNamespace(property_type="multifamily", documents=[]), metrics)
+    assert scores["returns"]["score"] == 7
+    assert scores["risk"]["score"] == 7
+    assert scores["risk"]["supported_inputs"] == ["deal_structure.ltv"]
+    assert scores["market"]["score"] is None
+    assert scores["sponsor"]["status"] == "unavailable"
+    assert scores["coverage"] == {"supported_categories": 2, "total_categories": 7,
+                                  "supported_weight": 35, "total_weight": 100}
+    assert scores["provisional_overall"] == 7
+    assert scores["overall"] is None
+    assert scores["data_quality"]["can_score"] is False
+
+
+def test_new_source_supported_scorer_fields_require_accepted_provenance():
+    from types import SimpleNamespace
+    from app.services.analysis import score_accepted_deal
+    metrics = manual_metrics()
+    metrics.update(market_location={"walk_score": 80}, sponsor_evaluation={"sponsor_full_cycle_deals": 5})
+    metrics["project_details"]["entitlement_status"] = "Fully approved Dec 2024"
+    metrics["deal_structure"]["fees_asset_mgmt"] = 1
+    for path in ("market_location.walk_score", "sponsor_evaluation.sponsor_full_cycle_deals",
+                 "project_details.entitlement_status", "deal_structure.fees_asset_mgmt"):
+        metrics["_provenance"][path] = {"status": "manual"}
+    scores = score_accepted_deal(SimpleNamespace(property_type="multifamily", documents=[]), metrics)
+    assert scores["market"]["score"] == 8
+    assert scores["sponsor"]["score"] == 8
+    assert scores["risk"]["score"] == 9
+    assert scores["structure"]["score"] == 9
+    assert scores["coverage"]["supported_categories"] == 5
+    metrics["_provenance"]["market_location.walk_score"] = {"status": "unverifiable"}
+    assert score_accepted_deal(SimpleNamespace(property_type="multifamily", documents=[]), metrics)["market"]["score"] is None
+
+
+def test_sale_return_score_does_not_average_missing_metrics_as_five():
+    from app.services.deal_scorer import score_deal
+    scores = score_deal({"target_returns": {"primary_strategy": "sale", "target_irr": 20}}, require_verified=False)
+    assert scores["returns"]["score"] == 10
+    assert scores["returns"]["supported_inputs"] == ["target_returns.target_irr"]
+    assert scores["provisional_overall"] is None
+    assert scores["overall"] is None
+
+
+def test_overall_uses_complete_observed_categories_without_global_verifier_flag():
+    from types import SimpleNamespace
+    from app.services.analysis import score_accepted_deal
+    metrics = manual_metrics()
+    metrics["deal_structure"].update(ltv=65, gp_equity_coinvest_pct=5, fees_asset_mgmt=1)
+    metrics["market_location"] = {"walk_score": 80}
+    metrics["sponsor_evaluation"] = {"sponsor_full_cycle_deals": 5}
+    metrics["financial_projections"] = {"occupancy_assumption": 95, "stabilized_noi": 70000, "annual_debt_service": 50000}
+    metrics["_provenance"] = {path: {"status": "manual"} for path in flatten(metrics)}
+    scores = score_accepted_deal(SimpleNamespace(property_type="multifamily", documents=[]), metrics)
+    assert scores["coverage"]["supported_categories"] == 7
+    assert scores["coverage"]["supported_weight"] == 100
+    assert scores["overall"] == 7.2
+    assert scores["data_quality"]["can_score"] is True
+
+
+def test_effective_scores_rebuild_old_policy_without_mutating_saved_scores():
+    from types import SimpleNamespace
+    from app.services.analysis import effective_scores, SCHEMA_VERSION
+    metrics = manual_metrics()
+    metrics["deal_structure"]["ltv"] = 65
+    metrics["_provenance"]["deal_structure.ltv"] = {"status": "manual"}
+    snapshot = build_analysis(metrics)
+    snapshot.update(schema_version=SCHEMA_VERSION - 1, version=7, created_at="2026-11-18T11:00:00Z")
+    saved_scores = {"overall": 99, "risk": {"score": 99}}
+    deal = SimpleNamespace(metrics=metrics, property_type="multifamily", analysis_snapshot=snapshot, scores=saved_scores)
+    scores = effective_scores(deal)
+    assert scores["risk"]["score"] == 7
+    assert scores["market"]["score"] is None
+    assert scores["data_quality"]["analysis_version"] == 7
+    assert scores["score_policy"] == "observed-categories-v1"
+    assert deal.scores == saved_scores
+
+
+def test_codex_confirmed_categories_do_not_require_legacy_verifier_timestamp():
+    from types import SimpleNamespace
+    from app.services.analysis import score_accepted_deal
+    metrics = manual_metrics()
+    metrics["deal_structure"]["ltv"] = 65
+    docs = [{"id": 1, "filename": "Memo.pdf", "content_hash": "a", "page_count": 5}]
+    metrics["_provenance"]["deal_structure.ltv"] = {
+        "status": "confirmed", "source_check_version": 1, "source_doc_id": 1,
+        "source_page": 2, "source_document_hash": "a", "verified_at": "2026-11-18T11:00:00Z",
+    }
+    deal = SimpleNamespace(property_type="multifamily", analysis_snapshot={"documents": docs})
+    scores = score_accepted_deal(deal, metrics)
+    assert "_verification" not in metrics
+    assert scores["risk"]["score"] == 7
+    assert scores["risk"]["status"] == "supported"
+
+
+def test_payment_and_vacancy_conversions_preserve_source_values_and_context():
+    metrics = manual_metrics()
+    metrics["financial_projections"] = {"monthly_debt_service": 374456.846388, "vacancy_assumption": 5}
+    for path in ("financial_projections.monthly_debt_service", "financial_projections.vacancy_assumption"):
+        metrics["_provenance"][path] = {"status": "manual"}
+    metrics["_fact_context"] = {"financial_projections.monthly_debt_service": {"debt_phase": "permanent", "period": "Year one amortizing", "currency": "USD"}}
+    analysis = build_analysis(metrics)
+    annual = analysis["facts"]["financial_projections.annual_debt_service"]
+    assert annual["value"] == 4493482.16
+    assert annual["state"] == "calculated"
+    assert annual["dependencies"] == ["financial_projections.monthly_debt_service"]
+    assert annual["identity"]["period"] == "Year one amortizing"
+    assert annual["identity"]["debt_phase"] == "permanent"
+    assert analysis["facts"]["financial_projections.occupancy_assumption"]["value"] == 95
+    metrics["financial_projections"].update(annual_debt_service=3627250, occupancy_assumption=93)
+    for path in ("financial_projections.annual_debt_service", "financial_projections.occupancy_assumption"):
+        metrics["_provenance"][path] = {"status": "manual"}
+    analysis = build_analysis(metrics)
+    assert analysis["facts"]["financial_projections.annual_debt_service"]["value"] == 3627250
+    assert analysis["facts"]["financial_projections.occupancy_assumption"]["value"] == 93
+
+
+def test_source_ratio_from_distinct_period_is_not_disputed_by_another_phase():
+    metrics = manual_metrics()
+    metrics["financial_projections"] = {"stabilized_noi": 70000}
+    metrics["underwriting_checks"] = {"yield_on_cost": 6.24}
+    for path in ("financial_projections.stabilized_noi", "underwriting_checks.yield_on_cost"):
+        metrics["_provenance"][path] = {"status": "manual"}
+    metrics["_fact_context"] = {
+        "financial_projections.stabilized_noi": {"period": "Stabilized year"},
+        "underwriting_checks.yield_on_cost": {"period": "Q2 2024 untrended proforma"},
+    }
+    analysis = build_analysis(metrics)
+    assert analysis["facts"]["underwriting_checks.yield_on_cost"]["state"] == "manual"
+    assert analysis["accepted_metrics"]["underwriting_checks"]["yield_on_cost"] == 6.24
+
+
 @pytest.mark.asyncio
 async def test_history_includes_removed_optional_facts(client):
     deal_id = (await client.post("/api/deals", json={"project_name": "Removed source fact"})).json()["id"]

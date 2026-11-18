@@ -20,7 +20,7 @@ from app.services.waterfall_calculator import waterfall_from_deal
 from app.services.canonical_metrics import canonical_return_summary
 from app.services.analysis import analysis_for_deal, effective_scores
 from app.services.financial_presentation import (
-    RETURN_LABELS, accepted_return_fact, return_context, return_evidence, schedule_context, schedule_source, source_reference,
+    RETURN_LABELS, accepted_return_fact, optional_sale_returns, return_context, return_evidence, schedule_context, schedule_source, source_reference,
 )
 from app.services.data_integrity import ANALYST_REVIEW_RECORD_KEYS, quality_summary
 from app.services.location_intelligence import build_location_bundle
@@ -741,8 +741,12 @@ async def export_comparison(data: CompareRequest, db: AsyncSession = Depends(get
 
     projections = []
     debt_measures = []
+    sale_returns = []
     for deal in deals:
         analysis = analyses[deal.id]
+        for fact in optional_sale_returns(analysis):
+            sale_returns.append((deal.project_name, fact["label"], fact["value"], fact["identity"]["unit"],
+                                 return_context(fact), return_evidence(fact)))
         schedule = analysis.get("return_schedule")
         if schedule:
             for projection in schedule["rows"]:
@@ -757,6 +761,10 @@ async def export_comparison(data: CompareRequest, db: AsyncSession = Depends(get
                     deal.project_name, measure["label"], measure["amount"], measure["currency"], measure.get("note"),
                     source_reference(measure.get("evidence")),
                 ))
+    if sale_returns:
+        _write_comparison_sheet(wb.create_sheet("Optional Sale Scenarios"), (
+            "Deal", "Metric", "Value", "Unit", "Context", "Source",
+        ), sale_returns, (28, 28, 17, 12, 72, 52))
     if projections:
         _write_comparison_sheet(wb.create_sheet("Return Projections"), (
             "Deal", "Year", "Annual cash-on-cash (%)", "Context", "Year note", "Assumptions", "Source",

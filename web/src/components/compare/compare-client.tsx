@@ -15,6 +15,7 @@ import { DealHeaderRow } from "./deal-header-row";
 import { MetricsTable, type CompareMode } from "./metrics-table";
 import { CustomPresetDrawer, readCustomPreset } from "./custom-preset-drawer";
 import { ReturnScheduleTable } from "@/components/deal-detail/return-schedule-panel";
+import { OptionalSaleReturns } from "@/components/deal-detail/return-context-panel";
 
 const VALID_MODES: CompareMode[] = ["values", "winners", "deltas", "normalized"];
 
@@ -268,6 +269,7 @@ export function CompareClient({ deals }: { deals: DealSummary[] }) {
               cols={cols}
             />
           )}
+          <div className="mt-6 grid gap-4">{details.map(deal => <OptionalSaleReturns key={deal.id} analysis={deal.analysis} dealName={deal.project_name} />)}</div>
           {details.some(deal => deal.analysis?.return_schedule) && (
             <section className="mt-6 grid gap-4" aria-label="Year-by-year return projections">
               <h2 className="text-base font-semibold">Year-by-year return projections</h2>

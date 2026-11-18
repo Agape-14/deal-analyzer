@@ -210,6 +210,10 @@ export function DealHero({ deal }: { deal: DealDetail }) {
                   {deal.analysis ? <span className="text-xs font-medium">{deal.analysis.questions.length ? `${deal.analysis.questions.length} question${deal.analysis.questions.length === 1 ? " remains" : "s remain"}` : "No material questions recorded"}</span> : <ViewerTrustBadge gate={gate} />}
                 </div>
                 <p className="hidden lg:block mt-3 text-xs leading-relaxed text-muted-foreground">{viewerSummary}</p>
+                {visibleScore == null && typeof deal.scores?.provisional_overall === "number" && <p className="mt-3 text-xs">
+                  Partial composite <strong>{deal.scores.provisional_overall.toFixed(1)}/10</strong>
+                  {deal.scores.coverage && <span className="text-muted-foreground"> · {deal.scores.coverage.supported_categories}/7 categories</span>}
+                </p>}
               </div>
               {visibleScore != null && <div className="shrink-0"><BigScoreRing value={visibleScore} size={72} /></div>}
             </div>

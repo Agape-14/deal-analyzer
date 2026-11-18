@@ -14,6 +14,7 @@ import {
   Image as ImageIcon,
   Table as TableIcon,
   ScanText,
+  RefreshCw,
   AlertCircle,
   Clock3,
 } from "lucide-react";
@@ -93,6 +94,27 @@ export function DocumentsPanel({
   const inputRef = React.useRef<HTMLInputElement>(null);
   const dragDepth = React.useRef(0);
   const [reviewPending, setReviewPending] = React.useState(false);
+  const [refreshingText, setRefreshingText] = React.useState(false);
+  const [refreshTextStatus, setRefreshTextStatus] = React.useState("");
+
+  async function refreshDocumentText() {
+    if (refreshingText) return;
+    setRefreshingText(true);
+    try {
+      for (const [index, document] of primaryDocuments.entries()) {
+        setRefreshTextStatus(`Reading ${index + 1} of ${primaryDocuments.length} · ${document.filename}`);
+        const response = await fetch(`/api/deals/documents/${document.id}/reprocess`, { method: "POST", credentials: "include" });
+        if (!response.ok) throw new Error(await responseErrorMessage(response));
+      }
+      setRefreshTextStatus("Document text refreshed. Download a new packet to review the expanded source text.");
+      refreshReview();
+      router.refresh();
+    } catch (error) {
+      setRefreshTextStatus(error instanceof Error ? error.message : "Document reading failed. Retry the refresh.");
+    } finally {
+      setRefreshingText(false);
+    }
+  }
 
   async function handleFiles(files: FileList | File[]) {
     const list = Array.from(files).filter((file) => {
@@ -331,7 +353,15 @@ export function DocumentsPanel({
           </Button>}
         </div>
 
-        {isAnalyst && documents.length > 0 && <ReviewDraftPanel dealId={dealId} revision={revision} refreshKey={reviewRefresh} ready={packetReady} />}
+        {isAnalyst && primaryDocuments.length > 0 && <div className="mb-4">
+          <Button type="button" size="sm" variant="outline" disabled={refreshingText || reviewPending}
+            onClick={() => void refreshDocumentText()}>
+            <RefreshCw className={cn("mr-1.5 h-3.5 w-3.5", refreshingText && "animate-spin")} />
+            {refreshingText ? "Reading original files…" : "Refresh document text"}
+          </Button>
+          {refreshTextStatus && <p role="status" className="mt-2 text-xs text-muted-foreground">{refreshTextStatus}</p>}
+        </div>}
+        {isAnalyst && documents.length > 0 && <ReviewDraftPanel dealId={dealId} revision={revision} refreshKey={reviewRefresh} ready={packetReady && !refreshingText} />}
         {isAnalyst && documents.length > 0 && creditReview && (
           <details className="mb-5 rounded-lg border border-border/70 px-3 py-2">
             <summary className="cursor-pointer text-sm font-medium">Review options</summary>

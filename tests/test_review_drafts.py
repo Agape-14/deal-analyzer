@@ -105,6 +105,144 @@ async def test_codex_result_is_bound_to_sources_and_does_not_replace_locked_valu
     assert (await client.post(base + "/approve", json=approval(view))).status_code == 409
 
 
+async def test_workbook_outflows_import_as_positive_costs_with_signed_source_evidence(client):
+    from app.database import async_session
+    from app.models import Deal
+
+    created = await client.post("/api/deals", json={"project_name": "Synthetic signed workbook costs"})
+    deal_id = created.json()["id"]
+    uploaded = await client.post(f"/api/deals/{deal_id}/documents/upload", files={
+        "file": ("costs.csv", b"Description,Value\nProject cost outflow,-500000\nProject IRR,-12.5\n", "text/csv"),
+    })
+    assert uploaded.status_code == 200, uploaded.text
+    base = f"/api/deals/{deal_id}/review"
+    packet = await packet_for(client, base)
+    cost_paths = [
+        "construction_costs.hard_costs_total",
+        "financial_projections.soft_costs",
+        "deal_structure.total_project_cost",
+    ]
+    other_paths = ["deal_structure.debt_amount", "deal_structure.total_equity_required", "target_returns.total_project_profit"]
+    template = cited_result(packet)["facts"][0]
+    proposed = {"package_id": packet["package_id"], "facts": [
+        {**template, "path": path, "value": -500000 if path == "financial_projections.soft_costs" else 500000}
+        for path in [*cost_paths, *other_paths]
+    ]}
+    proposed["facts"].append({
+        **template, "path": "target_returns.target_irr", "value": 12.5, "source_cell": "B3",
+        "source_excerpt": next(line for line in packet["sources"][0]["text"].splitlines() if "B3=" in line),
+    })
+    imported = await client.post(base + "/draft", json=proposed)
+    assert imported.status_code == 200, imported.text
+    view = imported.json()
+    rows = {row["path"]: row for row in view["draft"]["rows"]}
+    assert all(rows[path]["value"] == 500000 and not rows[path]["issue"] for path in cost_paths)
+    assert all(rows[path]["issue"] for path in other_paths)
+    assert rows["target_returns.target_irr"]["issue"]
+    assert all("-500000" in rows[path]["evidence"]["source_excerpt"] for path in cost_paths)
+    saved = await client.post(base + "/approve", json={
+        **approval(view), "paths": cost_paths,
+    })
+    assert saved.status_code == 200, saved.text
+    async with async_session() as db:
+        metrics = (await db.get(Deal, deal_id)).metrics
+        for path in cost_paths:
+            evidence = metrics["_provenance"][path]
+            assert evidence["status"] == "confirmed"
+            assert "-500000" in evidence["source_excerpt"]
+            assert "positive magnitude" in evidence["source_value_note"]
+    after = (await client.get(f"/api/deals/{deal_id}")).json()
+    assert all(after["analysis"]["facts"][path]["value"] == 500000 for path in cost_paths)
+
+
+async def test_pdf_cost_outflow_does_not_gain_workbook_magnitude_treatment(client):
+    from app.database import async_session
+    from app.models import DealDocument
+
+    created = await client.post("/api/deals", json={"project_name": "Synthetic signed PDF cost"})
+    deal_id = created.json()["id"]
+    async with async_session() as db:
+        doc = DealDocument(deal_id=deal_id, filename="cost.pdf", file_path="synthetic-cost.pdf",
+                           file_sha256="b" * 64, page_count=1, extracted_text="--- Page 1 ---\nHard costs -500000")
+        db.add(doc)
+        await db.commit()
+        doc_id = doc.id
+    base = f"/api/deals/{deal_id}/review"
+    packet = await packet_for(client, base)
+    imported = await client.post(base + "/draft", json={
+        "package_id": packet["package_id"], "facts": [{
+            "path": "construction_costs.hard_costs_total", "value": 500000, "source_doc_id": doc_id,
+            "source_page": 1, "source_excerpt": "Hard costs -500000", "currency": "USD",
+        }],
+    })
+    assert imported.status_code == 200, imported.text
+    row = imported.json()["draft"]["rows"][0]
+    assert row["issue"] and "source_value_note" not in row["evidence"]
+
+
+async def test_same_locked_value_can_be_source_checked_without_replacing_manual_decision(client):
+    import copy
+
+    from app.database import async_session
+    from app.models import Deal
+    from app.services.data_integrity import mark_manual_edit
+
+    deal_id = await upload_csv(client)
+    base = f"/api/deals/{deal_id}/review"
+    async with async_session() as db:
+        deal = await db.get(Deal, deal_id)
+        metrics = mark_manual_edit(deal.metrics or {}, PATH, 500000)
+        metrics["_provenance"][PATH].update({
+            "verification_note": "Analyst selected this minimum from the sponsor confirmation.",
+            "source_challenge": "An earlier source check could not read the value.",
+            "last_source_check": {"status": "unverifiable"},
+            "source_page": 99,
+        })
+        metrics["_fact_context"] = {PATH: {"currency": "USD"}}
+        metrics["_field_history"] = [{"path": PATH, "action": "question_resolved", "new_value": 500000}]
+        deal.metrics = metrics
+        await db.commit()
+        before = copy.deepcopy(deal.metrics)
+
+    packet = await packet_for(client, base)
+    for edits in (
+        {"value": 500001},
+        {"source_excerpt": "A2=An invented label | B2=500000"},
+        {"currency": "EUR"},
+    ):
+        imported = await client.post(base + "/draft", json=cited_result(packet, **edits))
+        assert imported.status_code == 200, imported.text
+        view = imported.json()
+        assert view["draft"]["rows"][0]["issue"]
+        assert (await client.post(base + "/approve", json=approval(view))).status_code == 422
+        async with async_session() as db:
+            evidence = (await db.get(Deal, deal_id)).metrics["_provenance"][PATH]
+            assert evidence["source_challenge"] == before["_provenance"][PATH]["source_challenge"]
+
+    imported = await client.post(base + "/draft", json=cited_result(packet))
+    assert imported.status_code == 200, imported.text
+    view = imported.json()
+    assert not view["draft"]["rows"][0]["issue"]
+    saved = await client.post(base + "/approve", json=approval(view))
+    assert saved.status_code == 200, saved.text
+    async with async_session() as db:
+        after = (await db.get(Deal, deal_id)).metrics
+        evidence = after["_provenance"][PATH]
+        previous = before["_provenance"][PATH]
+        for key in ("source", "status", "locked", "verification_note", "extracted_at"):
+            assert evidence[key] == previous[key]
+        assert after["_locks"] == before["_locks"]
+        assert after["_field_history"] == before["_field_history"]
+        assert after["_fact_context"] == before["_fact_context"]
+        assert after["deal_structure"]["minimum_investment"] == before["deal_structure"]["minimum_investment"]
+        assert "source_challenge" not in evidence and "source_page" not in evidence
+        assert evidence["source_cell"] == "B2"
+        assert evidence["last_source_check"]["status"] == "confirmed"
+        assert evidence["last_source_check"]["citation"]["source_cell"] == "B2"
+    fact = (await client.get(f"/api/deals/{deal_id}")).json()["analysis"]["facts"][PATH]
+    assert fact["state"] == "manual" and fact["locked"]
+
+
 async def test_responses_preflight_limits_usage_and_preserves_wire_contract(client, monkeypatch):
     from app.services import openai_review
     from app.services.review_drafts import ReviewError

@@ -17,7 +17,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from app.services.canonical_metrics import HOLD_CASH_YIELD_PATHS, canonical_return_summary, primary_strategy
 from app.services.return_schedules import SCHEDULE_KEY, active_sources_fingerprint, project_return_schedule
 
-SCHEMA_VERSION = 5
+SCHEMA_VERSION = 6
 ACCEPTED = {"checked", "calculated", "manual"}
 BAD = {"wrong", "missing", "unverifiable", "stale", "math_failed"}
 RETURN_REVIEWS_KEY = "_return_reviews"
@@ -60,21 +60,27 @@ def _register(section, unit, names):
 
 
 _register("deal_structure", "currency", "minimum_investment total_equity_required total_project_cost debt_amount preferred_equity_amount gp_cash_at_risk permanent_loan_amount construction_loan_amount")
-_register("deal_structure", "percent", "ltv loan_to_cost interest_rate preferred_return gp_equity_coinvest_pct permanent_interest_rate construction_interest_rate")
+_register("deal_structure", "percent", "ltv loan_to_cost interest_rate preferred_return gp_equity_coinvest_pct permanent_interest_rate construction_interest_rate fees_asset_mgmt fees_acquisition")
 _register("deal_structure", "years", "hold_period_years investment_term_years amortization_years")
 _register("deal_structure", "months", "loan_term_months construction_loan_term_months amortization_months")
 _register("deal_structure", "text", "business_plan investment_strategy exit_strategies promote_structure waterfall_hurdle_basis preferred_return_allocation")
 _register("deal_structure", "waterfall_tiers", "promote_tiers")
 _register("project_details", "count", "unit_count total_sqft")
-_register("project_details", "text", "unit_mix construction_type project_type")
-_register("financial_projections", "currency", "stabilized_noi annual_debt_service avg_rent_per_unit revenue_per_unit hard_costs soft_costs land_cost contingency purchase_price")
-_register("financial_projections", "percent", "entry_cap_rate exit_cap_rate occupancy_assumption rent_growth_assumption operating_expense_ratio")
+_register("project_details", "text", "unit_mix construction_type project_type entitlement_status construction_timeline construction_start completion_date expected_stabilization")
+_register("financial_projections", "currency", "stabilized_noi annual_debt_service monthly_debt_service avg_rent_per_unit revenue_per_unit hard_costs soft_costs land_cost contingency purchase_price")
+_register("financial_projections", "percent", "entry_cap_rate exit_cap_rate occupancy_assumption vacancy_assumption rent_growth_assumption operating_expense_ratio")
 _register("construction_costs", "currency", "hard_costs hard_costs_total soft_costs soft_costs_total land_cost land_cost_total contingency contingency_total total_project_cost hard_costs_per_unit soft_costs_per_unit land_cost_per_unit total_project_cost_per_unit hard_costs_per_sqft")
 _register("construction_costs", "percent", "contingency_pct")
+_register("construction_costs", "currency", "preconstruction_soft_costs city_agency_fees offsite_development_costs onsite_construction_costs construction_leaseup_soft_costs financing_costs")
+_register("financial_projections", "currency", "untrended_noi interest_only_debt_service amortizing_debt_service")
 _register("underwriting_checks", "multiple", "dscr")
-_register("underwriting_checks", "percent", "yield_on_cost")
+_register("underwriting_checks", "percent", "yield_on_cost break_even_occupancy")
+_register("market_location", "percent", "market_rent_growth market_job_growth market_vacancy_rate")
+_register("market_location", "count", "walk_score")
+_register("sponsor_evaluation", "count", "sponsor_full_cycle_deals")
 _register("target_returns", "text", "primary_strategy")
 _register("target_returns", "currency", "total_project_profit")
+_register("target_returns", "percent", "total_fee_drag")
 for prefix in ("target_returns", "target_returns.hold_scenario", "target_returns.sale_scenario"):
     _register(prefix, "percent", "target_irr net_irr gross_irr sale_irr target_cash_on_cash cash_on_cash_return distribution_yield")
     _register(prefix, "multiple", "target_equity_multiple net_equity_multiple gross_equity_multiple sale_equity_multiple")
@@ -159,8 +165,10 @@ def valid_number(path, value, unit):
         return None
     if unit == "count" and not parsed.is_integer():
         return None
+    if path == "market_location.walk_score" and parsed > 100:
+        return None
     if unit == "percent":
-        lower, upper = (-100, 1000) if path.endswith("irr") or path.endswith("rent_growth_assumption") else (0, 100)
+        lower, upper = (-100, 1000) if path.endswith(("irr", "rent_growth_assumption", "market_rent_growth", "market_job_growth")) else (0, 100)
         if not lower <= parsed <= upper:
             return None
     return parsed
@@ -298,12 +306,15 @@ def build_analysis(metrics, documents=None, property_type="multifamily"):
             fact.state, fact.reason = "disputed", str(prov.get("verification_note") or "The source check remains unresolved.")
         elif status == "manual":
             fact.state, fact.reason = "manual", "Analyst decision: " + str(prov.get("verification_note") or "Manually resolved; not an independent source check.")
+            if prov.get("source_value_note"):
+                fact.reason += " " + str(prov["source_value_note"])
         elif (source_set := prov.get("review_document_set") or metrics.get("_verified_document_set")) and source_set != current_document_set:
             fact.state, fact.reason = "reported", "The document package changed and is awaiting another source check."
         elif status == "confirmed" and prov.get("source_check_version") != 1:
             fact.reason = "This older confirmation needs a fresh check of the quoted source text."
         elif status == "confirmed" and not reason:
             fact.state = "checked"
+            fact.reason = str(prov.get("source_value_note") or "")
         else:
             fact.reason = reason or "Reported value has not completed a source check."
         if fact.state in ACCEPTED and path in return_reviews:
@@ -323,6 +334,28 @@ def build_analysis(metrics, documents=None, property_type="multifamily"):
                       f"Debt plus equity differs from total project cost by {gap:,.0f}. Check the funding amounts or provide the missing source/use; accepting a source value does not resolve this calculation.")
             reconciliation.extend({"path": path, "area": "Debt", "state": "disputed", "reason": reason} for path in funding_paths)
 
+    # Preserve an explicit source figure when a one-input conversion is available.
+    direct_formulas = (
+        ("financial_projections.annual_debt_service", "financial_projections.monthly_debt_service", 12, 0, "Monthly debt service × 12"),
+        ("financial_projections.occupancy_assumption", "financial_projections.vacancy_assumption", -1, 100, "100 − vacancy assumption"),
+    )
+    for path, source_path, scale, offset, formula in direct_formulas:
+        source = facts.get(source_path)
+        prior = facts.get(path)
+        derived = (provenance.get(path) or {}).get("source") == "calculated" and (provenance.get(path) or {}).get("dependencies") == [source_path]
+        if not source or source.state not in ACCEPTED or not isinstance(source.value, (float, int)):
+            continue
+        if prior and prior.value is not None and not derived:
+            continue
+        context = {key: getattr(source.identity, key) for key in ("period", "debt_phase", "currency")}
+        if path.endswith("annual_debt_service") and context["period"].casefold() in {"monthly", "per month"}:
+            context["period"] = "annual"
+        unit, label = REGISTRY[path]
+        facts[path] = Fact(path=path, label=label, identity=identity(path, unit, context),
+            value=round(source.value * scale + offset, 2), state="calculated", formula=formula,
+            dependencies=[source_path], evidence=source.evidence)
+        reviewed_contexts[path] = context
+
     # Recalculate supported formulas from accepted dependencies on every revision.
     # A manually resolved/reported source figure is never overwritten by a formula.
     formulas = [
@@ -338,6 +371,13 @@ def build_analysis(metrics, documents=None, property_type="multifamily"):
             if prior and derived and not prior.locked:
                 prior.state, prior.reason = "disputed", "A calculation input changed or is not accepted."
             continue
+        if prior and prior.state in ACCEPTED and any(
+            getattr(prior.identity, dimension) != "unspecified" and any(
+                getattr(value.identity, dimension) not in {"unspecified", getattr(prior.identity, dimension)} for value in inputs)
+            for dimension in ("debt_phase", "period", "currency")
+        ):
+            # A quoted ratio from another dated phase has its own source basis.
+            continue
         # Don't combine debt or time-period contexts that explicitly disagree.
         if any(len({getattr(f.identity, dimension) for f in inputs if getattr(f.identity, dimension) != "unspecified"}) > 1 for dimension in ("debt_phase", "period", "currency")):
             if prior:
@@ -351,9 +391,13 @@ def build_analysis(metrics, documents=None, property_type="multifamily"):
                 prior.dependencies, prior.formula = dependencies, formula
                 reconciliation.append({"path": path, "state": "disputed", "reason": prior.reason})
             continue
-        facts[path] = Fact(path=path, label=label, identity=identity(path, unit, {}), value=calculated,
+        formula_context = {dimension: next((getattr(value.identity, dimension) for value in inputs
+                                           if getattr(value.identity, dimension) != "unspecified"), "unspecified")
+                           for dimension in ("debt_phase", "period", "currency")}
+        facts[path] = Fact(path=path, label=label, identity=identity(path, unit, formula_context), value=calculated,
                            state="calculated", dependencies=dependencies, formula=formula,
                            evidence=[e for f in inputs for e in f.evidence])
+        reviewed_contexts[path] = formula_context
 
     # Other historical derived values require a recorded dependency fingerprint.
     for path, fact in facts.items():
@@ -453,23 +497,26 @@ def analysis_for_deal(deal):
     stored = getattr(deal, "analysis_snapshot", None)
     if isinstance(stored, dict) and stored.get("schema_version") == SCHEMA_VERSION:
         return stored
-    # A read-only preview for old rows. No automatic source rewrite or migration.
-    return build_analysis(deal.metrics or {}, property_type=deal.property_type or "multifamily")
+    # Rebuild an older snapshot with its recorded document manifest and revision.
+    documents = (stored or {}).get("documents", []) if isinstance(stored, dict) else []
+    preview = build_analysis(deal.metrics or {}, documents, property_type=deal.property_type or "multifamily")
+    if isinstance(stored, dict):
+        preview["version"] = stored.get("version", 0)
+        if stored.get("created_at"):
+            preview["created_at"] = stored["created_at"]
+    return preview
 
 
 def effective_scores(deal):
     scores = copy.deepcopy(deal.scores or {})
     analysis = analysis_for_deal(deal)
-    stale = scores.get("analysis_input_hash") != analysis["input_hash"] or scores.get("input_policy") != "accepted-facts-v1"
+    stale = (scores.get("analysis_input_hash") != analysis["input_hash"]
+             or scores.get("input_policy") != "accepted-facts-v1"
+             or scores.get("score_policy") != "observed-categories-v1")
+    if stale:
+        scores = score_accepted_deal(deal, deal.metrics or {})
     gate = dict(scores.get("data_quality") or {})
-    can_score = bool(gate.get("can_score")) and not stale and not analysis["questions"]
-    gate.update({"can_score": can_score, "analysis_version": analysis["version"], "stage": "outdated" if stale else analysis["status"]})
-    if not can_score:
-        scores["provisional_overall"] = scores.get("overall") or scores.get("provisional_overall")
-        scores["overall"] = None
-        for key in ("returns", "market", "structure", "risk", "financials", "underwriting", "sponsor"):
-            if isinstance(scores.get(key), dict):
-                scores[key] = {**scores[key], "score": None}
+    gate["analysis_version"] = analysis["version"]
     scores["data_quality"] = gate
     return scores
 
@@ -496,7 +543,10 @@ def score_accepted_deal(deal, metrics):
     scores = score_deal(inputs, math_checks=run_math_checks(inputs))
     scores["input_policy"] = "accepted-facts-v1"
     scores["analysis_input_hash"] = analysis["input_hash"]
-    if analysis["questions"]:
-        scores["overall"] = None
-        scores["data_quality"]["can_score"] = False
+    complete = scores["coverage"]["supported_categories"] == scores["coverage"]["total_categories"]
+    can_score = complete and not analysis["questions"] and scores["data_quality"]["math_summary"]["fail"] == 0
+    scores["overall"] = scores["provisional_overall"] if can_score else None
+    scores["data_quality"].update({"can_score": can_score, "analysis_version": analysis["version"],
+                                    "stage": "ready" if can_score else "partial",
+                                    "category_scores_available": scores["coverage"]["supported_categories"] > 0})
     return scores

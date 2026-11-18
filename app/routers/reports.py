@@ -33,7 +33,7 @@ from app.services.portfolio_analytics import portfolio_analytics
 from app.services.canonical_metrics import canonical_return_summary
 from app.services.analysis import analysis_for_deal, effective_scores
 from app.services.financial_presentation import (
-    RETURN_LABELS, accepted_return_fact, return_context, return_evidence, schedule_context, schedule_source, source_reference,
+    RETURN_LABELS, accepted_return_fact, optional_sale_returns, return_context, return_evidence, schedule_context, schedule_source, source_reference,
 )
 
 router = APIRouter()
@@ -176,6 +176,9 @@ async def deal_pdf_report(deal_id: int, db: AsyncSession = Depends(get_db)):
     story.append(Paragraph("Investment Scores", styles["SectionHeading"]))
     if scores:
         rows = [("Overall", f"{scores['overall']} / 10" if scores.get("overall") is not None else "Not scored")]
+        if scores.get("overall") is None and scores.get("provisional_overall") is not None:
+            coverage = scores.get("coverage") or {}
+            rows.append(("Partial composite", f"{scores['provisional_overall']} / 10 · {coverage.get('supported_categories', 0)} of 7 categories"))
         for cat in ["returns", "market", "structure", "risk", "financials", "underwriting", "sponsor"]:
             c = scores.get(cat) or {}
             if c.get("score") is not None:
@@ -231,6 +234,15 @@ async def deal_pdf_report(deal_id: int, db: AsyncSession = Depends(get_db)):
     return_rows.append(("Projected Profit", _fmt_money(tr.get("projected_profit"))))
     story.append(_metric_table(return_rows))
 
+    sale_facts = optional_sale_returns(analysis)
+    if sale_facts:
+        story.append(Paragraph("Optional Sale Scenario", styles["SectionHeading"]))
+        rows = []
+        for fact in sale_facts:
+            value = f"{fact['value']}x" if fact["identity"]["unit"] == "multiple" else _fmt_pct(fact["value"])
+            rows.append((fact["label"], _pdf_return_value(value, fact, styles)))
+        story.append(_metric_table(rows))
+
     schedule = analysis.get("return_schedule")
     if schedule:
         story.append(Paragraph("Projected Cash-on-Cash by Year", styles["SectionHeading"]))
@@ -255,6 +267,20 @@ async def deal_pdf_report(deal_id: int, db: AsyncSession = Depends(get_db)):
         ("Construction Type", pd_.get("construction_type") or "—"),
         ("Entitlement Status", pd_.get("entitlement_status") or "—"),
     ]))
+
+    cost_facts = [fact for path, fact in analysis["facts"].items() if path.startswith("construction_costs.")
+                  and fact["value"] is not None and fact["state"] in {"checked", "calculated", "manual"}]
+    if cost_facts:
+        story.append(Paragraph("Construction Costs", styles["SectionHeading"]))
+        rows = []
+        for fact in cost_facts:
+            display = _fmt_pct(fact["value"]) if fact["identity"]["unit"] == "percent" else _fmt_money(fact["value"])
+            details = [escape(display)]
+            for note in (source_reference(fact.get("evidence")), fact.get("reason")):
+                if note:
+                    details.append(escape(str(note)))
+            rows.append((fact["label"], Paragraph("<br/>".join(details), styles["Small"])))
+        story.append(_metric_table(rows))
 
     # Financial projections
     story.append(Paragraph("Financial Projections", styles["SectionHeading"]))

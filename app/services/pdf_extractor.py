@@ -18,6 +18,8 @@ import fitz  # PyMuPDF
 # Minimum number of non-whitespace characters a page must have before we
 # consider its text layer "real." Anything shorter triggers OCR.
 MIN_TEXT_CHARS = 40
+SPARSE_TEXT_CHARS = 800
+LARGE_IMAGE_PAGE_FRACTION = 0.30
 
 # Render DPI for OCR and image extraction. Higher = better quality, slower.
 OCR_DPI = 200
@@ -38,7 +40,7 @@ class PdfExtractionResult:
     images: list[dict] = field(default_factory=list)
     # Per-page extraction diagnostics so the UI can surface "page 3 had
     # no usable text" instead of silently dropping that page's data.
-    #   source: "text" | "ocr" | "empty"
+    #   source: "text" | "ocr" | "ocr_weak" | "ocr_image" | "image_text_unread" | "empty"
     #   chars:  non-whitespace character count
     page_diagnostics: list[dict] = field(default_factory=list)
     # Aggregate quality score 0..100 based on page coverage. 100 = every
@@ -165,6 +167,34 @@ def _extract_images(
     return results
 
 
+def _has_large_image(page: "fitz.Page") -> bool:
+    try:
+        page_area = page.rect.get_area()
+        images = page.get_image_info() or []
+    except Exception:
+        return False
+    if page_area <= 0:
+        return False
+    for image in images:
+        try:
+            image_area = (fitz.Rect(image["bbox"]) & page.rect).get_area()
+        except (KeyError, TypeError, ValueError):
+            continue
+        if image_area >= page_area * LARGE_IMAGE_PAGE_FRACTION:
+            return True
+    return False
+
+
+def _merge_page_text(native_text: str, ocr_text: str) -> str:
+    normalized_ocr = " ".join(ocr_text.split()).casefold()
+    native_lines = [" ".join(line.split()).casefold() for line in native_text.splitlines() if line.strip()]
+    if normalized_ocr in " ".join(native_text.split()).casefold():
+        return native_text
+    if all(line in normalized_ocr for line in native_lines):
+        return ocr_text
+    return native_text + "\n\n" + ocr_text
+
+
 def extract_pdf(file_path: str) -> PdfExtractionResult:
     """Full extraction: text (with OCR fallback), tables, and images.
 
@@ -189,15 +219,23 @@ def extract_pdf(file_path: str) -> PdfExtractionResult:
     text_parts: list[str] = []
     for page_num, page in enumerate(doc, 1):
         page_text = (page.get_text() or "").strip()
+        native_text = page_text
         source = "text" if len(page_text) >= MIN_TEXT_CHARS else "empty"
+        image_needs_reading = len(page_text) < SPARSE_TEXT_CHARS and _has_large_image(page)
 
-        # OCR fallback for pages with no / near-no text layer.
-        if len(page_text) < MIN_TEXT_CHARS:
+        # A native heading can sit above an image containing the actual budget.
+        if len(page_text) < MIN_TEXT_CHARS or image_needs_reading:
             ocr_text = _ocr_page(page).strip()
-            if len(ocr_text) > len(page_text):
-                page_text = ocr_text
+            page_text = _merge_page_text(page_text, ocr_text)
+            normalized_page = " ".join(page_text.split()).casefold()
+            normalized_native = " ".join(native_text.split()).casefold()
+            added_text = normalized_page != normalized_native
+            if added_text:
                 result.ocr_page_count += 1
                 source = "ocr" if len(ocr_text) >= MIN_TEXT_CHARS else "ocr_weak"
+            if image_needs_reading:
+                image_chars = len(normalized_page) - len(normalized_native)
+                source = "ocr_image" if image_chars >= MIN_TEXT_CHARS else "image_text_unread"
 
         if page_text:
             text_parts.append(f"--- Page {page_num} ---\n{page_text}")
@@ -205,7 +243,8 @@ def extract_pdf(file_path: str) -> PdfExtractionResult:
             source = "empty"
 
         result.page_diagnostics.append(
-            {"page": page_num, "source": source, "chars": len(page_text)}
+            {"page": page_num, "source": source, "chars": len(page_text),
+             "image_text_unread": image_needs_reading and source == "image_text_unread"}
         )
 
         # Best-effort tables and images. Failures are silently skipped.
@@ -223,7 +262,7 @@ def extract_pdf(file_path: str) -> PdfExtractionResult:
         for d in result.page_diagnostics:
             w = 2.0 if d["page"] <= 5 else 1.0
             total += w
-            if d["chars"] >= MIN_TEXT_CHARS:
+            if d["chars"] >= MIN_TEXT_CHARS and not d.get("image_text_unread"):
                 good += w
         result.quality_score = int(round((good / total) * 100)) if total else 0
     return result

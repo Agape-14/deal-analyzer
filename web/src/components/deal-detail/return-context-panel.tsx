@@ -7,7 +7,7 @@ import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { api } from "@/lib/api";
 import { useCurrentUser } from "@/lib/auth-client";
-import type { AnalysisFact, DealDetail, DealDocument } from "@/lib/types";
+import type { AnalysisFact, DealAnalysis, DealDetail, DealDocument } from "@/lib/types";
 import { fmtMultiple, fmtPct } from "@/lib/utils";
 import { EvidenceViewer } from "./evidence-viewer";
 
@@ -22,6 +22,29 @@ const fieldClass = "mt-1 w-full rounded-md border border-input bg-background px-
 type Scenario = "hold" | "sale" | "unspecified";
 type Action = "scope" | "withhold";
 
+function optionalSaleFacts(analysis: DealAnalysis) {
+  return analysis.primary_strategy.startsWith("hold")
+    ? Object.values(analysis.facts).filter(fact => fact.path.startsWith("target_returns.")
+      && fact.identity.scenario === "sale" && typeof fact.value === "number"
+      && ["percent", "multiple"].includes(fact.identity.unit)
+      && ["checked", "calculated", "manual"].includes(fact.state)) : [];
+}
+
+export function OptionalSaleReturns({ analysis, dealName }: { analysis?: DealAnalysis; dealName?: string }) {
+  const facts = analysis ? optionalSaleFacts(analysis) : [];
+  if (!facts.length) return null;
+  return <Card className="p-5 md:p-6">
+    <h2 className="text-lg font-semibold">{dealName ? `${dealName} · Optional sale scenario` : "Optional sale scenario"}</h2>
+    <ul className="mt-3 divide-y divide-border">{facts.map(fact => (
+      <li key={fact.path} className="py-3">
+        <p className="text-sm font-medium">{fact.label} · {fact.identity.unit === "multiple" ? fmtMultiple(Number(fact.value)) : fmtPct(Number(fact.value))}</p>
+        <p className="mt-1 text-xs text-muted-foreground">{returnContext(fact)}</p>
+        <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-xs">{fact.evidence.map((source, index) => <EvidenceViewer key={index} source={source} />)}</div>
+      </li>
+    ))}</ul>
+  </Card>;
+}
+
 export function ReturnContextPanel({ deal }: { deal: DealDetail }) {
   const { isAnalyst } = useCurrentUser();
   const [editingPath, setEditingPath] = useState<string | null>(null);
@@ -34,14 +57,16 @@ export function ReturnContextPanel({ deal }: { deal: DealDetail }) {
     const fact = path ? analysis.facts[path] : undefined;
     return typeof value === "number" && fact ? [{ fact, label, value: format(value) }] : [];
   });
-  if (!rows.length) return null;
+  const optionalReturns = optionalSaleFacts(analysis);
+  if (!rows.length && !optionalReturns.length) return null;
 
   const documents = deal.documents.filter(doc => doc.has_text
     && doc.included_in_review !== false
     && (!doc.source_role || doc.source_role === "active"));
 
   return (
-    <Card className="p-5 md:p-6">
+    <div className="space-y-6">
+    {rows.length > 0 && <Card className="p-5 md:p-6">
       <h2 className="text-lg font-semibold">Published returns</h2>
       <ul className="mt-3 divide-y divide-border">
         {rows.map(({ fact, label, value }) => (
@@ -80,7 +105,9 @@ export function ReturnContextPanel({ deal }: { deal: DealDetail }) {
           </li>
         ))}
       </ul>
-    </Card>
+    </Card>}
+    <OptionalSaleReturns analysis={analysis} />
+    </div>
   );
 }
 

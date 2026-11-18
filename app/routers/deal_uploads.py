@@ -13,7 +13,7 @@ from sqlalchemy.orm import selectinload
 
 from app.database import async_session, get_db
 from app.config import openai_review_configured, paid_review_enabled
-from app.models import Deal, DealDocument
+from app.models import Deal, DealDocument, ReviewJob
 from app.rate_limit import limit
 from app.services.pdf_extractor import extract_pdf
 from app.services.spreadsheet_extractor import extract_spreadsheet
@@ -294,12 +294,17 @@ async def reprocess_document(doc_id: int, db: AsyncSession = Depends(get_db)):
     doc = result.scalar_one_or_none()
     if not doc:
         raise HTTPException(status_code=404, detail="Document not found")
+    job = await db.get(ReviewJob, doc.deal_id)
+    if (job and job.status in {"queued", "running"}) or (doc.extraction_quality or {}).get("status") in {"queued", "extracting"}:
+        raise HTTPException(409, "Wait for the current document reading or review to finish before refreshing source text.")
     if not doc.file_path or not os.path.exists(doc.file_path):
         raise HTTPException(status_code=410, detail="Original file is no longer available on disk")
 
     old_len = len(doc.extracted_text or "")
     ext = os.path.splitext(doc.file_path or doc.filename or "")[1].lower()
     extraction, quality, extracted_text, page_count = _extract_uploaded_file(doc.file_path, ext)
+    if quality.get("status") == "error" or extraction.get("error") or page_count <= 0 or not extracted_text.strip():
+        raise HTTPException(422, "Document reading failed or returned no usable text. The previous reading was preserved. Check the original file and retry.")
     doc.extracted_text = extracted_text
     doc.page_count = page_count
     doc.file_sha256 = quality.get("file_sha256") or doc.file_sha256 or sha256_file(doc.file_path)

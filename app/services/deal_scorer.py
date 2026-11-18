@@ -9,6 +9,52 @@ from app.services.confidence import assess_data_quality
 from app.services.canonical_metrics import canonical_return_summary
 
 
+SCORE_INPUT_GROUPS = {
+    "market": (("market_location.market_rent_growth",), ("market_location.market_job_growth",),
+               ("market_location.market_vacancy_rate",), ("market_location.walk_score",)),
+    "structure": (("deal_structure.preferred_return",), ("deal_structure.fees_asset_mgmt",),
+                  ("deal_structure.fees_acquisition",), ("deal_structure.gp_equity_coinvest_pct",),
+                  ("target_returns.total_fee_drag",)),
+    "risk": (("deal_structure.ltv",), ("project_details.entitlement_status",)),
+    "financials": (("financial_projections.entry_cap_rate", "financial_projections.exit_cap_rate"),
+                   ("financial_projections.occupancy_assumption",),
+                   ("financial_projections.rent_growth_assumption",),
+                   ("financial_projections.operating_expense_ratio",)),
+    "underwriting": (("underwriting_checks.break_even_occupancy",), ("underwriting_checks.dscr",),
+                     ("underwriting_checks.yield_on_cost", "financial_projections.entry_cap_rate")),
+    "sponsor": (("sponsor_evaluation.sponsor_full_cycle_deals",), ("deal_structure.gp_equity_coinvest_pct",)),
+}
+
+
+def category_inputs(metrics, category):
+    """Identify the actual inputs used by a category, including paired criteria."""
+    groups = SCORE_INPUT_GROUPS.get(category, ())
+    if category == "returns":
+        summary = canonical_return_summary(metrics)
+        strategy = summary["primary_strategy"]
+        if strategy == "unknown":
+            return [], ["target_returns.primary_strategy"]
+        keys = ("cash_on_cash",) if strategy in {"hold", "hold_with_sale_option"} else ("target_irr", "target_equity_multiple", "cash_on_cash")
+        fallback = {"cash_on_cash": "target_returns.target_cash_on_cash",
+                    "target_irr": "target_returns.target_irr", "target_equity_multiple": "target_returns.target_equity_multiple"}
+        supported = [summary[key + "_path"] for key in keys if summary.get(key) is not None and summary.get(key + "_path")]
+        missing = [fallback[key] for key in keys if summary.get(key) is None]
+        if strategy in {"hold", "hold_with_sale_option"}:
+            if summary.get("target_irr") is not None and summary.get("target_irr") != summary.get("cash_on_cash"):
+                supported.append(summary["target_irr_path"])
+            if strategy == "hold" and summary.get("target_equity_multiple") is not None:
+                supported.append(summary["target_equity_multiple_path"])
+        return supported, missing
+    supported, missing = [], []
+    for group in groups:
+        absent = [path for path in group if _safe_get(metrics, *path.split(".")) in (None, "")]
+        if absent:
+            missing.extend(absent)
+        else:
+            supported.extend(group)
+    return list(dict.fromkeys(supported)), list(dict.fromkeys(missing))
+
+
 def _safe_get(metrics: dict, *keys, default=None):
     """Safely navigate nested dict."""
     current = metrics
@@ -20,20 +66,22 @@ def _safe_get(metrics: dict, *keys, default=None):
     return current
 
 
-def _score_range(value, ranges: list[tuple]) -> int:
+def _score_range(value, ranges: list[tuple]) -> int | None:
     """Score a value based on ranges. ranges = [(threshold, score), ...] sorted desc."""
     if value is None:
-        return 5  # neutral if unknown
+        return None
     for threshold, score in ranges:
         if value >= threshold:
             return score
     return ranges[-1][1] if ranges else 5
 
 
-def score_returns(metrics: dict) -> tuple[int, str]:
+def score_returns(metrics: dict) -> tuple[int | None, str]:
     """Score based on the deal's primary return strategy. Weight: 20%"""
     summary = canonical_return_summary(metrics)
     strategy = summary.get("primary_strategy") or "unknown"
+    if strategy == "unknown":
+        return None, "Choose the primary strategy before scoring returns."
     tr = metrics.get("target_returns", {}) or {}
 
     irr = summary.get("target_irr")
@@ -62,7 +110,7 @@ def score_returns(metrics: dict) -> tuple[int, str]:
     else:
         score_parts = [s for s in [irr_score, em_score, coc_score] if s is not None]
 
-    avg = round(sum(score_parts) / len(score_parts)) if score_parts else 5
+    avg = round(sum(score_parts) / len(score_parts)) if score_parts else None
 
     notes = []
     if strategy == "hold_with_sale_option":
@@ -90,13 +138,13 @@ def score_returns(metrics: dict) -> tuple[int, str]:
         if sale_em:
             sale_bits.append(f"EM {sale_em}x")
         notes.append(f"Optional sale scenario shown separately ({', '.join(sale_bits)})")
-    if not notes:
-        notes.append("No return metrics found - scored neutral")
+    if not score_parts:
+        notes.append("Source-supported return metrics are unavailable for the primary strategy")
 
     return avg, "; ".join(notes)
 
 
-def score_market(metrics: dict) -> tuple[int, str]:
+def score_market(metrics: dict) -> tuple[int | None, str]:
     """Score market quality. Weight: 15%"""
     rent_growth = _safe_get(metrics, "market_location", "market_rent_growth")
     job_growth = _safe_get(metrics, "market_location", "market_job_growth")
@@ -127,13 +175,13 @@ def score_market(metrics: dict) -> tuple[int, str]:
         scores.append(s)
         notes.append(f"Walk score {walk} -> {s}/10")
 
-    avg = round(sum(scores) / len(scores)) if scores else 5
+    avg = round(sum(scores) / len(scores)) if scores else None
     if not notes:
-        notes.append("Limited market data - scored neutral")
+        notes.append("Source-supported market inputs are unavailable")
     return avg, "; ".join(notes)
 
 
-def score_structure(metrics: dict) -> tuple[int, str]:
+def score_structure(metrics: dict) -> tuple[int | None, str]:
     """Score deal structure (fees, waterfall, alignment). Weight: 15%"""
     pref = _safe_get(metrics, "deal_structure", "preferred_return")
     asset_mgmt = _safe_get(metrics, "deal_structure", "fees_asset_mgmt")
@@ -229,13 +277,13 @@ def score_structure(metrics: dict) -> tuple[int, str]:
         scores.append(s)
         notes.append(f"Total fee drag {total_fee_drag}% -> {s}/10")
 
-    avg = round(sum(scores) / len(scores)) if scores else 5
+    avg = round(sum(scores) / len(scores)) if scores else None
     if not notes:
-        notes.append("Limited structure data - scored neutral")
+        notes.append("Source-supported structure inputs are unavailable")
     return avg, "; ".join(notes)
 
 
-def score_risk(metrics: dict) -> tuple[int, str]:
+def score_risk(metrics: dict) -> tuple[int | None, str]:
     """Score risk factors. Weight: 15%"""
     ltv = _safe_get(metrics, "deal_structure", "ltv")
     entitlement = _safe_get(metrics, "project_details", "entitlement_status")
@@ -264,7 +312,7 @@ def score_risk(metrics: dict) -> tuple[int, str]:
 
     if entitlement:
         ent_str = str(entitlement).lower()
-        if "entitled" in ent_str and "not" not in ent_str:
+        if ("entitled" in ent_str or "fully approved" in ent_str) and "not" not in ent_str:
             s = 9
         elif "in-process" in ent_str or "in process" in ent_str:
             s = 5
@@ -280,13 +328,13 @@ def score_risk(metrics: dict) -> tuple[int, str]:
         except (ValueError, TypeError):
             pass
 
-    avg = round(sum(scores) / len(scores)) if scores else 5
+    avg = round(sum(scores) / len(scores)) if scores else None
     if not notes:
-        notes.append("Limited risk data - scored neutral")
+        notes.append("Source-supported risk inputs are unavailable")
     return avg, "; ".join(notes)
 
 
-def score_financials(metrics: dict) -> tuple[int, str]:
+def score_financials(metrics: dict) -> tuple[int | None, str]:
     """Score financial assumptions. Weight: 15%"""
     entry_cap = _safe_get(metrics, "financial_projections", "entry_cap_rate")
     exit_cap = _safe_get(metrics, "financial_projections", "exit_cap_rate")
@@ -352,13 +400,13 @@ def score_financials(metrics: dict) -> tuple[int, str]:
         scores.append(s)
         notes.append(f"Expense ratio {expense_ratio}% -> {s}/10")
 
-    avg = round(sum(scores) / len(scores)) if scores else 5
+    avg = round(sum(scores) / len(scores)) if scores else None
     if not notes:
-        notes.append("Limited financial data - scored neutral")
+        notes.append("Source-supported financial inputs are unavailable")
     return avg, "; ".join(notes)
 
 
-def score_underwriting(metrics: dict) -> tuple[int, str]:
+def score_underwriting(metrics: dict) -> tuple[int | None, str]:
     """Score underwriting quality (Burke's metrics). Weight: 10%"""
     beo = _safe_get(metrics, "underwriting_checks", "break_even_occupancy")
     dscr = _safe_get(metrics, "underwriting_checks", "dscr")
@@ -411,13 +459,13 @@ def score_underwriting(metrics: dict) -> tuple[int, str]:
         scores.append(s)
         notes.append(f"Yield on cost {yoc}% vs entry cap {entry_cap}% -> {s}/10")
 
-    avg = round(sum(scores) / len(scores)) if scores else 5
+    avg = round(sum(scores) / len(scores)) if scores else None
     if not notes:
-        notes.append("Limited underwriting data - scored neutral")
+        notes.append("Source-supported underwriting inputs are unavailable")
     return avg, "; ".join(notes)
 
 
-def score_sponsor(metrics: dict) -> tuple[int, str]:
+def score_sponsor(metrics: dict) -> tuple[int | None, str]:
     """Score sponsor quality (Burke's sponsor evaluation). Weight: 10%"""
     full_cycle = _safe_get(metrics, "sponsor_evaluation", "sponsor_full_cycle_deals")
     alignment = _safe_get(metrics, "sponsor_evaluation", "alignment_score")
@@ -470,9 +518,9 @@ def score_sponsor(metrics: dict) -> tuple[int, str]:
             notes.append(f"GP co-invest {gp_coinvest}% -> {s}/10")
         scores.append(s)
 
-    avg = round(sum(scores) / len(scores)) if scores else 5
+    avg = round(sum(scores) / len(scores)) if scores else None
     if not notes:
-        notes.append("Limited sponsor data - scored neutral")
+        notes.append("Source-supported sponsor inputs are unavailable")
     return avg, "; ".join(notes)
 
 
@@ -491,35 +539,37 @@ def score_deal(
     underwriting_score, underwriting_notes = score_underwriting(metrics)
     sponsor_score, sponsor_notes = score_sponsor(metrics)
 
-    # Weighted average (weights sum to 100). This is the analytical score,
-    # but it remains provisional until data-quality gates pass.
-    provisional_overall = round(
-        returns_score * 0.20
-        + market_score * 0.15
-        + structure_score * 0.15
-        + risk_score * 0.15
-        + financials_score * 0.15
-        + underwriting_score * 0.10
-        + sponsor_score * 0.10,
-        1
-    )
+    category_results = {
+        "returns": (returns_score, returns_notes, 20), "market": (market_score, market_notes, 15),
+        "structure": (structure_score, structure_notes, 15), "risk": (risk_score, risk_notes, 15),
+        "financials": (financials_score, financials_notes, 15), "underwriting": (underwriting_score, underwriting_notes, 10),
+        "sponsor": (sponsor_score, sponsor_notes, 10),
+    }
+    categories = {}
+    for category, (score, notes, weight) in category_results.items():
+        supported, missing = category_inputs(metrics, category)
+        supported_score = score if supported else None
+        categories[category] = {"score": supported_score, "weight": weight, "notes": notes,
+                                "supported_inputs": supported, "missing_inputs": missing,
+                                "status": "supported" if supported_score is not None else "unavailable"}
+    scored = [category for category in categories.values() if category["score"] is not None]
+    supported_weight = sum(category["weight"] for category in scored)
+    provisional_overall = (round(sum(category["score"] * category["weight"] for category in scored) / supported_weight, 1)
+                           if len(scored) >= 2 else None)
 
     data_quality = assess_data_quality(
         metrics,
         math_checks=math_checks,
         require_verified=require_verified,
     )
-    overall = provisional_overall if data_quality.get("can_score") else None
+    overall = provisional_overall if data_quality.get("can_score") and len(scored) == len(categories) else None
 
     return {
         "overall": overall,
         "provisional_overall": provisional_overall,
         "data_quality": data_quality,
-        "returns": {"score": returns_score, "weight": 20, "notes": returns_notes},
-        "market": {"score": market_score, "weight": 15, "notes": market_notes},
-        "structure": {"score": structure_score, "weight": 15, "notes": structure_notes},
-        "risk": {"score": risk_score, "weight": 15, "notes": risk_notes},
-        "financials": {"score": financials_score, "weight": 15, "notes": financials_notes},
-        "underwriting": {"score": underwriting_score, "weight": 10, "notes": underwriting_notes},
-        "sponsor": {"score": sponsor_score, "weight": 10, "notes": sponsor_notes},
+        "score_policy": "observed-categories-v1",
+        "coverage": {"supported_categories": len(scored), "total_categories": len(categories),
+                     "supported_weight": supported_weight, "total_weight": 100},
+        **categories,
     }

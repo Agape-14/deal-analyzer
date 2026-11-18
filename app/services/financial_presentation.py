@@ -20,6 +20,16 @@ def accepted_return_fact(analysis, key):
     return (analysis.get("facts") or {}).get(returns.get(f"{key}_path"))
 
 
+def optional_sale_returns(analysis):
+    if not str(analysis.get("primary_strategy", "")).startswith("hold"):
+        return []
+    return [fact for path, fact in (analysis.get("facts") or {}).items()
+            if path.startswith("target_returns.") and fact.get("value") is not None
+            and fact.get("state") in {"checked", "calculated", "manual"}
+            and fact.get("identity", {}).get("scenario") == "sale"
+            and fact.get("identity", {}).get("unit") in {"percent", "multiple"}]
+
+
 def return_context(fact):
     identity = (fact or {}).get("identity") or {}
     parts = []

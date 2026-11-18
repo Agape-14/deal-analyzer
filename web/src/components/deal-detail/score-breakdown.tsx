@@ -59,13 +59,14 @@ export function ScoreBreakdown({
       <Card elevated className="p-8 text-center">
         <div className="text-sm font-medium">No scores yet</div>
         <div className="text-xs text-muted-foreground mt-1">
-          Upload an offering memo and run AI scoring to see the breakdown.
+          Category scores appear as their source-supported inputs become available.
         </div>
       </Card>
     );
   }
 
   const visibleOverall = typeof scores.overall === "number" ? scores.overall : scores.provisional_overall;
+  const supportedCount = CATEGORIES.filter(category => typeof (scores[category.key] as ScoreCategory | undefined)?.score === "number").length;
 
   return (
     <Card elevated className="p-6">
@@ -75,7 +76,7 @@ export function ScoreBreakdown({
           <p className="text-xs text-muted-foreground mt-0.5">
             {viewerMode
               ? "A simplified view of what is helping or hurting this deal."
-              : "Weighted composite of 7 analyst categories."}
+              : `${supportedCount} of 7 categories have source-supported inputs.`}
           </p>
           {!viewerMode && (
             <div className="mt-2">
@@ -86,7 +87,7 @@ export function ScoreBreakdown({
         {typeof visibleOverall === "number" && (
           <div className="text-right">
             <div className="text-[10px] uppercase tracking-[0.12em] text-muted-foreground">
-              {typeof scores.overall === "number" ? "Overall" : "Provisional"}
+              {typeof scores.overall === "number" ? "Overall" : "Partial composite"}
             </div>
             <div className="text-2xl font-semibold tabular-nums leading-none mt-1">
               {visibleOverall.toFixed(1)}
@@ -99,7 +100,11 @@ export function ScoreBreakdown({
         {CATEGORIES.map((c, i) => {
           const cat = scores[c.key] as ScoreCategory | undefined;
           if (!cat || typeof cat !== "object" || cat === null || !("score" in cat)) return null;
-          const score = Math.max(0, Math.min(10, cat.score));
+          const score = typeof cat.score === "number" ? Math.max(0, Math.min(10, cat.score)) : null;
+          if (score === null) return <div key={c.key} className="border-b border-border/50 pb-3 last:border-0">
+            <div className="flex items-center justify-between gap-2"><span className="text-sm font-medium">{c.label}</span><span className="text-xs text-muted-foreground">Needs source inputs</span></div>
+            {cat.notes && <p className="mt-1 text-xs text-muted-foreground">{cat.notes}</p>}
+          </div>;
           const pct = score * 10;
           const barColor =
             score >= 8

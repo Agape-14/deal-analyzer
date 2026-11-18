@@ -382,6 +382,8 @@ test('new deal reviews PDF and workbook through Codex paste, Summary, Compare, a
         source_doc_id: memo.id, source_page: 1, source_excerpt: 'Construction loan commitment: $19,800,000.'},
       {path: 'deal_structure.total_project_cost', value: 32000000, currency: 'USD',
         source_doc_id: memo.id, source_page: 1, source_excerpt: 'Total project cost: $32,000,000.'},
+      {path: 'construction_costs.total_project_cost', value: 32000000, currency: 'USD',
+        source_doc_id: memo.id, source_page: 1, source_excerpt: 'Total project cost: $32,000,000.'},
       {path: 'target_returns.primary_strategy', value: 'hold',
         source_doc_id: memo.id, source_page: 1, source_excerpt: 'Investment strategy: hold.'},
       {path: holdPath, value: 8.9, ...holdContext, source_doc_id: memo.id, source_page: 2, source_excerpt: holdQuote},
@@ -409,7 +411,7 @@ test('new deal reviews PDF and workbook through Codex paste, Summary, Compare, a
     await page.getByRole('textbox', { name: 'Codex review JSON' }).fill(['```json', JSON.stringify(result), '```'].join('\n'));
     await page.getByRole('button', { name: 'Check pasted result', exact: true }).click();
     await expect(page.getByRole('heading', { name: 'Codex review draft' })).toBeVisible();
-    const apply = page.getByRole('button', { name: 'Apply 8 values', exact: true });
+    const apply = page.getByRole('button', { name: 'Apply 9 values', exact: true });
     await expect(apply).toBeEnabled();
     const conflict = page.getByText('Multiple values were proposed for this field. Compare the sources before resolving it.', { exact: true });
     await expect(conflict).toHaveCount(2);
@@ -420,7 +422,7 @@ test('new deal reviews PDF and workbook through Codex paste, Summary, Compare, a
       await expect(choice).not.toBeChecked();
     }
     const { draft } = await (await page.request.get(base + '/review/draft')).json();
-    expect(draft.rows.filter(row => !row.issue)).toHaveLength(8);
+    expect(draft.rows.filter(row => !row.issue)).toHaveLength(9);
     expect(draft.rows.find(row => row.path === holdPath)).toMatchObject({
       value: 8.9, issue: '', context: holdContext,
       evidence: {source_doc_id: memo.id, source_page: 2, source_excerpt: holdQuote},
@@ -429,13 +431,15 @@ test('new deal reviews PDF and workbook through Codex paste, Summary, Compare, a
     expect(before.analysis.facts['project_details.unit_count'].value).toBeNull();
     expect(before.analysis.returns.cash_on_cash).toBeNull();
     await apply.click();
-    await expect(page.getByText(/8 values applied/)).toBeVisible();
+    await expect(page.getByText(/9 values applied/)).toBeVisible();
     await expect(conflict).toHaveCount(2);
 
     await page.getByRole('tab', { name: 'Summary', exact: true }).click();
     const summary = page.getByRole('tabpanel', { name: 'Summary', exact: true });
     await expect(summary.getByText('$125K', { exact: true })).toBeVisible();
     await expect(summary.getByText('148', { exact: true })).toBeVisible();
+    await expect(summary.getByRole('heading', { name: 'Construction costs', exact: true })).toBeVisible();
+    await expect(summary.getByRole('heading', { name: 'Score breakdown', exact: true })).toBeVisible();
     await expect(summary.getByRole('heading', { name: 'Published returns' })).toBeVisible();
     const publishedReturn = summary.getByRole('listitem').filter({hasText: 'Cash-on-cash'});
     await expect(publishedReturn.getByText('8.9%', { exact: true })).toBeVisible();
@@ -444,7 +448,8 @@ test('new deal reviews PDF and workbook through Codex paste, Summary, Compare, a
     const evidenceDialog = page.getByRole('dialog', { name: 'pilot-offering.pdf · page 2', exact: true });
     await expect(evidenceDialog.locator('mark')).toHaveText(holdQuote);
     await page.keyboard.press('Escape');
-    await expect(summary.getByText('17.4%', { exact: true })).toHaveCount(0);
+    await expect(summary.getByRole('heading', { name: 'Optional sale scenario', exact: true })).toBeVisible();
+    await expect(summary.getByText('Net irr · 17.4%', { exact: true })).toBeVisible();
     const deal = await (await page.request.get(base)).json();
     expect(deal.analysis.facts['deal_structure.minimum_investment']).toMatchObject({value: 125000, state: 'checked'});
     expect(deal.analysis.facts['project_details.unit_count'].evidence[0]).toMatchObject({
@@ -460,10 +465,13 @@ test('new deal reviews PDF and workbook through Codex paste, Summary, Compare, a
     expect(reportText).toContain('$125,000');
     expect(reportText).toMatch(/Unit Count\s+148/);
     expect(reportText).toContain('Cash-on-Cash');
+    expect(reportText).toContain('Construction Costs');
     expect(reportText).toContain('8.90%');
     expect(reportText.replace(/\s+/g, ' ')).toContain(exportContext);
     expect(reportText).toContain('pilot-offering.pdf, p. 2');
-    expect(reportText).not.toMatch(/17\.40%|2,040,000|2,160,000/);
+    expect(reportText).toContain('Optional Sale Scenario');
+    expect(reportText).toContain('17.40%');
+    expect(reportText).not.toMatch(/2,040,000|2,160,000/);
 
     await page.goto('/compare?ids=' + id + ',1');
     const minRow = page.getByTestId('compare-row-min_investment');

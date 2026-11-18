@@ -341,14 +341,18 @@ export interface ValidationFlag {
 }
 
 export interface ScoreCategory {
-  score: number;
+  score: number | null;
   weight: number;
   notes: string;
+  supported_inputs?: string[];
+  missing_inputs?: string[];
+  status?: "supported" | "unavailable";
 }
 
 export interface DealScores {
   overall: number | null;
-  provisional_overall?: number;
+  provisional_overall?: number | null;
+  coverage?: { supported_categories: number; total_categories: number };
   data_quality?: DataQualityGate;
   returns: ScoreCategory;
   market: ScoreCategory;

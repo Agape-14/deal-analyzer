@@ -157,6 +157,63 @@ async def test_document_csv_upload_read_reprocess_and_delete(client):
     assert (await client.get(f"/api/deals/documents/{doc_id}/file")).status_code == 404
 
 
+@pytest.mark.parametrize("quality,text,pages", [
+    ({"status": "error"}, "Error extracting text: synthetic failure", 0),
+    ({"status": "extracted"}, " \n ", 1),
+    ({"status": "extracted"}, "[Failed to open PDF: synthetic failure]", 0),
+])
+async def test_document_reprocess_preserves_reading_when_extraction_fails(client, monkeypatch, quality, text, pages):
+    import copy
+
+    from app.database import async_session
+    from app.models import DealDocument
+    from app.routers import deal_uploads
+
+    deal = await new_deal(client, "Preserve source reading")
+    uploaded = await client.post(f"/api/deals/{deal}/documents/upload", files={
+        "file": ("facts.csv", b"Metric,Value\nUnits,120\n", "text/csv"),
+    })
+    assert uploaded.status_code == 200, uploaded.text
+    doc_id = uploaded.json()["id"]
+    fields = ("extracted_text", "page_count", "file_sha256", "content_fingerprint", "extraction_quality")
+    async with async_session() as db:
+        doc = await db.get(DealDocument, doc_id)
+        before = {field: copy.deepcopy(getattr(doc, field)) for field in fields}
+    monkeypatch.setattr(deal_uploads, "_extract_uploaded_file", lambda *args: ({}, quality, text, pages))
+    response = await client.post(f"/api/deals/documents/{doc_id}/reprocess")
+    assert response.status_code == 422, response.text
+    assert "previous reading was preserved" in response.json()["detail"]
+    async with async_session() as db:
+        doc = await db.get(DealDocument, doc_id)
+        assert {field: getattr(doc, field) for field in fields} == before
+
+
+@pytest.mark.parametrize("status", ["queued", "running"])
+async def test_document_reprocess_waits_for_active_review(client, monkeypatch, status):
+    from app.database import async_session
+    from app.models import ReviewJob
+    from app.routers import deal_uploads
+    from app.services.review_jobs import enqueue_review
+
+    deal = await new_deal(client, "Active source review")
+    uploaded = await client.post(f"/api/deals/{deal}/documents/upload", files={
+        "file": ("facts.csv", b"Metric,Value\nUnits,120\n", "text/csv"),
+    })
+    assert uploaded.status_code == 200, uploaded.text
+    doc_id = uploaded.json()["id"]
+    async with async_session() as db:
+        await enqueue_review(db, deal)
+        job = await db.get(ReviewJob, deal)
+        job.status = status
+        await db.commit()
+    def should_not_read(*args):
+        raise AssertionError("An active review must finish before another document read starts.")
+    monkeypatch.setattr(deal_uploads, "_extract_uploaded_file", should_not_read)
+    response = await client.post(f"/api/deals/documents/{doc_id}/reprocess")
+    assert response.status_code == 409, response.text
+    assert "review to finish" in response.json()["detail"]
+
+
 async def test_portfolio_exports_and_chat_history(client):
     deal = await new_deal(client, "Export coverage")
     investment = await client.post("/api/investments/", json={
