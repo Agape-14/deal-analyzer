@@ -178,7 +178,7 @@ def _has_large_image(page: "fitz.Page") -> bool:
     for image in images:
         try:
             image_area = (fitz.Rect(image["bbox"]) & page.rect).get_area()
-        except (KeyError, TypeError, ValueError):
+        except (KeyError, TypeError, ValueError, AssertionError):
             continue
         if image_area >= page_area * LARGE_IMAGE_PAGE_FRACTION:
             return True

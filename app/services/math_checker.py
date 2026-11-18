@@ -594,11 +594,11 @@ def run_math_checks(metrics: dict) -> list[dict]:
     
     results.append({
         'check': 'Critical Fields Completeness',
-        'status': 'pass' if not missing else ('warn' if len(missing) <= 3 else 'fail'),
-        'expected': f'{len(critical_fields)}/{len(critical_fields)} critical fields',
+        'status': 'warn' if missing else 'pass',
+        'expected': f'{len(critical_fields)} possible source fields',
         'actual': f'{filled}/{len(critical_fields)} filled',
         'difference': f'Missing: {", ".join(missing)}' if missing else 'all present',
-        'formula': 'These fields are essential for deal evaluation',
+        'formula': 'Available fields describe source coverage',
     })
     
     return results

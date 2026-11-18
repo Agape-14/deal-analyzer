@@ -38,6 +38,7 @@ export function FactEvidence({ fact }: { fact?: AnalysisFact }) {
     <summary className="cursor-pointer">Evidence · {fact.state === "manual" ? "Analyst resolved" : fact.state}</summary>
     <div className="mt-2 space-y-2 leading-relaxed">
       {fact.reason && <p>{fact.reason}</p>}
+      {[fact.identity.basis, fact.identity.period, fact.identity.debt_phase, fact.identity.currency].some(value => value && value !== "unspecified") && <p>{[fact.identity.basis, fact.identity.period, fact.identity.debt_phase, fact.identity.currency].filter(value => value && value !== "unspecified").join(" · ")}</p>}
       {fact.formula && <p>Calculated: {fact.formula}</p>}
       {fact.dependencies.length > 0 && <p>Inputs: {fact.dependencies.map(p => p.split(".").pop()?.replaceAll("_", " ")).join(", ")}</p>}
       {fact.evidence.map((e, i) => <div key={`${e.document_id}-${i}`}>
@@ -96,6 +97,7 @@ export function AcceptedSummary({ deal }: { deal: DealDetail }) {
           <div key={path} className={typeof fact.value === "string" && fact.value.length > 100 ? "sm:col-span-2 lg:col-span-3" : ""}>
             <div className="text-xs text-muted-foreground">{fact.label}</div>
             <div className="mt-1 text-sm font-medium whitespace-pre-wrap break-words">{factValue(fact)}</div>
+            {[fact.identity.basis, fact.identity.period].some(value => value && value !== "unspecified") && <p className="mt-1 text-xs text-muted-foreground">{[fact.identity.basis, fact.identity.period].filter(value => value && value !== "unspecified").join(" · ")}</p>}
             <FactEvidence fact={fact} />
           </div>
         ))}</div>

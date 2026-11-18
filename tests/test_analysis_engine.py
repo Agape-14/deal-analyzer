@@ -326,17 +326,30 @@ def test_sale_return_score_does_not_average_missing_metrics_as_five():
 def test_overall_uses_complete_observed_categories_without_global_verifier_flag():
     from types import SimpleNamespace
     from app.services.analysis import score_accepted_deal
+    from app.services.math_checker import run_math_checks
     metrics = manual_metrics()
     metrics["deal_structure"].update(ltv=65, gp_equity_coinvest_pct=5, fees_asset_mgmt=1)
     metrics["market_location"] = {"walk_score": 80}
     metrics["sponsor_evaluation"] = {"sponsor_full_cycle_deals": 5}
     metrics["financial_projections"] = {"occupancy_assumption": 95, "stabilized_noi": 70000, "annual_debt_service": 50000}
     metrics["_provenance"] = {path: {"status": "manual"} for path in flatten(metrics)}
+    completeness = next(check for check in run_math_checks(metrics) if check["check"] == "Critical Fields Completeness")
+    assert completeness["status"] == "warn"
     scores = score_accepted_deal(SimpleNamespace(property_type="multifamily", documents=[]), metrics)
     assert scores["coverage"]["supported_categories"] == 7
     assert scores["coverage"]["supported_weight"] == 100
     assert scores["overall"] == 7.2
     assert scores["data_quality"]["can_score"] is True
+    assert scores["data_quality"]["math_summary"]["fail"] == 0
+    assert scores["data_quality"]["math_summary"]["warn"] > 0
+    metrics["construction_costs"] = {"hard_costs_total": 500000, "hard_costs_per_unit": 1}
+    for path in ("construction_costs.hard_costs_total", "construction_costs.hard_costs_per_unit"):
+        metrics["_provenance"][path] = {"status": "manual"}
+    contradicted = score_accepted_deal(SimpleNamespace(property_type="multifamily", documents=[]), metrics)
+    assert contradicted["coverage"]["supported_categories"] == 7
+    assert contradicted["overall"] is None
+    assert any(check["check"] == "Hard Costs/Unit = Hard Costs Total / Units"
+               for check in contradicted["data_quality"]["math_summary"]["blocking"])
 
 
 def test_effective_scores_rebuild_old_policy_without_mutating_saved_scores():

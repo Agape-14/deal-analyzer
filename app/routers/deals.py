@@ -690,7 +690,12 @@ async def export_comparison(data: CompareRequest, db: AsyncSession = Depends(get
             ("Soft Costs", lambda d: (analyses[d.id]["accepted_metrics"].get("construction_costs") or {}).get("soft_costs_total")),
             ("Contingency", lambda d: (analyses[d.id]["accepted_metrics"].get("construction_costs") or {}).get("contingency_total")),
             ("Contingency %", lambda d: (analyses[d.id]["accepted_metrics"].get("construction_costs") or {}).get("contingency_pct")),
-            ("Financing Costs", lambda d: (analyses[d.id]["accepted_metrics"].get("construction_costs") or {}).get("financing_costs_total")),
+            ("Financing Costs", lambda d: (analyses[d.id]["accepted_metrics"].get("construction_costs") or {}).get("financing_costs")),
+            ("Preconstruction Soft Costs", lambda d: (analyses[d.id]["accepted_metrics"].get("construction_costs") or {}).get("preconstruction_soft_costs")),
+            ("City and Agency Fees", lambda d: (analyses[d.id]["accepted_metrics"].get("construction_costs") or {}).get("city_agency_fees")),
+            ("Offsite Development", lambda d: (analyses[d.id]["accepted_metrics"].get("construction_costs") or {}).get("offsite_development_costs")),
+            ("Onsite Construction", lambda d: (analyses[d.id]["accepted_metrics"].get("construction_costs") or {}).get("onsite_construction_costs")),
+            ("Construction and Lease-up Soft Costs", lambda d: (analyses[d.id]["accepted_metrics"].get("construction_costs") or {}).get("construction_leaseup_soft_costs")),
             ("Developer Fee", lambda d: (analyses[d.id]["accepted_metrics"].get("construction_costs") or {}).get("developer_fee_total")),
         ]),
         ("FINANCIAL PROJECTIONS", [
