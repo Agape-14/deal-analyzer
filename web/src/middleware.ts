@@ -22,14 +22,16 @@ const PUBLIC_PREFIXES = [
   "/static/",
 ];
 
+function appOrigin(req: NextRequest): string {
+  const host = req.headers.get("host");
+  // The incoming URL may include the reverse proxy's internal listener port.
+  return host ? `${req.nextUrl.protocol}//${host}` : req.nextUrl.origin;
+}
+
 export function middleware(req: NextRequest) {
   const { pathname } = req.nextUrl;
   if (pathname === "/legacy" || pathname.startsWith("/legacy/")) {
-    const url = new URL(req.url);
-    url.host = req.headers.get("host") || url.host;
-    url.pathname = "/";
-    url.search = "";
-    return NextResponse.redirect(url);
+    return NextResponse.redirect(new URL("/", appOrigin(req)));
   }
   if (
     PUBLIC_PAGES.includes(pathname) ||
@@ -47,9 +49,7 @@ export function middleware(req: NextRequest) {
     return NextResponse.next();
   }
 
-  const url = new URL(req.url);
-  url.host = req.headers.get("host") || url.host;
-  url.pathname = "/login";
+  const url = new URL("/login", appOrigin(req));
   url.searchParams.set("next", pathname + (req.nextUrl.search || ""));
   return NextResponse.redirect(url);
 }

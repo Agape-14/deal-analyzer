@@ -39,6 +39,23 @@ async function dealPage(page, id = 1, tab) {
   await expect(page.getByRole('heading', { level: 1 })).toBeVisible();
 }
 
+test('reverse-proxy redirects use the public host and preserve the sign-in destination', async ({ browser }) => {
+  const context = await browser.newContext({ storageState: { cookies: [], origins: [] } });
+  try {
+    const proxyHeaders = { host: 'deals.example.test', 'x-forwarded-proto': 'https' };
+    const publicOrigin = 'https://deals.example.test';
+    for (const [path, destination] of [['/?new=1', '/login?next=%2F%3Fnew%3D1'], ['/legacy', '/']]) {
+      const response = await context.request.get(`http://127.0.0.1:3000${path}`, {
+        headers: proxyHeaders, maxRedirects: 0,
+      });
+      expect(response.status()).toBe(307);
+      expect(response.headers().location).toBe(`${publicOrigin}${destination}`);
+    }
+  } finally {
+    await context.close();
+  }
+});
+
 test('real sign-in rejects bad credentials and refreshes authenticated controls', async ({ browser }) => {
   const context = await browser.newContext({ storageState: { cookies: [], origins: [] } });
   const page = await context.newPage();
