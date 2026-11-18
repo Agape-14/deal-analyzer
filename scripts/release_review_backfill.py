@@ -13,7 +13,8 @@ from sqlalchemy import select
 
 from app.database import async_session, engine
 from app.models import Deal
-from scripts.review_backfill import BackfillFailure, BackfillPlan, execute_plan
+from app.services.analysis import digest
+from scripts.review_backfill import BackfillFailure, BackfillPlan, diagnose_plan, execute_plan
 
 
 log = logging.getLogger("kenyon.review_backfill")
@@ -38,6 +39,7 @@ async def _run(encoded_plan, mode):
         if len(body) > MAX_PLAN_BYTES:
             raise ValueError("Review maintenance plan exceeds the size limit.")
         plan = BackfillPlan.model_validate_json(body)
+        approved_plan_digest = digest(plan.model_dump())
         if mode == "validate":
             # Preview against current revisions, while the source package guard
             # stays fixed. The apply release must supply these exact revisions.
@@ -50,10 +52,9 @@ async def _run(encoded_plan, mode):
                 item.model_copy(update={"expected_revision": revisions.get(item.deal_id, item.expected_revision)})
                 for item in plan.deals
             ]})
-        result = await asyncio.wait_for(
-            execute_plan(plan, engine=engine, apply=mode == "apply"),
-            timeout=120,
-        )
+        operation = diagnose_plan(plan, engine=engine) if mode == "validate" else execute_plan(plan, engine=engine, apply=True)
+        result = await asyncio.wait_for(operation, timeout=120)
+        result["approved_plan_digest"] = approved_plan_digest
     except BackfillFailure as exc:
         result = exc.report
     except Exception as exc:

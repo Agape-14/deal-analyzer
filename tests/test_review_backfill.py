@@ -166,3 +166,43 @@ async def test_failed_preflight_reports_all_target_revisions_and_selected_issues
     assert report["deals"][0]["blocked_selected"][0]["path"] == "project_details.unit_count"
     assert "source_excerpt" not in str(report)
     assert "review" not in report["deals"][0]
+
+
+async def test_independent_diagnostic_continues_after_failures_and_rolls_back_every_deal(client):
+    import copy
+
+    from sqlalchemy import select
+    from app.database import async_session, engine
+    from app.models import AnalysisSnapshot, Deal, DealDocument, ReviewJob
+
+    items = [(await seed_plan(client))[0] for _ in range(3)]
+    items[0]["approve_paths"].append("project_details.unit_count")
+    items[1]["financing"]["measures"][0]["amount"] = 600000
+    module = backfill_module()
+    plan = module.BackfillPlan.model_validate({"version": 1, "deals": items})
+    original_plan = copy.deepcopy(plan.model_dump())
+
+    async def database_state():
+        state = {}
+        async with async_session() as db:
+            for model in (Deal, DealDocument, ReviewJob, AnalysisSnapshot):
+                rows = (await db.execute(select(model).order_by(*model.__table__.primary_key.columns))).scalars().all()
+                state[model.__tablename__] = [
+                    {column.name: copy.deepcopy(getattr(row, column.name)) for column in model.__table__.columns}
+                    for row in rows
+                ]
+        return state
+
+    before = await database_state()
+    report = await module.diagnose_plan(plan, engine=engine)
+    assert report["mode"] == "diagnostic_dry_run"
+    assert report["status"] == "failed"
+    assert report["failed_deals"] == 2 and report["validated_deals"] == 1
+    assert [row["deal_id"] for row in report["deals"]] == [item["deal_id"] for item in items]
+    assert report["deals"][0]["blocked_selected"][0]["path"] == "project_details.unit_count"
+    assert report["deals"][1]["status"] == "failed"
+    assert report["deals"][2]["status"] == "validated"
+    assert report["deals"][2]["analysis"]["accepted_fact_count"] > 0
+    assert "source_excerpt" not in str(report)
+    assert plan.model_dump() == original_plan
+    assert await database_state() == before

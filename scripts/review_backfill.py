@@ -333,6 +333,33 @@ async def _run(plan, apply):
         await engine.dispose()
 
 
+async def diagnose_plan(plan: BackfillPlan, *, engine):
+    """Collect independent deal previews, each confined to its own rollback."""
+    report = {"mode": "diagnostic_dry_run", "plan_digest": digest(plan.model_dump()),
+              "status": "validated", "validated_deals": 0, "failed_deals": 0, "deals": []}
+    for item in plan.deals:
+        scoped_plan = plan.model_copy(update={"deals": [item]})
+        try:
+            result = await execute_plan(scoped_plan, engine=engine, apply=False)
+        except BackfillFailure as exc:
+            result = exc.report
+        except Exception as exc:
+            result = {"status": "failed", "error_type": type(exc).__name__, "deals": []}
+        details = result.get("deals") or [{"deal_id": item.deal_id}]
+        detail = {**details[0]}
+        if result["status"] == "failed":
+            detail.update(status="failed")
+            for key in ("error", "error_type"):
+                if key in result:
+                    detail[key] = result[key]
+            report["failed_deals"] += 1
+            report["status"] = "failed"
+        else:
+            report["validated_deals"] += 1
+        report["deals"].append(detail)
+    return report
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--plan", default="-", help="Private JSON plan file, or - for stdin.")
