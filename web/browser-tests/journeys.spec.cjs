@@ -291,18 +291,45 @@ test('new deal reviews PDF and workbook through Codex paste, Summary, Compare, a
     'from reportlab.pdfgen.canvas import Canvas',
     'pdf = BytesIO()',
     'memo = Canvas(pdf)',
-    'memo.drawString(60, 720, "Minimum investment: $60,000")',
-    'memo.drawString(60, 690, "Investment strategy: hold")',
+    'for y, line in enumerate(("Juniper Station Apartments | Offering Memorandum",',
+    '    "148 apartments planned in one phase.",',
+    '    "Minimum LP commitment: $125,000.",',
+    '    "Investment strategy: hold.",',
+    '    "Total project cost: $32,000,000.",',
+    '    "Project equity requirement: $12,200,000.",',
+    '    "Construction loan commitment: $19,800,000.",',
+    '    "Base case FY2030 stabilized annual NOI: $2,040,000.")):',
+    '    memo.drawString(60, 740 - y * 24, line)',
+    'memo.showPage()',
+    'for y, line in enumerate(("Juniper Station Apartments | Illustrative LP Returns",',
+    '    "Year 1 after stabilization: 3.2% projected annual net LP cash-on-cash.",',
+    '    "Annual net LP hold cash-on-cash target, Year 2 after stabilization: 8.9%.",',
+    '    "Year 3 after stabilization: 9.1% projected annual net LP cash-on-cash.",',
+    '    "Illustrative sale after 5 years: 17.4% projected net LP IRR.")):',
+    '    memo.drawString(60, 740 - y * 24, line)',
     'memo.save()',
     'workbook = BytesIO()',
     'model = Workbook()',
-    'model.active.title = "Underwriting"',
-    'model.active.append(["Apartment units", 42])',
+    'model.active.title = "Funding and Operations"',
+    'for row in (["Metric", "Value", "Basis"], ["Apartment units", 148],',
+    '    ["Minimum LP commitment", 125000, "USD"], ["Total project equity", 12200000, "USD"],',
+    '    ["Construction loan commitment", 19800000, "USD"], ["Total project cost", 32000000, "USD"],',
+    '    ["Stabilized annual NOI", 2160000, "Base case FY2030, USD"]):',
+    '    model.active.append(row)',
+    'returns = model.create_sheet("Returns")',
+    'for row in (["Scenario", "Net LP return", "Basis"],',
+    '    ["Year 1 after stabilization", 0.032, "Annual hold cash-on-cash"],',
+    '    ["Year 2 after stabilization", 0.089, "Annual hold cash-on-cash target"],',
+    '    ["Year 3 after stabilization", 0.091, "Annual hold cash-on-cash"],',
+    '    ["Illustrative sale after 5 years", 0.174, "Net LP IRR"]):',
+    '    returns.append(row)',
+    'for row in range(2, 6):',
+    '    returns[f"B{row}"].number_format = "0.0%"',
     'model.save(workbook)',
     'print(json.dumps({"pdf": b64encode(pdf.getvalue()).decode(), "xlsx": b64encode(workbook.getvalue()).decode()}))',
   ].join('\n')], { encoding: 'utf8' }));
 
-  const created = await page.request.post('/api/deals', { data: { project_name: 'Mixed Sources Pilot' } });
+  const created = await page.request.post('/api/deals', { data: { project_name: 'Juniper Station Apartments Synthetic Pilot' } });
   expect(created.ok()).toBeTruthy();
   const { id } = await created.json();
   const base = '/api/deals/' + id;
@@ -321,13 +348,48 @@ test('new deal reviews PDF and workbook through Codex paste, Summary, Compare, a
     const { packet } = await (await page.request.get(base + '/review/packet')).json();
     const memo = packet.sources.find(source => source.filename === 'pilot-offering.pdf');
     const model = packet.sources.find(source => source.filename === 'pilot-underwriting.xlsx');
-    expect(memo.text).toContain('Minimum investment: $60,000');
-    expect(model.text).toContain('A1=Apartment units | B1=42');
+    const holdPath = 'target_returns.hold_scenario.target_cash_on_cash';
+    const salePath = 'target_returns.sale_scenario.net_irr';
+    const noiPath = 'financial_projections.stabilized_noi';
+    const holdContext = {scenario: 'hold', investor_class: 'lp', basis: 'net', period: 'Year 2 after stabilization'};
+    const holdQuote = 'Annual net LP hold cash-on-cash target, Year 2 after stabilization: 8.9%.';
+    const memoNoiQuote = 'Base case FY2030 stabilized annual NOI: $2,040,000.';
+    const modelNoiQuote = 'A7=Stabilized annual NOI | B7=2160000 | C7=Base case FY2030, USD';
+    const unitQuote = 'A2=Apartment units | B2=148';
+    const contextText = 'hold · lp · net · Year 2 after stabilization';
+    const exportContext = 'Scenario: hold · Investor class: lp · Calculation basis: net · Period: Year 2 after stabilization';
+    const returnSource = {document_name: 'pilot-offering.pdf', page: 2, excerpt: holdQuote};
+
+    expect(memo.text).toContain(holdQuote);
+    expect(memo.text).toContain(memoNoiQuote);
+    expect(model.text).toContain(unitQuote);
+    expect(model.text).toContain(modelNoiQuote);
+    expect(model.text).toContain('A3=Year 2 after stabilization | B3=0.089 | C3=Annual hold cash-on-cash target');
+    expect(model.text).toContain('A5=Illustrative sale after 5 years | B5=0.174 | C5=Net LP IRR');
+
+    // Codex review of the synthetic packet, with only package and document IDs assigned at runtime.
+    // Both funding sources cover the $32m cost. The sale IRR has its own scope, and neither
+    // FY2030 NOI value can be preferred because the same base case is cited in both sources.
     const result = { package_id: packet.package_id, facts: [
-      {path: 'deal_structure.minimum_investment', value: 60000, currency: 'USD',
-        source_doc_id: memo.id, source_page: 1, source_excerpt: 'Minimum investment: $60,000'},
-      {path: 'project_details.unit_count', value: 42,
-        source_doc_id: model.id, source_sheet: 'Underwriting', source_cell: 'B1', source_excerpt: 'A1=Apartment units | B1=42'},
+      {path: 'deal_structure.minimum_investment', value: 125000, currency: 'USD',
+        source_doc_id: memo.id, source_page: 1, source_excerpt: 'Minimum LP commitment: $125,000.'},
+      {path: 'project_details.unit_count', value: 148,
+        source_doc_id: model.id, source_sheet: 'Funding and Operations', source_cell: 'B2', source_excerpt: unitQuote},
+      {path: 'deal_structure.total_equity_required', value: 12200000, currency: 'USD',
+        source_doc_id: memo.id, source_page: 1, source_excerpt: 'Project equity requirement: $12,200,000.'},
+      {path: 'deal_structure.debt_amount', value: 19800000, currency: 'USD', debt_phase: 'construction',
+        source_doc_id: memo.id, source_page: 1, source_excerpt: 'Construction loan commitment: $19,800,000.'},
+      {path: 'deal_structure.total_project_cost', value: 32000000, currency: 'USD',
+        source_doc_id: memo.id, source_page: 1, source_excerpt: 'Total project cost: $32,000,000.'},
+      {path: 'target_returns.primary_strategy', value: 'hold',
+        source_doc_id: memo.id, source_page: 1, source_excerpt: 'Investment strategy: hold.'},
+      {path: holdPath, value: 8.9, ...holdContext, source_doc_id: memo.id, source_page: 2, source_excerpt: holdQuote},
+      {path: salePath, value: 17.4, scenario: 'sale', investor_class: 'lp', basis: 'net', period: 'After 5 years',
+        source_doc_id: memo.id, source_page: 2, source_excerpt: 'Illustrative sale after 5 years: 17.4% projected net LP IRR.'},
+      {path: noiPath, value: 2040000, period: 'FY2030', currency: 'USD',
+        source_doc_id: memo.id, source_page: 1, source_excerpt: memoNoiQuote},
+      {path: noiPath, value: 2160000, period: 'FY2030', currency: 'USD',
+        source_doc_id: model.id, source_sheet: 'Funding and Operations', source_cell: 'B7', source_excerpt: modelNoiQuote},
     ] };
 
     await dealPage(page, id, 'documents');
@@ -335,40 +397,89 @@ test('new deal reviews PDF and workbook through Codex paste, Summary, Compare, a
     await page.getByRole('textbox', { name: 'Codex review JSON' }).fill(JSON.stringify(result));
     await page.getByRole('button', { name: 'Check pasted result', exact: true }).click();
     await expect(page.getByRole('heading', { name: 'Codex review draft' })).toBeVisible();
-    await expect(page.getByRole('button', { name: 'Apply 2 values', exact: true })).toBeEnabled();
+    const apply = page.getByRole('button', { name: 'Apply 8 values', exact: true });
+    await expect(apply).toBeEnabled();
+    const conflict = page.getByText('Multiple values were proposed for this field. Compare the sources before resolving it.', { exact: true });
+    await expect(conflict).toHaveCount(2);
+    const conflictChoices = page.getByRole('checkbox', { name: /stabilized noi/i });
+    await expect(conflictChoices).toHaveCount(2);
+    for (const choice of await conflictChoices.all()) {
+      await expect(choice).toBeDisabled();
+      await expect(choice).not.toBeChecked();
+    }
+    const { draft } = await (await page.request.get(base + '/review/draft')).json();
+    expect(draft.rows.filter(row => !row.issue)).toHaveLength(8);
+    expect(draft.rows.find(row => row.path === holdPath)).toMatchObject({
+      value: 8.9, issue: '', context: holdContext,
+      evidence: {source_doc_id: memo.id, source_page: 2, source_excerpt: holdQuote},
+    });
     const before = await (await page.request.get(base)).json();
     expect(before.analysis.facts['project_details.unit_count'].value).toBeNull();
-    await page.getByRole('button', { name: 'Apply 2 values', exact: true }).click();
-    await expect(page.getByText(/2 values applied/)).toBeVisible();
+    expect(before.analysis.returns.cash_on_cash).toBeNull();
+    await apply.click();
+    await expect(page.getByText(/8 values applied/)).toBeVisible();
+    await expect(conflict).toHaveCount(2);
 
     await page.getByRole('tab', { name: 'Summary', exact: true }).click();
     const summary = page.getByRole('tabpanel', { name: 'Summary', exact: true });
-    await expect(summary.getByText('$60K', { exact: true })).toBeVisible();
-    await expect(summary.getByText('42', { exact: true })).toBeVisible();
+    await expect(summary.getByText('$125K', { exact: true })).toBeVisible();
+    await expect(summary.getByText('148', { exact: true })).toBeVisible();
+    await expect(summary.getByRole('heading', { name: 'Published returns' })).toBeVisible();
+    const publishedReturn = summary.getByRole('listitem').filter({hasText: 'Cash-on-cash'});
+    await expect(publishedReturn.getByText('8.9%', { exact: true })).toBeVisible();
+    await expect(publishedReturn.getByText(contextText, { exact: true })).toBeVisible();
+    await expect(summary.getByText('17.4%', { exact: true })).toHaveCount(0);
     const deal = await (await page.request.get(base)).json();
-    expect(deal.analysis.facts['deal_structure.minimum_investment']).toMatchObject({value: 60000, state: 'checked'});
-    expect(deal.analysis.facts['project_details.unit_count'].evidence[0]).toMatchObject({sheet: 'Underwriting', cell: 'B1'});
+    expect(deal.analysis.facts['deal_structure.minimum_investment']).toMatchObject({value: 125000, state: 'checked'});
+    expect(deal.analysis.facts['project_details.unit_count'].evidence[0]).toMatchObject({
+      document_name: 'pilot-underwriting.xlsx', sheet: 'Funding and Operations', cell: 'B2', excerpt: unitQuote,
+    });
+    expect(deal.analysis.facts[holdPath]).toMatchObject({value: 8.9, state: 'checked', identity: holdContext, evidence: [returnSource]});
+    expect(deal.analysis.facts[salePath]).toMatchObject({value: 17.4, state: 'checked'});
+    expect(deal.analysis.returns).toMatchObject({cash_on_cash: 8.9, cash_on_cash_path: holdPath, target_irr: null});
+    expect(deal.analysis.facts[noiPath].value).toBeNull();
     const report = await page.request.get('/api/reports/deal/' + id + '/pdf');
     expect(report.ok()).toBeTruthy();
     const reportText = execFileSync('pdftotext', ['-', '-'], {input: await report.body(), encoding: 'utf8'});
-    expect(reportText).toContain('$60,000');
-    expect(reportText).toMatch(/Unit Count\s+42/);
+    expect(reportText).toContain('$125,000');
+    expect(reportText).toMatch(/Unit Count\s+148/);
+    expect(reportText).toMatch(/Cash-on-Cash\s+8\.90%/);
+    expect(reportText.replace(/\s+/g, ' ')).toContain(exportContext);
+    expect(reportText).toContain('pilot-offering.pdf, p. 2');
+    expect(reportText).not.toMatch(/17\.40%|2,040,000|2,160,000/);
 
     await page.goto('/compare?ids=' + id + ',1');
     const minRow = page.getByTestId('compare-row-min_investment');
-    await expect(minRow.getByText('$60K', { exact: true })).toBeVisible();
+    await expect(minRow.getByText('$125K', { exact: true })).toBeVisible();
+    const cashRow = page.getByTestId('compare-row-cash_on_cash');
+    await expect(cashRow.getByText('8.9%', { exact: true })).toBeVisible();
+    await expect(cashRow.getByText(contextText, { exact: true })).toBeVisible();
+    await expect(cashRow.getByText('Different or unspecified context · values only')).toBeVisible();
     const compare = await page.request.post('/api/deals/compare', {data: {deal_ids: [id, 1]}});
-    expect((await compare.json()).deals[0].analysis.facts['project_details.unit_count'].value).toBe(42);
+    expect(compare.ok()).toBeTruthy();
+    const compared = (await compare.json()).deals.find(deal => deal.id === id).analysis;
+    expect(compared.facts['project_details.unit_count'].value).toBe(148);
+    expect(compared.facts[holdPath]).toMatchObject({value: 8.9, identity: holdContext, evidence: [returnSource]});
+    expect(compared.returns.target_irr).toBeNull();
+    expect(compared.facts[noiPath].value).toBeNull();
     const exported = await page.request.post('/api/deals/compare/export', {data: {deal_ids: [id, 1]}});
     expect(exported.ok()).toBeTruthy();
-    const minimum = execFileSync('python', ['-c', [
+    const rows = JSON.parse(execFileSync('python', ['-c', [
       'from io import BytesIO',
       'from openpyxl import load_workbook',
-      'import sys',
+      'import json, sys',
       'sheet = load_workbook(BytesIO(sys.stdin.buffer.read())).active',
-      'print(next(row[1] for row in sheet.values if row[0] == "Minimum Investment"))',
-    ].join('\n')], {input: await exported.body(), encoding: 'utf8'}).trim();
-    expect(minimum).toBe('60000');
+      'print(json.dumps({row[0]: row[1] for row in sheet.values if row[0]}))',
+    ].join('\n')], {input: await exported.body(), encoding: 'utf8'}));
+    expect(rows).toMatchObject({
+      'Minimum Investment': 125000,
+      'Unit Count': 148,
+      'Cash-on-Cash': 8.9,
+      'Cash-on-Cash Context': exportContext,
+      'Cash-on-Cash Evidence': 'pilot-offering.pdf, p. 2',
+      'Target IRR': null,
+      'Stabilized NOI': null,
+    });
   } finally {
     expect((await page.request.delete(base)).ok()).toBeTruthy();
   }

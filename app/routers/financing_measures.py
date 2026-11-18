@@ -31,6 +31,7 @@ MEASURE_TERMS = {
     "modeled_payoff": r"\b(?:pay[ -]?off|balance\s+at\s+(?:exit|sale|completion))\b",
     "lender_commitment": r"\b(?:commitment|committed\s+(?:amount|loan|facility))\b",
 }
+PDF_AMOUNT = re.compile(r"(?<![\w.])-?\d[\d,]*(?:\.\d+)?")
 
 
 class MeasureInput(BaseModel):
@@ -87,6 +88,13 @@ def _verified_measure(row, docs, manifest):
         match = re.search(rf"(?<![A-Za-z0-9]){cell}\s*=([^|\r\n]*)", quote, re.I)
         quote = match[1] if match else ""
     quote = re.sub(r"-?\d[\d,]*(?:\.\d+)?\s*%", "", quote)
+    if row.source_page is not None:
+        competing_measure = any(
+            kind != row.kind and re.search(pattern, quote, re.I)
+            for kind, pattern in MEASURE_TERMS.items()
+        )
+        if competing_measure or len(PDF_AMOUNT.findall(quote)) > 1:
+            raise HTTPException(422, f"{label}. Quote only this financing measure and its amount.")
     error = numeric_quote_error(row.amount, {"source_excerpt": quote}, allow_workbook_ratio=False)
     if error:
         raise HTTPException(422, f"{label}. {error}")

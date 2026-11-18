@@ -15,11 +15,13 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.services.canonical_metrics import canonical_return_summary, primary_strategy
-from app.services.return_schedules import SCHEDULE_KEY, project_return_schedule
+from app.services.return_schedules import SCHEDULE_KEY, active_sources_fingerprint, project_return_schedule
 
 SCHEMA_VERSION = 5
 ACCEPTED = {"checked", "calculated", "manual"}
 BAD = {"wrong", "missing", "unverifiable", "stale", "math_failed"}
+RETURN_REVIEWS_KEY = "_return_reviews"
+RETURN_CONTEXT_FIELDS = ("scenario", "investor_class", "basis", "period")
 
 
 class FactIdentity(BaseModel):
@@ -98,7 +100,7 @@ def input_fingerprint(metrics, documents, property_type):
     keys = {k: v for k, v in metrics.items() if not k.startswith("_") and k != "validation_flags"}
     for key in ("_provenance", "_locks", "_fact_context", "_analysis_context", "_verified_document_set"):
         keys[key] = metrics.get(key)
-    for key in (SCHEDULE_KEY, "_financing_measures"):
+    for key in (SCHEDULE_KEY, "_financing_measures", RETURN_REVIEWS_KEY):
         if key in metrics:
             keys[key] = metrics[key]
     if isinstance(keys.get("_provenance"), dict):
@@ -198,6 +200,29 @@ def identity(path, unit, context):
     return FactIdentity(metric=metric, unit=unit, **defaults)
 
 
+def return_review_binding(metrics, path, value):
+    return digest(clean_json([value, (metrics.get("_provenance") or {}).get(path),
+                              (metrics.get("_fact_context") or {}).get(path)]))
+
+
+def apply_return_review(fact, record, metrics, context, documents, active_sources):
+    if not isinstance(record, dict) or record.get("binding") != return_review_binding(metrics, fact.path, fact.value):
+        return
+    if record.get("action") == "withhold":
+        fact.state = "disputed"
+        fact.reason = "Analyst withheld this return: " + record["reason"]
+    elif record.get("action") == "scope" and record.get("document_set") == active_sources:
+        evidence, issue = evidence_for(record["citation"], documents)
+        if not issue:
+            reviewed_context = {**context, **record["context"]}
+            fact.identity = identity(fact.path, fact.identity.unit, reviewed_context)
+            for item in evidence:
+                if item not in fact.evidence:
+                    fact.evidence.append(item)
+            return reviewed_context
+    return None
+
+
 def evidence_for(prov, documents):
     source = str(prov.get("verification_source") or prov.get("correction_source") or "")
     doc_id, name = prov.get("source_doc_id"), prov.get("source_doc_name")
@@ -243,6 +268,9 @@ def build_analysis(metrics, documents=None, property_type="multifamily"):
     flat = flatten(metrics)
     provenance = metrics.get("_provenance") or {}
     contexts = metrics.get("_fact_context") or {}
+    return_reviews = metrics.get(RETURN_REVIEWS_KEY) or {}
+    active_sources = active_sources_fingerprint(documents) if return_reviews else None
+    reviewed_contexts = {}
     facts = {}
     reconciliation = []
     current_document_set = digest(documents)
@@ -278,6 +306,10 @@ def build_analysis(metrics, documents=None, property_type="multifamily"):
             fact.state = "checked"
         else:
             fact.reason = reason or "Reported value has not completed a source check."
+        if fact.state in ACCEPTED and path in return_reviews:
+            reviewed_context = apply_return_review(fact, return_reviews[path], metrics, context, documents, active_sources)
+            if reviewed_context is not None:
+                reviewed_contexts[path] = reviewed_context
         facts[path] = fact
 
     funding_paths = ["deal_structure.debt_amount", "deal_structure.total_equity_required", "deal_structure.total_project_cost"]
@@ -336,7 +368,7 @@ def build_analysis(metrics, documents=None, property_type="multifamily"):
     accepted["_model_limits"] = model_limits(metrics)
     strategy = primary_strategy(metrics)
     accepted.setdefault("target_returns", {})["primary_strategy"] = strategy
-    accepted["_fact_context"] = contexts
+    accepted["_fact_context"] = {**contexts, **reviewed_contexts}
     selection = metrics.get("_analysis_context") or {}
     selected_class = selection.get("investor_class")
     if not isinstance(selected_class, str) or not selected_class.strip():

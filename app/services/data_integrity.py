@@ -43,10 +43,13 @@ from urllib.parse import unquote
 
 # ----------------------------- constants --------------------------------- #
 
+ANALYST_REVIEW_RECORD_KEYS = {"_financing_measures", "_return_schedule", "_return_reviews"}
+
 # Keys under `deal.metrics` that we treat as metadata, not metric values.
 # Merges / validators skip these. Keep this in sync with json_parser_guard so
 # extraction merges never mistake audit/cache data for a metric section.
 META_KEYS = {
+    *ANALYST_REVIEW_RECORD_KEYS,
     "_provenance",
     "_verification",
     "_locks",

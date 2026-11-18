@@ -5,6 +5,7 @@ import { Card } from "@/components/ui/card";
 import type { AnalysisFact, DealDetail } from "@/lib/types";
 import { fmtMoney, fmtPct, fmtMultiple } from "@/lib/utils";
 import { EvidenceViewer } from "./evidence-viewer";
+import { ReturnContextPanel } from "./return-context-panel";
 import { ReturnSchedulePanel } from "./return-schedule-panel";
 import { FinancingMeasuresPanel } from "./financing-measures-panel";
 
@@ -63,6 +64,7 @@ export function AcceptedSummary({ deal }: { deal: DealDetail }) {
       </details>
       {intake && <details className="mt-3 text-xs text-muted-foreground"><summary className="cursor-pointer">Deal details from your documents</summary><div className="mt-2 space-y-2">{intake.name_origin === "filename" && !intake.auto_fields?.project_name && <p>The deal title comes from the first filename. You can rename it in Analysis.</p>}{Object.entries(intake.auto_fields ?? {}).map(([key, meta]) => <p key={key}>{key.replaceAll("_", " ")}: {meta.sources.map((source, index) => <a key={index} className="underline mr-2" href={`/api/deals/documents/${source.document_id}/file${source.page ? `#page=${source.page}` : ""}`} target="_blank" rel="noreferrer">{source.document_name}{source.page ? ` · page ${source.page}` : ""}</a>)}</p>)}{!!intake.identity_conflicts?.length && <p className="text-warning">Conflicting document labels: {intake.identity_conflicts.map(key => key.replaceAll("_", " ")).join(", ")}. Check these details in Analysis.</p>}</div></details>}
     </Card>
+    <ReturnContextPanel deal={deal} />
     <ReturnSchedulePanel deal={deal} />
     <Card className="p-5 md:p-6"><h2 className="text-lg font-semibold">Capital, terms and operations</h2>
       {acceptedPaths.length === 0 && <p className="mt-3 text-sm text-muted-foreground">Add source documents to populate these terms. Open Questions for evidence that needs clarification.</p>}

@@ -69,6 +69,72 @@ async def test_return_values_agree_in_detail_compare_and_exports(client):
     assert "A < B & C" in text
 
 
+async def test_reviewed_return_scope_and_withholding_reach_all_outputs(client):
+    from app.database import async_session
+    from app.models import DealDocument
+
+    deal, comparison = await new_deal(client, "Hold terms"), await new_deal(client, "Comparison")
+    url = f"/api/deals/{deal}"
+    path = "target_returns.hold_scenario.cash_on_cash_return"
+    quote = "13.0% annual cash-on-cash for Class B beginning in Year 2. $20,800 annual cash flow on $160,000 of equity."
+    timing_only = "The operator will review liquidity after 13 months."
+    async with async_session() as db:
+        doc = DealDocument(deal_id=deal, filename="offering.pdf", file_path="scope-offering.pdf",
+                           file_sha256="d" * 64, page_count=1, extracted_text=f"--- Page 1 ---\n{quote}\n{timing_only}")
+        db.add(doc)
+        await db.commit()
+        doc_id = doc.id
+
+    start = (await client.get(url)).json()
+    resolution = await client.post(f"{url}/analysis/resolve", json={
+        "expected_revision": start["revision"], "reason": "Underwriting packet review.",
+        "fields": [{"path": "target_returns.primary_strategy", "value": "hold"}, {"path": path, "value": 13}],
+    })
+    assert resolution.status_code == 200, resolution.text
+    legacy = (await client.get(url)).json()
+    assert legacy["target_cash_on_cash"] == 13
+    data = {"expected_revision": legacy["revision"], "path": path, "action": "scope", "scenario": "hold",
+            "investor_class": "Class B", "basis": "Annual cash flow / invested equity", "period": "Annual, beginning in Year 2",
+            "source_doc_id": doc_id, "source_page": 1, "source_excerpt": quote}
+    endpoint = f"{url}/analysis/return-context"
+    assert (await client.put(endpoint, json={**data, "source_excerpt": timing_only})).status_code == 422
+    saved = await client.put(endpoint, json=data)
+    assert saved.status_code == 200, saved.text
+    assert (await client.put(endpoint, json=data)).status_code == 409
+    scoped = saved.json()["analysis"]["facts"][path]
+    assert scoped["value"] == 13 and scoped["state"] == "manual" and scoped["locked"]
+    assert scoped["identity"]["investor_class"] == "Class B"
+    assert scoped["evidence"][0]["document_id"] == doc_id
+
+    ids = {"deal_ids": [deal, comparison]}
+    compared = (await client.post("/api/deals/compare", json=ids)).json()["deals"][0]
+    assert compared["analysis"]["facts"][path] == scoped
+    xlsx = await client.post("/api/deals/compare/export", json=ids)
+    rows = {row[0]: row for row in openpyxl.load_workbook(io.BytesIO(xlsx.content)).active.values if row[0]}
+    assert data["basis"] in rows["Cash-on-Cash Context"][1]
+    assert "offering.pdf, p. 1" in rows["Cash-on-Cash Evidence"][1]
+    pdf = await client.get(f"/api/reports/deal/{deal}/pdf")
+    with fitz.open(stream=pdf.content, filetype="pdf") as document:
+        text = " ".join(" ".join(page.get_text().split()) for page in document)
+    assert data["period"] in text and "offering.pdf, p. 1" in text
+
+    async with async_session() as db:
+        doc = await db.get(DealDocument, doc_id)
+        doc.source_role = "alternative"
+        await db.commit()
+    stale = (await client.get(url)).json()
+    assert stale["analysis"]["facts"][path]["identity"]["investor_class"] == "unspecified"
+
+    held = await client.put(endpoint, json={"expected_revision": stale["revision"], "path": path,
+                                          "action": "withhold", "reason": "The active source does not establish this return."})
+    assert held.status_code == 200, held.text
+    reviewed = held.json()["analysis"]
+    assert reviewed["returns"]["cash_on_cash"] is None
+    assert reviewed["facts"][path]["state"] == "disputed"
+    assert reviewed["facts"][path]["value"] == 13 and reviewed["facts"][path]["locked"]
+    assert (await client.get(url)).json()["metrics"]["target_returns"]["hold_scenario"]["cash_on_cash_return"] == 13
+
+
 async def test_document_csv_upload_read_reprocess_and_delete(client):
     deal = await new_deal(client, "Document journey")
     uploaded = await client.post(f"/api/deals/{deal}/documents/upload",

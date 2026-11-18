@@ -22,7 +22,7 @@ from app.services.analysis import analysis_for_deal, effective_scores
 from app.services.financial_presentation import (
     RETURN_LABELS, accepted_return_fact, return_context, return_evidence, schedule_context, schedule_source, source_reference,
 )
-from app.services.data_integrity import quality_summary
+from app.services.data_integrity import ANALYST_REVIEW_RECORD_KEYS, quality_summary
 from app.services.location_intelligence import build_location_bundle
 
 router = APIRouter()
@@ -220,7 +220,7 @@ async def update_deal(deal_id: int, data: DealUpdate, db: AsyncSession = Depends
     if update_data.get("metrics") is not None:
         metrics = update_data["metrics"]
         stored = deal.metrics or {}
-        for key in ("_return_schedule", "_financing_measures"):
+        for key in ANALYST_REVIEW_RECORD_KEYS:
             metrics.pop(key, None)
             if key in stored:
                 metrics[key] = stored[key]

@@ -96,6 +96,32 @@ def test_smart_merge_reopens_review_decisions_when_value_changes():
     assert "source:target_returns.target_irr" in resolutions
 
 
+def test_extraction_cannot_replace_or_create_analyst_review_records():
+    from app.services.json_parser_guard import _restore_passthrough, _split_merge_payload
+
+    reviewed = {
+        "_financing_measures": {"measures": [{"amount": 400000}]},
+        "_return_schedule": {"schedule": {"rows": [{"year": 1}]}},
+        "_return_reviews": {"preferred_return": {"source_doc_id": 3}},
+    }
+    for existing in ({}, reviewed):
+        incoming = {
+            "deal_structure": {"ltv": 60},
+            "_financing_measures": {"measures": [{"amount": 900000}]},
+            "_return_schedule": [{"year": 40}],
+            "_return_reviews": "Untrusted extraction text",
+        }
+        merged, changes = smart_merge(existing, incoming)
+        assert {key: merged[key] for key in reviewed if key in merged} == existing
+        assert changes == ["deal_structure.ltv"]
+
+        safe, passthrough = _split_merge_payload(incoming, context="Incoming extraction")
+        merged, changes = smart_merge(existing, safe)
+        restored = _restore_passthrough(merged, {}, passthrough)
+        assert {key: restored[key] for key in reviewed if key in restored} == existing
+        assert changes == ["deal_structure.ltv"]
+
+
 # -------------------- detect_conflicts -------------------- #
 
 

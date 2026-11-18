@@ -14,6 +14,8 @@ import json
 import re
 from typing import Any, Callable
 
+from app.services.data_integrity import ANALYST_REVIEW_RECORD_KEYS
+
 METRIC_SECTIONS = {
     "deal_structure",
     "target_returns",
@@ -28,6 +30,7 @@ METRIC_SECTIONS = {
 }
 
 DICT_META_KEYS = {
+    *ANALYST_REVIEW_RECORD_KEYS,
     "_provenance",
     "_verification",
     "_locks",

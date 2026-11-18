@@ -1,18 +1,26 @@
 """Snapshot history and one atomic, revision-checked question resolution."""
 import copy
-from typing import Any
+import re
+from typing import Annotated, Any, Literal
 
-from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel, Field
+from fastapi import APIRouter, Body, Depends, HTTPException
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm.attributes import flag_modified
 
 from app.database import get_db
 from app.models import AnalysisSnapshot, Deal, DealDocument
-from app.services.analysis import REGISTRY, analysis_for_deal, build_analysis, valid_number, valid_tiers
+from app.services.analysis import (
+    REGISTRY, RETURN_CONTEXT_FIELDS, RETURN_REVIEWS_KEY, analysis_for_deal,
+    build_analysis, identity, return_review_binding, valid_number, valid_tiers,
+)
 from app.services.analysis_store import document_manifest
 from app.services.data_integrity import mark_manual_edit, now_iso
+from app.services.document_versions import review_documents
+from app.services.financial_presentation import RETURN_LABELS
+from app.services.return_schedules import active_sources_fingerprint
+from app.services.source_evidence import fresh_audit_evidence, numeric_quote_error
 from app.routers.field_edits import _append_field_history, _refresh_integrity
 
 router = APIRouter()
@@ -139,6 +147,100 @@ async def resolve(deal_id: int, data: Resolution, db: AsyncSession = Depends(get
         metrics["_provenance"][edit.path]["verification_note"] = data.reason
         _append_field_history(metrics, edit.path, old, value, "question_resolved")
     metrics["_analysis_resolution"] = {"at": now_iso(), "reason": data.reason, "paths": sorted(paths), "based_on_version": current["version"]}
+    _refresh_integrity(deal, metrics)
+    await db.commit()
+    await db.refresh(deal)
+    return {"revision": deal.revision, "analysis": analysis_for_deal(deal)}
+
+
+class ReturnReview(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True, str_strip_whitespace=True)
+
+    expected_revision: int = Field(ge=1)
+    path: str = Field(min_length=1, max_length=200)
+
+
+class ScopedReturn(ReturnReview):
+    action: Literal["scope"]
+    scenario: Literal["hold", "sale", "unspecified"] = "unspecified"
+    investor_class: str = Field(default="", max_length=100)
+    basis: str = Field(default="", max_length=100)
+    period: str = Field(default="", max_length=100)
+    source_doc_id: int = Field(ge=1)
+    source_page: int | None = Field(default=None, ge=1)
+    source_sheet: str | None = Field(default=None, min_length=1, max_length=200)
+    source_cell: str | None = Field(default=None, pattern=r"^[A-Za-z]{1,3}[1-9]\d{0,6}$")
+    source_excerpt: str = Field(min_length=8, max_length=1500)
+
+    @model_validator(mode="after")
+    def check_location(self):
+        if self.source_page is not None:
+            if self.source_sheet or self.source_cell:
+                raise ValueError("Provide a PDF page or a workbook sheet and value cell.")
+        elif not (self.source_sheet and self.source_cell):
+            raise ValueError("Provide a PDF page or a workbook sheet and value cell.")
+        return self
+
+
+class WithheldReturn(ReturnReview):
+    action: Literal["withhold"]
+    reason: str = Field(min_length=3, max_length=1000)
+
+
+def cited_return_value(data: ScopedReturn, fact):
+    quote = data.source_excerpt
+    if data.source_cell:
+        cell = re.escape(data.source_cell)
+        match = re.search(rf"(?<![A-Za-z0-9]){cell}\s*=([^|\r\n]*)", quote, re.I)
+        quote = match[1] if match else ""
+    elif fact["identity"]["unit"] == "percent":
+        # Unmarked numbers in a PDF may be dates, periods, or invested amounts.
+        quote = " ".join(re.findall(r"(?<![\w.])-?\d[\d,]*(?:\.\d+)?\s*(?:%|percent\b)", quote, re.I))
+    if fact["identity"]["unit"] == "multiple":
+        quote = re.sub(r"(?<=\d)\s*[x×](?!\w)", "", quote, flags=re.I)
+    return numeric_quote_error(fact["value"], {"source_excerpt": quote, "source_sheet": data.source_sheet},
+                               allow_workbook_ratio=fact["identity"]["unit"] == "percent")
+
+
+@router.put("/{deal_id}/analysis/return-context")
+async def review_return(
+    deal_id: int,
+    data: Annotated[ScopedReturn | WithheldReturn, Body(discriminator="action")],
+    db: AsyncSession = Depends(get_db),
+):
+    deal = await get_deal(deal_id, db)
+    if deal.revision != data.expected_revision:
+        raise HTTPException(409, "The deal changed. Reload before reviewing this return.")
+    if deal.review_job and deal.review_job.status in {"queued", "running"}:
+        raise HTTPException(409, "Wait for the document review to finish before reviewing this return.")
+
+    current = analysis_for_deal(deal)
+    published_paths = {current["returns"].get(f"{key}_path") for key, _ in RETURN_LABELS
+                       if current["returns"].get(key) is not None}
+    fact = current["facts"].get(data.path)
+    if data.path not in published_paths or not fact:
+        raise HTTPException(422, "Choose an accepted return currently shown in Summary.")
+    metrics = copy.deepcopy(deal.metrics or {})
+    record = {"action": data.action, "binding": return_review_binding(metrics, data.path, fact["value"])}
+    if isinstance(data, WithheldReturn):
+        record["reason"] = data.reason
+    else:
+        context = {key: getattr(data, key) for key in RETURN_CONTEXT_FIELDS
+                   if getattr(data, key) not in {"", "unspecified"}}
+        if not context:
+            raise HTTPException(422, "Record at least one return context field supported by the source.")
+        resolved = identity(data.path, fact["identity"]["unit"], context)
+        if any(getattr(resolved, key) != value for key, value in context.items()):
+            raise HTTPException(422, "The proposed context disagrees with this return's definition.")
+        docs = (await db.execute(select(DealDocument).where(DealDocument.deal_id == deal.id))).scalars().all()
+        manifest = document_manifest(docs)
+        citation, error = fresh_audit_evidence(data.model_dump(), review_documents(docs), manifest)
+        error = error or cited_return_value(data, fact)
+        if error:
+            raise HTTPException(422, error)
+        record.update(context=context, citation=citation, document_set=active_sources_fingerprint(manifest))
+
+    metrics.setdefault(RETURN_REVIEWS_KEY, {})[data.path] = record
     _refresh_integrity(deal, metrics)
     await db.commit()
     await db.refresh(deal)

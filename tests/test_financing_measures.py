@@ -114,3 +114,54 @@ async def test_financing_verifies_value_cell_and_stales_on_new_active_source(cli
     assert financing["debt_amount_label"] == "Debt amount"
     assert all(row["state"] == "stale" and not row["evidence"] for row in financing["measures"])
     assert analysis["facts"][DEBT_PATH]["value"] == 625000
+
+
+@pytest.mark.asyncio
+async def test_pdf_financing_requires_one_measure_and_its_amount_in_each_quote(client):
+    from app.database import async_session
+    from app.models import DealDocument
+
+    created = await client.post("/api/deals", json={"project_name": "Synthetic PDF loan measures"})
+    assert created.status_code == 200, created.text
+    deal_id = created.json()["id"]
+    quotes = {
+        "draw": "Construction Loan Draw\n$500,000",
+        "peak_balance": "700,000 Max Loan",
+        "modeled_payoff": "625,000 Construction Loan Balance @ Payoff",
+    }
+    other_amount = "Reserve: $125,000"
+    page = "\n".join((*quotes.values(), other_amount))
+    async with async_session() as db:
+        doc = DealDocument(deal_id=deal_id, filename="loan.pdf", file_path="synthetic-loan.pdf",
+                           file_sha256="a" * 64, page_count=1, extracted_text=f"--- Page 1 ---\n{page}")
+        db.add(doc)
+        await db.commit()
+        doc_id = doc.id
+
+    url = f"/api/deals/{deal_id}"
+    deal = (await client.get(url)).json()
+    revision = await set_accepted_debt(client, deal_id, deal["revision"], 625000)
+    payload = {"expected_revision": revision, "debt_amount_kind": "modeled_payoff"}
+    payoff = {"kind": "modeled_payoff", "source_doc_id": doc_id, "source_page": 1}
+    for amount, quote in (
+        (500000, page),
+        (125000, f"{quotes['modeled_payoff']}\n{other_amount}"),
+    ):
+        rejected = await client.put(f"{url}/analysis/financing-measures", json={
+            **payload, "debt_amount_kind": None,
+            "measures": [{**payoff, "amount": amount, "source_excerpt": quote}],
+        })
+        assert rejected.status_code == 422, rejected.text
+        assert "Quote only this financing measure" in rejected.json()["detail"]
+
+    saved = await client.put(f"{url}/analysis/financing-measures", json={
+        **payload,
+        "measures": [
+            {**payoff, "kind": kind, "amount": amount, "source_excerpt": quotes[kind]}
+            for kind, amount in (("draw", 500000), ("peak_balance", 700000), ("modeled_payoff", 625000))
+        ],
+    })
+    assert saved.status_code == 200, saved.text
+    financing = (await client.get(url)).json()["analysis"]["financing"]
+    assert financing["debt_amount_kind"] == "modeled_payoff"
+    assert [measure["state"] for measure in financing["measures"]] == ["checked"] * 3

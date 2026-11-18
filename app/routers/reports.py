@@ -81,6 +81,7 @@ def _pdf_style():
         textColor=colors.HexColor("#4361ee"),
         spaceBefore=12,
         spaceAfter=6,
+        keepWithNext=1,
     ))
     styles.add(ParagraphStyle(
         name="Small",
