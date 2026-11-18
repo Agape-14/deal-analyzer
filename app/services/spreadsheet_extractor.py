@@ -6,6 +6,7 @@ import csv
 import os
 import zipfile
 from dataclasses import dataclass, field
+from datetime import date, datetime, time, timedelta
 from typing import Any
 
 
@@ -242,7 +243,7 @@ def _worksheet_rows(ws, formula_ws, sheet_name: str) -> tuple[list[str], list[li
         raw_values: list[Any] = []
         row_cells: list[dict] = []
         for col_idx in range(1, max_col + 1):
-            value = values[col_idx - 1]
+            value = _stored_cell(values[col_idx - 1])
             formula = formulas[col_idx - 1] if formulas else None
             rendered = _render_cell(value)
             row_values.append(rendered)
@@ -330,4 +331,13 @@ def _clean_cell(value: Any) -> Any:
         return ""
     if isinstance(value, float):
         return round(value, 6)
+    return value
+
+
+def _stored_cell(value: Any) -> Any:
+    """Keep source provenance JSON-safe without rounding numeric evidence."""
+    if isinstance(value, (datetime, date, time)):
+        return value.isoformat()
+    if isinstance(value, timedelta):
+        return str(value)
     return value

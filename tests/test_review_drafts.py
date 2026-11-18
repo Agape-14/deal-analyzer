@@ -180,6 +180,97 @@ async def test_pdf_cost_outflow_does_not_gain_workbook_magnitude_treatment(clien
     assert row["issue"] and "source_value_note" not in row["evidence"]
 
 
+@pytest.mark.parametrize("page_source,quote,value,path,valid", [
+    ("ocr_image", "Preconstruction soft costs (2,345.678)", 2345678, "construction_costs.preconstruction_soft_costs", True),
+    ("ocr", "Financing expenses (7.654,321)", 7654321, "construction_costs.financing_costs", True),
+    ("text", "Preconstruction soft costs (2,345.678)", 2345678, "construction_costs.preconstruction_soft_costs", False),
+    ("other_page", "Preconstruction soft costs (2,345.678)", 2345678, "construction_costs.preconstruction_soft_costs", False),
+    ("ocr_image", "Preconstruction soft costs (2,345.678)", 2345679, "construction_costs.preconstruction_soft_costs", False),
+    ("ocr_image", "Preconstruction soft costs (2,345.67)", 234567, "construction_costs.preconstruction_soft_costs", False),
+    ("ocr_image", "Preconstruction soft costs (2,345.678)%", 2345678, "construction_costs.preconstruction_soft_costs", False),
+    ("ocr_image", "Construction debt (2,345.678)", 2345678, "deal_structure.debt_amount", False),
+    ("ocr_image", "Interest only debt service (3.769.500)", 3769500, "financial_projections.interest_only_debt_service", True),
+    ("ocr_image", "Amortizing debt service (2.468.135)", 2468135, "financial_projections.amortizing_debt_service", True),
+    ("ocr_image", "Interest only debt service (3.769.500)", 3769501, "financial_projections.interest_only_debt_service", False),
+    ("ocr_image", "Interest only debt service (3,769.50)", 376950, "financial_projections.interest_only_debt_service", False),
+    ("ocr_image", "Construction debt (3.769.500)", 3769500, "deal_structure.debt_amount", False),
+])
+async def test_pdf_ocr_cost_grouping_requires_current_ocr_page_and_exact_integer(
+    client, page_source, quote, value, path, valid,
+):
+    from app.database import async_session
+    from app.models import Deal, DealDocument
+
+    created = await client.post("/api/deals", json={"project_name": "Synthetic OCR currency grouping"})
+    deal_id = created.json()["id"]
+    async with async_session() as db:
+        doc = DealDocument(
+            deal_id=deal_id, filename="budget.pdf", file_path="synthetic-budget.pdf",
+            file_sha256="c" * 64, page_count=2, extracted_text="--- Page 1 ---\n" + quote,
+            extraction_quality={"status": "extracted", "ocr_pages": 1, "page_diagnostics": [{
+                "page": 2 if page_source == "other_page" else 1,
+                "source": "ocr_image" if page_source == "other_page" else page_source,
+            }]},
+        )
+        db.add(doc)
+        await db.commit()
+        doc_id = doc.id
+    base = f"/api/deals/{deal_id}/review"
+    packet = await packet_for(client, base)
+    imported = await client.post(base + "/draft", json={
+        "package_id": packet["package_id"], "facts": [{
+            "path": path, "value": value, "source_doc_id": doc_id, "source_page": 1,
+            "source_excerpt": quote, "currency": "USD",
+        }],
+    })
+    assert imported.status_code == 200, imported.text
+    view = imported.json()
+    row = view["draft"]["rows"][0]
+    assert not row["issue"] if valid else row["issue"]
+    saved = await client.post(base + "/approve", json={**approval(view), "paths": [path]})
+    assert saved.status_code == (200 if valid else 422), saved.text
+    if valid:
+        async with async_session() as db:
+            evidence = (await db.get(Deal, deal_id)).metrics["_provenance"][path]
+            assert evidence["source_excerpt"] == quote
+            assert "OCR currency grouping" in evidence["source_value_note"]
+        fact = (await client.get(f"/api/deals/{deal_id}")).json()["analysis"]["facts"][path]
+        assert fact["value"] == value and fact["state"] == "checked"
+
+
+@pytest.mark.parametrize("suffix", ["X", "×"])
+async def test_pdf_equity_multiple_suffix_keeps_exact_quote_and_rejects_wrong_multiple(client, suffix):
+    from app.database import async_session
+    from app.models import DealDocument
+
+    created = await client.post("/api/deals", json={"project_name": "Synthetic multiple suffix"})
+    deal_id = created.json()["id"]
+    quote = f"Illustrative sale after 5 years: 2.4{suffix} equity multiple."
+    async with async_session() as db:
+        doc = DealDocument(
+            deal_id=deal_id, filename="returns.pdf", file_path="synthetic-returns.pdf",
+            file_sha256="d" * 64, page_count=1, extracted_text="--- Page 1 ---\n" + quote,
+        )
+        db.add(doc)
+        await db.commit()
+        doc_id = doc.id
+    base = f"/api/deals/{deal_id}/review"
+    packet = await packet_for(client, base)
+    path = "target_returns.sale_scenario.sale_equity_multiple"
+    proposal = {"package_id": packet["package_id"], "facts": [{
+        "path": path, "value": 2.6, "source_doc_id": doc_id, "source_page": 1,
+        "source_excerpt": quote, "scenario": "sale",
+    }]}
+    wrong = await client.post(base + "/draft", json=proposal)
+    assert wrong.status_code == 200, wrong.text
+    assert wrong.json()["draft"]["rows"][0]["issue"]
+    proposal["facts"][0]["value"] = 2.4
+    correct = await client.post(base + "/draft", json=proposal)
+    assert correct.status_code == 200, correct.text
+    row = correct.json()["draft"]["rows"][0]
+    assert not row["issue"] and row["evidence"]["source_excerpt"] == quote
+
+
 async def test_same_locked_value_can_be_source_checked_without_replacing_manual_decision(client):
     import copy
 

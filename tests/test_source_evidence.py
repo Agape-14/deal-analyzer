@@ -116,6 +116,30 @@ def test_focused_context_keeps_late_investor_rows_and_later_documents():
     assert len(result) <= 4000
 
 
+def test_workbook_dates_persist_as_json_safe_source_evidence(tmp_path):
+    import json
+    from dataclasses import asdict
+    from datetime import datetime, time
+    from openpyxl import Workbook
+
+    book = Workbook()
+    sheet = book.active
+    sheet.title = "Schedule"
+    sheet.append(["Loan maturity", datetime(2032, 4, 1), time(12, 30), 1234.56789123])
+    path = tmp_path / "dated-model.xlsx"
+    book.save(path)
+
+    result = extract_spreadsheet(str(path))
+    stored = json.loads(json.dumps(asdict(result)))
+    cells = {cell["cell"]: cell["value"] for cell in stored["cells"]}
+    assert cells["B1"] == "2032-04-01T00:00:00"
+    assert cells["C1"] == "12:30:00"
+    assert cells["D1"] == 1234.56789123
+    assert "B1=2032-04-01T00:00:00" in result.text
+    assert stored["tables"][0]["rows"][0][1] == cells["B1"]
+    assert stored["key_rows"][0]["cells"][1]["value"] == cells["B1"]
+
+
 def test_review_batches_bound_nested_field_count_without_losing_identity():
     from app.services.deal_verifier import verification_batches
     metrics = {"target_returns": {"hold_scenario": {f"field_{i}": i for i in range(29)}, "zero": 0, "missing": None}}
