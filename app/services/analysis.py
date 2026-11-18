@@ -338,7 +338,9 @@ def build_analysis(metrics, documents=None, property_type="multifamily"):
     accepted.setdefault("target_returns", {})["primary_strategy"] = strategy
     accepted["_fact_context"] = contexts
     selection = metrics.get("_analysis_context") or {}
-    selected_class = selection.get("investor_class", "unspecified")
+    selected_class = selection.get("investor_class")
+    if not isinstance(selected_class, str) or not selected_class.strip():
+        selected_class = "unspecified"
     hold_strategy = strategy in {"hold", "hold_with_sale_option"}
     schedule = project_return_schedule(metrics, documents) if hold_strategy else None
     if schedule and selected_class != "unspecified" and selected_class.casefold() != schedule["investor_class"].casefold():
@@ -351,7 +353,8 @@ def build_analysis(metrics, documents=None, property_type="multifamily"):
         scenario = fact.identity.scenario
         wrong_scenario = scenario != "unspecified" and scenario != ("hold" if strategy in {"hold", "hold_with_sale_option"} else strategy)
         wrong_class = ambiguous_class or (selected_class != "unspecified" and fact.identity.investor_class not in {selected_class})
-        if wrong_scenario or wrong_class:
+        superseded_yield = schedule is not None and fact.identity.metric in {"cash_on_cash", "distribution_yield"}
+        if wrong_scenario or wrong_class or superseded_yield:
             set_path(accepted, path, None)
     returns = canonical_return_summary(accepted)
     if strategy == "unknown" or ambiguous_class:

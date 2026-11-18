@@ -18,7 +18,7 @@ export function ReturnScheduleTable({ schedule }: { schedule: ReturnSchedule }) 
         <div><dt className="text-muted-foreground">Equity basis</dt><dd>{schedule.equity_basis}</dd></div>
       </dl>
       {schedule.assumptions && <p>{schedule.assumptions}</p>}
-      {source && <EvidenceViewer source={source} />}
+      {source && <EvidenceViewer source={{ ...source, cell: undefined }} />}
       <div className="overflow-x-auto">
         <table className="w-full border-collapse text-left" aria-label="Projected cash-on-cash by year">
           <thead><tr className="border-b text-muted-foreground">

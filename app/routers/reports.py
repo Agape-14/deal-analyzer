@@ -33,7 +33,7 @@ from app.services.portfolio_analytics import portfolio_analytics
 from app.services.canonical_metrics import canonical_return_summary
 from app.services.analysis import analysis_for_deal, effective_scores
 from app.services.financial_presentation import (
-    RETURN_LABELS, accepted_return_fact, return_context, return_evidence, schedule_context, source_reference,
+    RETURN_LABELS, accepted_return_fact, return_context, return_evidence, schedule_context, schedule_source, source_reference,
 )
 
 router = APIRouter()
@@ -233,13 +233,14 @@ async def deal_pdf_report(deal_id: int, db: AsyncSession = Depends(get_db)):
     schedule = analysis.get("return_schedule")
     if schedule:
         story.append(Paragraph("Projected Cash-on-Cash by Year", styles["SectionHeading"]))
-        for context in (schedule_context(schedule), schedule.get("assumptions"), source_reference(schedule["evidence"])):
+        for context in (schedule_context(schedule), schedule.get("assumptions"), schedule_source(schedule)):
             if context:
                 story.append(Paragraph(escape(context), styles["Small"]))
         rows = []
         for period in schedule["rows"]:
             value = _fmt_pct(period["cash_on_cash_pct"]) if period["cash_on_cash_pct"] is not None else "Not projected"
-            details = " · ".join(part for part in (value, period.get("note")) if part)
+            cell = f"Cell {period['source_cell']}" if period.get("source_cell") else None
+            details = " · ".join(part for part in (value, period.get("note"), cell) if part)
             rows.append((f"Year {period['year']}", Paragraph(escape(details), styles["Small"])))
         story.append(_metric_table(rows))
 

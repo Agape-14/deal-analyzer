@@ -20,7 +20,7 @@ from app.services.waterfall_calculator import waterfall_from_deal
 from app.services.canonical_metrics import canonical_return_summary
 from app.services.analysis import analysis_for_deal, effective_scores
 from app.services.financial_presentation import (
-    RETURN_LABELS, accepted_return_fact, return_context, return_evidence, schedule_context, source_reference,
+    RETURN_LABELS, accepted_return_fact, return_context, return_evidence, schedule_context, schedule_source, source_reference,
 )
 from app.services.data_integrity import quality_summary
 from app.services.location_intelligence import build_location_bundle
@@ -749,7 +749,7 @@ async def export_comparison(data: CompareRequest, db: AsyncSession = Depends(get
                 projections.append((
                     deal.project_name, projection["year"], projection["cash_on_cash_pct"],
                     schedule_context(schedule), projection.get("note"), schedule.get("assumptions"),
-                    source_reference(schedule["evidence"]),
+                    schedule_source(schedule, projection),
                 ))
         for measure in (analysis.get("financing") or {}).get("measures", []):
             if measure.get("state") == "checked":

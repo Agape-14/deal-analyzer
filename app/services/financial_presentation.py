@@ -53,6 +53,13 @@ def return_evidence(fact):
     return " · ".join(part for part in (source, note) if part) or None
 
 
+def schedule_source(schedule, row=None):
+    # The document and sheet/page are common to the schedule. A workbook
+    # cell identifies one year, so include it only for that year's row.
+    cell = row.get("source_cell") if row else None
+    return source_reference([{**item, "cell": cell} for item in schedule["evidence"]])
+
+
 def schedule_context(schedule):
     return (
         f"Investor class: {schedule['investor_class']}"
