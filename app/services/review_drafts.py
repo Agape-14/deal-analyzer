@@ -3,6 +3,7 @@ import copy
 import json
 import re
 from collections import Counter
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import select
@@ -14,6 +15,8 @@ from app.services.data_integrity import is_path_locked, now_iso
 from app.services.document_context import documents_fingerprint
 from app.services.document_versions import document_payloads, review_documents
 from app.services.source_evidence import fresh_audit_evidence, normalized_text, numeric_quote_error
+from app.services.review_coverage import GROUP_LABELS, GROUP_REVIEWS_KEY, source_reading
+from app.services.return_schedules import active_sources_fingerprint
 
 DRAFT_KEY = "_review_draft"
 ATTEMPT_KEY = "_credit_review_attempt"
@@ -59,6 +62,12 @@ source if available, or lp, gp, or project when it describes a generic role.
 Describe calculation basis and timing using the source's terms. Use net or
 gross only when stated. Use ISO currency codes.
 Return the supplied package_id and a JSON object conforming to the output schema.
+Use coverage only to record remaining group information explicitly found to be
+not stated or not applicable after reviewing every active source. Name every
+active source in source_doc_ids and explain the conclusion. Group names are
+project_details, construction_budget, primary_return and scoring_inputs. Unread
+or partial sources cannot support an absence conclusion. Omission of a field
+is not evidence that it is absent. Return an empty coverage array when unsure.
 """
 
 
@@ -79,10 +88,19 @@ class ReviewFact(BaseModel):
     currency: str | None = Field(default=None, max_length=100)
 
 
+class GroupCoverage(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True, str_strip_whitespace=True)
+    group: Literal["project_details", "construction_budget", "primary_return", "scoring_inputs"]
+    status: Literal["not_stated", "not_applicable"]
+    reason: str = Field(min_length=8, max_length=1000)
+    source_doc_ids: list[int] = Field(min_length=1, max_length=200)
+
+
 class ReviewResult(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True, allow_inf_nan=False)
     package_id: str = Field(pattern=r"^[0-9a-f]{64}$")
     facts: list[ReviewFact] = Field(max_length=2 * len(FIELDS))
+    coverage: list[GroupCoverage] = Field(default_factory=list, max_length=4)
 
 
 def output_schema():
@@ -100,12 +118,22 @@ def output_schema():
         **{key: nullable_string for key in DIMENSIONS},
     }
     return {
-        "type": "object", "additionalProperties": False, "required": ["package_id", "facts"],
+        "type": "object", "additionalProperties": False, "required": ["package_id", "facts", "coverage"],
         "properties": {
             "package_id": {"type": "string"},
             "facts": {"type": "array", "items": {
                 "type": "object", "additionalProperties": False,
                 "properties": fact_properties, "required": list(fact_properties),
+            }},
+            "coverage": {"type": "array", "items": {
+                "type": "object", "additionalProperties": False,
+                "properties": {
+                    "group": {"type": "string", "enum": list(GROUP_LABELS)},
+                    "status": {"type": "string", "enum": ["not_stated", "not_applicable"]},
+                    "reason": {"type": "string"},
+                    "source_doc_ids": {"type": "array", "items": {"type": "integer"}},
+                },
+                "required": ["group", "status", "reason", "source_doc_ids"],
             }},
         },
     }
@@ -121,7 +149,7 @@ async def load_documents(db, deal_id):
 
 
 def package_identity(deal, docs):
-    inputs = input_fingerprint(deal.metrics, document_manifest(docs), deal.property_type)
+    inputs = input_fingerprint(deal.metrics, document_manifest(docs), deal.property_type, schema_version=6)
     return digest({"version": 1, "deal": deal.id, "inputs": inputs, "reading": documents_fingerprint(docs)})
 
 
@@ -264,6 +292,24 @@ def draft_record(result, provider, usage=None):
     return {"id": digest(payload), "provider": provider, "result": payload, "usage": usage}
 
 
+def coverage_rows(docs, result):
+    sources = review_documents(docs)
+    current_ids = {document.id for document in sources}
+    complete = source_reading(document_payloads(sources))["status"] == "read"
+    counts = Counter(row.group for row in result.coverage)
+    rows = []
+    for row in result.coverage:
+        issue = ""
+        if counts[row.group] > 1:
+            issue = "Review this group once per result."
+        elif not complete:
+            issue = "Read every active source completely before confirming information is not stated or not applicable."
+        elif set(row.source_doc_ids) != current_ids or len(row.source_doc_ids) != len(current_ids):
+            issue = "Name every active source once for this group assessment."
+        rows.append({**row.model_dump(), "label": GROUP_LABELS[row.group], "issue": issue})
+    return rows
+
+
 def draft_view(deal, docs):
     draft = (deal.metrics or {}).get(DRAFT_KEY)
     if not draft:
@@ -273,10 +319,11 @@ def draft_view(deal, docs):
     return {"revision": deal.revision, "draft": {
         "id": draft["id"], "provider": draft["provider"], "stale": stale, "usage": draft.get("usage"),
         "rows": [] if stale else validate_rows(deal, docs, result),
+        "coverage": [] if stale else coverage_rows(docs, result),
     }}
 
 
-def apply_rows(deal, docs, rows):
+def apply_rows(deal, docs, rows, coverage=None):
     metrics = copy.deepcopy(deal.metrics or {})
     document_set = digest(document_manifest(docs))
     provenance = metrics.setdefault("_provenance", {})
@@ -308,5 +355,14 @@ def apply_rows(deal, docs, rows):
             "review_document_set": document_set, "verified_at": now_iso(),
         }
         contexts[path] = row["context"]
+    if coverage:
+        assessments = metrics.setdefault(GROUP_REVIEWS_KEY, {})
+        source_fingerprint = active_sources_fingerprint(document_manifest(docs))
+        for row in coverage:
+            assessments[row["group"]] = {
+                "status": row["status"], "reason": row["reason"], "source_doc_ids": row["source_doc_ids"],
+                "sources_fingerprint": source_fingerprint, "recorded_at": now_iso(),
+                "reading_complete": True,
+            }
     metrics.pop(DRAFT_KEY, None)
     return metrics

@@ -5,6 +5,8 @@ import { useRouter } from "next/navigation";
 import { ClipboardPaste, Download, FileUp } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { api } from "@/lib/api";
+import type { ReviewCoverageGroup } from "@/lib/types";
+import { coverageLabels } from "./review-coverage";
 
 const CODEX_LINK = "codex://new?prompt=" + encodeURIComponent(
   "I will attach a Deal Analyzer review packet. Follow its instructions and output schema. Check each quote and compare the figures across sources. Return one JSON code block so I can use Paste JSON in Deal Analyzer.",
@@ -22,6 +24,14 @@ type Row = {
   context: Record<string, string>;
 };
 
+type CoverageRow = {
+  group: ReviewCoverageGroup;
+  status: "not_stated" | "not_applicable";
+  reason: string;
+  source_doc_ids: number[];
+  issue: string;
+};
+
 type ReviewState = {
   revision: number;
   job: { status: string; error: string | null } | null;
@@ -30,6 +40,7 @@ type ReviewState = {
     provider: "codex" | "openai";
     stale: boolean;
     rows: Row[];
+    coverage?: CoverageRow[];
     usage?: { estimated_cost_usd: number | null };
   } | null;
 };
@@ -81,6 +92,7 @@ export function ReviewDraftPanel({ dealId, revision, refreshKey, ready }: {
   const base = `/api/deals/${dealId}/review`;
   const [state, setState] = React.useState<ReviewState | null>(null);
   const [selected, setSelected] = React.useState<Set<string>>(new Set());
+  const [selectedCoverage, setSelectedCoverage] = React.useState<Set<ReviewCoverageGroup>>(new Set());
   const [working, setWorking] = React.useState(false);
   const busy = React.useRef(false);
   const [showPaste, setShowPaste] = React.useState(false);
@@ -113,6 +125,7 @@ export function ReviewDraftPanel({ dealId, revision, refreshKey, ready }: {
 
   React.useEffect(() => {
     setSelected(new Set((draft?.rows || []).filter(row => !row.issue && (row.current == null || row.current === row.value)).map(row => row.path)));
+    setSelectedCoverage(new Set());
   // Polling the same draft should preserve the analyst's selections.
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [draft?.id, draft?.stale]);
@@ -141,17 +154,19 @@ export function ReviewDraftPanel({ dealId, revision, refreshKey, ready }: {
   }
 
   async function approve() {
-    if (busy.current || !draft || !state || !selected.size) return;
+    if (busy.current || !draft || !state || (!selected.size && !selectedCoverage.size)) return;
     busy.current = true;
     setWorking(true);
     setError("");
     setMessage("");
     try {
-      const result = await api.post<ReviewState & { applied: number }>(base + "/approve", {
-        draft_id: draft.id, expected_revision: state.revision, paths: [...selected],
+      const result = await api.post<ReviewState & { applied: number; coverage_applied?: number }>(base + "/approve", {
+        draft_id: draft.id, expected_revision: state.revision, paths: [...selected], coverage_groups: [...selectedCoverage],
       });
       setState(result);
-      setMessage(`${result.applied} ${result.applied === 1 ? "value applied" : "values applied"}. Summary and scoring were refreshed.`);
+      setMessage(result.coverage_applied
+        ? `${result.applied} values applied and ${result.coverage_applied} coverage findings saved. Summary and scoring were refreshed.`
+        : `${result.applied} ${result.applied === 1 ? "value applied" : "values applied"}. Summary and scoring were refreshed.`);
       router.refresh();
     } catch (err) {
       setError(errorMessage(err));
@@ -220,10 +235,11 @@ export function ReviewDraftPanel({ dealId, revision, refreshKey, ready }: {
             )}
           </div>
           {draft.stale ? <p className="text-xs text-muted-foreground">The deal or its sources changed. Start a new review or download a fresh packet.</p> :
-            draft.rows.length === 0 ? <p className="text-xs text-muted-foreground">This review found no supported values in the source package.</p> : (
+            draft.rows.length === 0 && !draft.coverage?.length ? <p className="text-xs text-muted-foreground">This review found no supported values in the source package.</p> : (
               <>
-                <p className="text-xs text-muted-foreground">New values with matching quotes are selected. Select any replacements you want to apply.</p>
-                <ul className="max-h-[29rem] divide-y divide-border/70 overflow-auto rounded-lg border border-border/70">
+                {draft.rows.length > 0 && <>
+                  <p className="text-xs text-muted-foreground">New values with matching quotes are selected. Select any replacements you want to apply.</p>
+                  <ul className="max-h-[29rem] divide-y divide-border/70 overflow-auto rounded-lg border border-border/70">
                   {draft.rows.map((row, index) => {
                     const changed = row.current != null && row.current !== row.value;
                     const location = row.evidence.source_page ? `page ${row.evidence.source_page}` :
@@ -255,9 +271,34 @@ export function ReviewDraftPanel({ dealId, revision, refreshKey, ready }: {
                       </li>
                     );
                   })}
-                </ul>
-                <Button size="sm" type="button" disabled={!selected.size || working} onClick={() => void approve()}>
-                  Apply {selected.size || "selected"} {selected.size === 1 ? "value" : "values"}
+                  </ul>
+                </>}
+                {!!draft.coverage?.length && (
+                  <fieldset className="space-y-2 rounded-lg border border-border/70 p-3 text-xs" disabled={working}>
+                    <legend className="px-1 font-medium">Coverage findings</legend>
+                    <p className="text-muted-foreground">Confirm a finding after checking the active source documents.</p>
+                    {draft.coverage.map(row => (
+                      <label className="flex items-start gap-2" key={row.group}>
+                        <input type="checkbox" className="mt-0.5 accent-primary" disabled={!!row.issue} checked={!row.issue && selectedCoverage.has(row.group)} onChange={event => {
+                          const checked = event.target.checked;
+                          setSelectedCoverage(current => {
+                            const next = new Set(current);
+                            if (checked) next.add(row.group);
+                            else next.delete(row.group);
+                            return next;
+                          });
+                        }} />
+                        <span className="min-w-0 break-words">
+                          <span className="block font-medium">{coverageLabels[row.group]} · {row.status === "not_stated" ? "Not stated" : "Not applicable"}</span>
+                          <span className="block text-muted-foreground">{row.reason}</span>
+                          {row.issue && <span className="block text-warning">{row.issue}</span>}
+                        </span>
+                      </label>
+                    ))}
+                  </fieldset>
+                )}
+                <Button size="sm" type="button" disabled={(!selected.size && !selectedCoverage.size) || working} onClick={() => void approve()}>
+                  {selected.size ? `Apply ${selected.size} ${selected.size === 1 ? "value" : "values"}${selectedCoverage.size ? " and save findings" : ""}` : selectedCoverage.size ? "Save review findings" : "Apply selected values"}
                 </Button>
               </>
             )}

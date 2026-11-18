@@ -1,6 +1,7 @@
 import sys
 import os
 import logging
+import asyncio
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
@@ -13,7 +14,7 @@ from starlette.middleware.sessions import SessionMiddleware
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.middleware.gzip import GZipMiddleware
 from app.security_headers import SecurityHeadersMiddleware
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 from app.database import init_db
 from app.routers import (
     developers,
@@ -86,9 +87,17 @@ async def lifespan(app: FastAPI):
     workers_enabled = os.getenv("REVIEW_WORKERS_ENABLED", "1").lower() not in {"0", "false", "no"}
     pipeline_task = start_pipeline_runner() if workers_enabled else None
     review_task = start_review_worker() if workers_enabled else None
+    backfill_task = None
+    if os.getenv("KENYON_REVIEW_BACKFILL_PLAN"):
+        from scripts.release_review_backfill import start_review_backfill
+        backfill_task = start_review_backfill()
     try:
         yield
     finally:
+        if backfill_task and not backfill_task.done():
+            backfill_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await backfill_task
         if review_task:
             await stop_review_worker(review_task)
         if pipeline_task:

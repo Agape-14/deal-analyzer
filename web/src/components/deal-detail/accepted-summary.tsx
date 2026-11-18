@@ -9,6 +9,7 @@ import { ReturnContextPanel } from "./return-context-panel";
 import { ReturnSchedulePanel } from "./return-schedule-panel";
 import { FinancingMeasuresPanel } from "./financing-measures-panel";
 import { ScoreBreakdown } from "./score-breakdown";
+import { ReviewCoveragePanel } from "./review-coverage";
 
 const detailSections = [
   { prefix: "deal_structure.", title: "Investment and financing terms" },
@@ -68,7 +69,8 @@ export function AcceptedSummary({ deal }: { deal: DealDetail }) {
         </div>
         <Link href={`/deals/${deal.id}?tab=questions`} className="rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground">{analysis.questions.length ? `${analysis.questions.length} question${analysis.questions.length === 1 ? "" : "s"}` : "No material questions"}</Link>
       </div>
-      <details className="mt-3 text-xs text-muted-foreground"><summary className="cursor-pointer">Evidence coverage · {analysis.coverage.accepted}/{analysis.coverage.total} recognized facts accepted</summary>
+      {analysis.review_coverage && <ReviewCoveragePanel coverage={analysis.review_coverage} dealId={deal.id} />}
+      <details className="mt-3 text-xs text-muted-foreground"><summary className="cursor-pointer">Accepted facts · {analysis.coverage.accepted}/{analysis.coverage.total}</summary>
       <div className="mt-4 h-1.5 rounded-full bg-muted overflow-hidden" role="progressbar" aria-label="Accepted evidence coverage" aria-valuenow={analysis.coverage.accepted} aria-valuemin={0} aria-valuemax={analysis.coverage.total || 1}><div className="h-full bg-primary rounded-full" style={{ width: `${analysis.coverage.total ? analysis.coverage.accepted / analysis.coverage.total * 100 : 0}%` }} /></div>
       <p className="mt-3 text-sm text-muted-foreground">{analysis.coverage.accepted} of {analysis.coverage.total} recognized facts accepted · {analysis.coverage.checked} source checked · {analysis.coverage.calculated} calculated · {analysis.coverage.manual} analyst resolved.</p>
       <p className="mt-1 text-xs text-muted-foreground">Evidence coverage describes support for the numbers, not investment quality.</p>

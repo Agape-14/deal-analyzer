@@ -56,6 +56,26 @@ export interface ReturnSchedule {
   evidence: AnalysisFact["evidence"];
 }
 
+export type ReviewCoverageGroup = "project_details" | "construction_budget" | "primary_return" | "scoring_inputs";
+export type ReviewSourceStatus = "read" | "partial" | "unread" | "unknown" | "no_documents";
+
+export interface ReviewCoverage {
+  sources: {
+    status: ReviewSourceStatus;
+    documents: Array<{ id: number; filename: string; status: ReviewSourceStatus; issues: string[] }>;
+  };
+  groups: Array<{
+    key: ReviewCoverageGroup;
+    label: string;
+    status: "available" | "partial" | "needs_review" | "not_stated" | "not_applicable";
+    accepted_paths: string[];
+    reported_paths: string[];
+    missing: string[];
+    action: string;
+  }>;
+  attention_count: number;
+}
+
 export interface DealAnalysis {
   schema_version: number;
   version: number;
@@ -69,6 +89,7 @@ export interface DealAnalysis {
   questions: AnalysisQuestion[];
   returns: CanonicalReturnSummary;
   return_schedule?: ReturnSchedule | null;
+  review_coverage?: ReviewCoverage;
   coverage: { accepted: number; checked: number; manual: number; calculated: number; total: number };
   unclassified_paths: string[];
 }

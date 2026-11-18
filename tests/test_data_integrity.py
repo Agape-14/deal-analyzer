@@ -103,6 +103,7 @@ def test_extraction_cannot_replace_or_create_analyst_review_records():
         "_financing_measures": {"measures": [{"amount": 400000}]},
         "_return_schedule": {"schedule": {"rows": [{"year": 1}]}},
         "_return_reviews": {"preferred_return": {"source_doc_id": 3}},
+        "_review_group_coverage": {"construction_budget": {"status": "not_stated"}},
     }
     for existing in ({}, reviewed):
         incoming = {
@@ -110,6 +111,7 @@ def test_extraction_cannot_replace_or_create_analyst_review_records():
             "_financing_measures": {"measures": [{"amount": 900000}]},
             "_return_schedule": [{"year": 40}],
             "_return_reviews": "Untrusted extraction text",
+            "_review_group_coverage": {"primary_return": {"status": "not_stated"}},
         }
         merged, changes = smart_merge(existing, incoming)
         assert {key: merged[key] for key in reviewed if key in merged} == existing

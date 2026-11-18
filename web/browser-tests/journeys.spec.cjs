@@ -454,6 +454,10 @@ test('new deal reviews PDF and workbook through Codex paste, Summary, Compare, a
     await expect(summary.getByText('148', { exact: true })).toBeVisible();
     await expect(summary.getByRole('heading', { name: 'Construction costs', exact: true })).toBeVisible();
     await expect(summary.getByRole('heading', { name: 'Score breakdown', exact: true })).toBeVisible();
+    const coverage = summary.getByRole('region', { name: 'Review coverage', exact: true });
+    await expect(coverage.getByText('Sources read', { exact: true })).toBeVisible();
+    await expect(coverage.getByRole('listitem').filter({ hasText: 'Construction budget' })).toContainText('Partial coverage');
+    await expect(coverage.getByRole('listitem').filter({ hasText: 'Primary return' })).toContainText('Available');
     await expect(summary.getByRole('heading', { name: 'Published returns' })).toBeVisible();
     const publishedReturn = summary.getByRole('listitem').filter({hasText: 'Cash-on-cash'});
     await expect(publishedReturn.getByText('8.9%', { exact: true })).toBeVisible();

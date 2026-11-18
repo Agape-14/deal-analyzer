@@ -65,7 +65,8 @@ async def import_draft(deal_id: int, request: Request, db: AsyncSession = Depend
 class ReviewApproval(BaseModel):
     draft_id: str = Field(max_length=64)
     expected_revision: int
-    paths: list[str] = Field(min_length=1, max_length=200)
+    paths: list[str] = Field(default_factory=list, max_length=200)
+    coverage_groups: list[str] = Field(default_factory=list, max_length=4)
 
 
 @router.post("/{deal_id}/review/approve")
@@ -78,20 +79,27 @@ async def approve_draft(deal_id: int, approval: ReviewApproval, db: AsyncSession
     if not draft or draft["stale"] or draft["id"] != approval.draft_id:
         raise HTTPException(409, "This draft is no longer current. Refresh the review before applying values.")
     paths = set(approval.paths)
+    coverage_groups = set(approval.coverage_groups)
+    if not paths and not coverage_groups:
+        raise HTTPException(422, "Select values or group assessments to apply.")
     rows = [row for row in draft["rows"] if not row["issue"] and row["path"] in paths]
     if len(rows) != len(paths):
         raise HTTPException(422, "Some selected values have unresolved source checks.")
+    coverage = [row for row in draft["coverage"] if not row["issue"] and row["group"] in coverage_groups]
+    if len(coverage) != len(coverage_groups):
+        raise HTTPException(422, "Some selected group assessments have unresolved source checks.")
     record = deal.metrics[DRAFT_KEY]
     result = ReviewResult.model_validate(record["result"])
-    _refresh_integrity(deal, apply_rows(deal, docs, rows))
+    _refresh_integrity(deal, apply_rows(deal, docs, rows, coverage))
     metrics = deal.metrics
     new_package_id = package_identity(deal, docs)
     remaining = [fact for fact in result.facts if fact.path not in paths]
-    if remaining:
-        updated = ReviewResult(package_id=new_package_id, facts=remaining)
+    remaining_coverage = [row for row in result.coverage if row.group not in coverage_groups]
+    if remaining or remaining_coverage:
+        updated = ReviewResult(package_id=new_package_id, facts=remaining, coverage=remaining_coverage)
         metrics[DRAFT_KEY] = draft_record(updated, record["provider"], record.get("usage"))
     attempt = metrics.get(ATTEMPT_KEY) or {}
     if attempt.get("completed") and attempt.get("package_id") == result.package_id:
         metrics[ATTEMPT_KEY] = {**attempt, "package_id": new_package_id}
     await db.commit()
-    return {**_public_draft(deal, docs), "applied": len(rows)}
+    return {**_public_draft(deal, docs), "applied": len(rows), "coverage_applied": len(coverage)}

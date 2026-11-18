@@ -482,3 +482,70 @@ async def test_api_credit_failure_is_not_retried_and_missing_key_is_safe(client,
     assert view["draft"] is None
     assert "OpenAI credits" in view["job"]["error"]
     assert len(calls) == 1
+
+
+async def test_group_assessments_need_explicit_approval_and_follow_source_changes(client):
+    deal_id = await upload_csv(client)
+    base = f"/api/deals/{deal_id}/review"
+    packet = await packet_for(client, base)
+    result = cited_result(packet)
+    result["coverage"] = [{"group": "project_details", "status": "not_stated",
+        "reason": "The complete terms-only source contains no additional project description or area.",
+        "source_doc_ids": [source["id"] for source in packet["sources"]]}]
+    imported = (await client.post(base + "/draft", json=result)).json()
+    assert imported["draft"]["coverage"][0]["issue"] == ""
+    assert "_review_group_coverage" not in (await client.get(f"/api/deals/{deal_id}")).json()["metrics"]
+    facts_only = await client.post(base + "/approve", json=approval(imported))
+    assert facts_only.status_code == 200, facts_only.text
+    pending = facts_only.json()
+    assert pending["coverage_applied"] == 0
+    assert pending["draft"]["rows"] == []
+    assert len(pending["draft"]["coverage"]) == 1
+    saved = await client.post(base + "/approve", json={"draft_id": pending["draft"]["id"],
+        "expected_revision": pending["revision"], "paths": [], "coverage_groups": ["project_details"]})
+    assert saved.status_code == 200, saved.text
+    assert saved.json()["applied"] == 0 and saved.json()["coverage_applied"] == 1
+    deal = (await client.get(f"/api/deals/{deal_id}")).json()
+    project = next(row for row in deal["analysis"]["review_coverage"]["groups"] if row["key"] == "project_details")
+    assert project["status"] == "not_stated"
+    assert deal["metrics"]["deal_structure"]["minimum_investment"] == 500000
+    await upload_csv(client, deal_id, name="additional.csv", value=800000)
+    updated = (await client.get(f"/api/deals/{deal_id}")).json()
+    project = next(row for row in updated["analysis"]["review_coverage"]["groups"] if row["key"] == "project_details")
+    assert project["status"] == "needs_review"
+    assert updated["metrics"]["_review_group_coverage"]["project_details"]["status"] == "not_stated"
+
+
+async def test_group_assessment_cannot_omit_an_active_source(client):
+    deal_id = await upload_csv(client)
+    await upload_csv(client, deal_id, name="second.csv", value=600000)
+    base = f"/api/deals/{deal_id}/review"
+    packet = await packet_for(client, base)
+    result = {"package_id": packet["package_id"], "facts": [], "coverage": [{
+        "group": "construction_budget", "status": "not_stated",
+        "reason": "No construction component budget is stated in the sources.",
+        "source_doc_ids": [packet["sources"][0]["id"]]}]}
+    imported = await client.post(base + "/draft", json=result)
+    assert imported.status_code == 200, imported.text
+    draft = imported.json()
+    assert "every active source" in draft["draft"]["coverage"][0]["issue"]
+    response = await client.post(base + "/approve", json={"draft_id": draft["draft"]["id"],
+        "expected_revision": draft["revision"], "coverage_groups": ["construction_budget"]})
+    assert response.status_code == 422
+
+
+async def test_analysis_schema_upgrade_preserves_existing_review_packets_and_drafts(client, monkeypatch):
+    from app.services import analysis
+    deal_id = await upload_csv(client)
+    base = f"/api/deals/{deal_id}/review"
+    packet = await packet_for(client, base)
+    imported = await client.post(base + "/draft", json=cited_result(packet))
+    assert imported.status_code == 200, imported.text
+    draft = imported.json()
+    monkeypatch.setattr(analysis, "SCHEMA_VERSION", analysis.SCHEMA_VERSION + 1)
+    assert (await packet_for(client, base))["package_id"] == packet["package_id"]
+    current = (await client.get(base + "/draft")).json()
+    assert current["draft"]["id"] == draft["draft"]["id"] and not current["draft"]["stale"]
+    approved = await client.post(base + "/approve", json=approval(draft))
+    assert approved.status_code == 200, approved.text
+    assert approved.json()["applied"] == 1

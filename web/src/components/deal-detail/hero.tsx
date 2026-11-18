@@ -60,6 +60,8 @@ export function DealHero({ deal }: { deal: DealDetail }) {
   const gate = deal.scores?.data_quality;
   const reviewSummary = deal.analysis ? `${deal.analysis.questions.length} material question groups. Accepted facts and evidence are shared across Summary, comparison and exports.` : dealReviewSummary(gate);
   const viewerSummary = deal.analysis ? `${deal.analysis.coverage.accepted} of ${deal.analysis.coverage.total} recognized facts accepted. Source checks and analyst decisions are labeled separately.` : viewerScoreSummary(gate);
+  const coverage = deal.analysis?.review_coverage;
+  const coverageGaps = coverage?.attention_count ?? 0;
   const reviewStatusName = normalizedPipelineStatus(pipelineStatus);
   const showAnalystTools = !loading && isAnalyst;
   const openAnalystTools = showAnalystTools && (pipelineRunning || reviewStatusName === "failed" || reviewStatusName === "running");
@@ -176,6 +178,11 @@ export function DealHero({ deal }: { deal: DealDetail }) {
 
             <h1 className="text-2xl md:text-3xl font-semibold tracking-tight break-words">{deal.project_name}</h1>
             {deal.analysis && <div className="mt-2 flex items-center flex-wrap gap-2 text-xs"><span className="text-muted-foreground">Revision {deal.analysis.version} · {deal.analysis.questions.length ? `${deal.analysis.questions.length} material questions` : "No material questions recorded"}</span><Link className="underline font-medium text-primary" href={`/deals/${deal.id}?tab=${deal.analysis.questions.length ? "questions" : "overview#reviewed-facts"}`}>{deal.analysis.questions.length ? "Resolve next question" : "Inspect reviewed evidence"}</Link></div>}
+            {coverage && (coverageGaps > 0 || coverage.sources.status !== "read") && (
+              <Link href={`/deals/${deal.id}?tab=overview#reviewed-facts`} className="mt-2 inline-block text-xs font-medium text-warning underline underline-offset-2">
+                {coverageGaps ? `${coverageGaps} review ${coverageGaps === 1 ? "area needs" : "areas need"} attention` : "Check source reading"}
+              </Link>
+            )}
 
             <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-muted-foreground">
               {locationBits && (

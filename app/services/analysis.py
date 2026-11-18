@@ -16,8 +16,9 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from app.services.canonical_metrics import HOLD_CASH_YIELD_PATHS, canonical_return_summary, primary_strategy
 from app.services.return_schedules import SCHEDULE_KEY, active_sources_fingerprint, project_return_schedule
+from app.services.review_coverage import GROUP_REVIEWS_KEY, build_review_coverage
 
-SCHEMA_VERSION = 6
+SCHEMA_VERSION = 7
 ACCEPTED = {"checked", "calculated", "manual"}
 BAD = {"wrong", "missing", "unverifiable", "stale", "math_failed"}
 RETURN_REVIEWS_KEY = "_return_reviews"
@@ -100,18 +101,19 @@ def clean_json(value):
     return value
 
 
-def input_fingerprint(metrics, documents, property_type):
+def input_fingerprint(metrics, documents, property_type, *, schema_version=None):
     # Progress, counters and heuristic confidence do not create new facts.
     metrics = metrics if isinstance(metrics, dict) else {}
     keys = {k: v for k, v in metrics.items() if not k.startswith("_") and k != "validation_flags"}
     for key in ("_provenance", "_locks", "_fact_context", "_analysis_context", "_verified_document_set"):
         keys[key] = metrics.get(key)
-    for key in (SCHEDULE_KEY, "_financing_measures", RETURN_REVIEWS_KEY):
+    for key in (SCHEDULE_KEY, "_financing_measures", RETURN_REVIEWS_KEY, GROUP_REVIEWS_KEY):
         if key in metrics:
             keys[key] = metrics[key]
     if isinstance(keys.get("_provenance"), dict):
         keys["_provenance"] = {p: {k: v for k, v in meta.items() if k not in {"confidence", "extracted_at", "verified_at"}} for p, meta in keys["_provenance"].items() if isinstance(meta, dict)}
-    return digest(clean_json({"schema": SCHEMA_VERSION, "metrics": keys, "documents": documents, "property_type": property_type}))
+    return digest(clean_json({"schema": SCHEMA_VERSION if schema_version is None else schema_version,
+                              "metrics": keys, "documents": documents, "property_type": property_type}))
 
 
 def flatten(metrics):
@@ -485,25 +487,35 @@ def build_analysis(metrics, documents=None, property_type="multifamily"):
     from app.services.financing_measures import project_financing
 
     financing = project_financing(metrics, documents, (accepted.get("deal_structure") or {}).get("debt_amount"))
+    serialized_facts = {p: f.model_dump() for p, f in sorted(facts.items())}
+    review_coverage = build_review_coverage(metrics, serialized_facts, accepted, returns, schedule, documents, property_type)
     return clean_json({"schema_version": SCHEMA_VERSION, "input_hash": input_fingerprint(metrics, documents, property_type), "version": 0,
             "status": "questions" if questions else "ready", "primary_strategy": strategy, "investor_class": selected_class,
-            "facts": {p: f.model_dump() for p, f in sorted(facts.items())}, "returns": returns, "accepted_metrics": accepted,
+            "facts": serialized_facts, "returns": returns, "accepted_metrics": accepted,
             "return_schedule": schedule, "financing": financing,
-            "questions": questions, "coverage": coverage, "documents": documents,
+            "questions": questions, "coverage": coverage, "review_coverage": review_coverage, "documents": documents,
             "unclassified_paths": sorted(p for p in flat if p not in REGISTRY)})
 
 
 def analysis_for_deal(deal):
     stored = getattr(deal, "analysis_snapshot", None)
     if isinstance(stored, dict) and stored.get("schema_version") == SCHEMA_VERSION:
-        return stored
-    # Rebuild an older snapshot with its recorded document manifest and revision.
-    documents = (stored or {}).get("documents", []) if isinstance(stored, dict) else []
-    preview = build_analysis(deal.metrics or {}, documents, property_type=deal.property_type or "multifamily")
-    if isinstance(stored, dict):
-        preview["version"] = stored.get("version", 0)
-        if stored.get("created_at"):
-            preview["created_at"] = stored["created_at"]
+        preview = copy.deepcopy(stored)
+    else:
+        # Rebuild an older snapshot with its recorded document manifest and revision.
+        documents = (stored or {}).get("documents", []) if isinstance(stored, dict) else []
+        preview = build_analysis(deal.metrics or {}, documents, property_type=deal.property_type or "multifamily")
+        if isinstance(stored, dict):
+            preview["version"] = stored.get("version", 0)
+            if stored.get("created_at"):
+                preview["created_at"] = stored["created_at"]
+    reading_documents = None
+    if "documents" in deal.__dict__:
+        from app.services.document_versions import document_payloads
+        reading_documents = document_payloads(deal.__dict__["documents"])
+    preview["review_coverage"] = build_review_coverage(deal.metrics or {}, preview["facts"],
+        preview["accepted_metrics"], preview["returns"], preview.get("return_schedule"), preview["documents"],
+        deal.property_type or "multifamily", reading_documents)
     return preview
 
 
