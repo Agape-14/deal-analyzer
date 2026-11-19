@@ -5,7 +5,7 @@ from io import BytesIO
 import fitz
 from openpyxl import load_workbook
 
-from app.routers.deals import CompareRequest, compare_deals, export_comparison, get_deal
+from app.routers.deals import CompareRequest, compare_deals, export_comparison, get_deal, list_deals
 from app.routers.reports import _fmt_money, _fmt_pct, deal_pdf_report
 from app.services.financial_presentation import (
     RETURN_LABELS, accepted_return_fact, operating_fact_context, optional_sale_returns,
@@ -181,6 +181,13 @@ async def verify_review_surfaces(db, deals: list, *, audit_scores=False) -> dict
     result = {"summary_deals": len(summaries), "compared_deals": len(compared), "pdf_reports": len(ids),
             "xlsx_workbooks": 1, "budget_values": budgets, "schedule_rows": schedule, "optional_sale_values": sales}
     if audit_scores:
+        dashboard = {item["id"]: item for item in await list_deals(False, db)}
+        for summary in summaries:
+            deal_id = summary["id"]
+            candidate = (dashboard.get(deal_id) or {}).get("analysis") or {}
+            for key in ("review_coverage", "readiness", "findings", "return_crosscheck"):
+                _require(candidate.get(key) == summary["analysis"][key], "Dashboard", key, deal_id)
+        result["dashboard_deals"] = len(summaries)
         categories = ("returns", "market", "structure", "risk", "financials", "underwriting", "sponsor")
         result["review_audit"] = {}
         for summary in summaries:

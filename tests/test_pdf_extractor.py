@@ -104,7 +104,7 @@ def test_image_detection_tolerates_unavailable_or_invalid_image_metadata():
     assert pdf_extractor._has_large_image(page)
 
 
-def table_page(rows, column_labels, *, positioned=None):
+def table_page(rows, column_labels, *, positioned=None, glyphs=None):
     boxes = [[(column * 100, row * 30, (column + 1) * 100, (row + 1) * 30)
               for column in range(len(values))] for row, values in enumerate(rows)]
     words = []
@@ -121,7 +121,13 @@ def table_page(rows, column_labels, *, positioned=None):
     )
     return SimpleNamespace(
         find_tables=lambda: SimpleNamespace(tables=[table]),
-        get_text=lambda mode=None: words if mode == "words" else "Full native source text with construction costs and financial metrics.",
+        get_text=lambda mode=None, **kwargs: (
+            words if mode == "words" else
+            {"blocks": [{"lines": [{"dir": (1, 0), "spans": [{"chars": [
+                {"origin": (x, y), "c": char} for x, y, char in glyphs or []
+            ]}]}]}]} if mode == "rawdict" else
+            "Full native source text with construction costs and financial metrics."
+        ),
         rect=fitz.Rect(0, 0, 600, 800), get_image_info=lambda: [],
     )
 
@@ -156,6 +162,80 @@ def test_native_grid_keeps_headers_cells_and_citable_rows_in_page_text(tmp_path)
     assert row["text"] in result.text
     assert "Hard costs" in result.text
     assert result.numeric_diagnostics == []
+
+
+def test_ruled_grid_replaces_overlapping_layout_columns_and_retains_separate_table():
+    page = table_page([["Category", "Total"], ["Land", "$1,200,000"]], ["Category", "Total"])
+    ruled = page.find_tables().tables[0]
+    layout = table_page([["Category", "", "Total"], ["Land", "", "$1,200,000"]],
+                        ["Category", "", "Total"]).find_tables().tables[0]
+    layout.bbox = ruled.bbox
+    separate = table_page([["Metric", "Rate"], ["Project IRR", "15%"]], ["Metric", "Rate"]).find_tables().tables[0]
+    separate.bbox = (0, 90, 200, 150)
+    calls = []
+
+    def find_tables(**kwargs):
+        calls.append(kwargs)
+        return SimpleNamespace(tables=[ruled] if kwargs else [layout, separate])
+
+    page.find_tables = find_tables
+    tables = pdf_extractor._extract_tables(page, 1)
+
+    assert calls == [{"strategy": "lines_strict", "use_layout": False}, {}]
+    assert [table["column_labels"] for table in tables] == [["Category", "Total"], ["Metric", "Rate"]]
+    assert [table["table_index"] for table in tables] == [1, 2]
+
+
+def numeric_glyphs(token, *, baseline=45):
+    # Commas occur last in extraction order but retain their actual PDF x/y.
+    glyphs = [(110 + index * 5, baseline, char) for index, char in enumerate(token)]
+    return [glyph for glyph in glyphs if glyph[2] != ","] + [glyph for glyph in glyphs if glyph[2] == ","]
+
+
+def test_detached_punctuation_uses_exact_single_baseline_glyphs_and_keeps_original():
+    original = "$1 200 000\n, ,"
+    page = table_page([["Category", "Total"], ["Land", original]], ["Category", "Total"],
+                      glyphs=numeric_glyphs("$1,200,000"))
+
+    table = pdf_extractor._extract_tables(page, 1)[0]
+
+    assert table["rows"][1][1] == "$1,200,000"
+    assert table["review_rows"][1]["text"] == "Table 1 row 2 | Category=Land | Total=$1,200,000"
+    assert table["text_recoveries"] == [{
+        "row": 2, "column": 2, "original_text": original,
+        "positioned_text": "$1,200,000", "source": "native_glyph_positions",
+    }]
+    assert table["numeric_diagnostics"] == []
+
+
+@pytest.mark.parametrize("changed_digit,multiple_baselines", [(True, False), (False, True)])
+def test_detached_punctuation_does_not_guess_from_different_digits_or_baselines(changed_digit, multiple_baselines):
+    original = "$1 200 000\n, ,"
+    glyphs = numeric_glyphs("$1,300,000" if changed_digit else "$1,200,000")
+    if multiple_baselines:
+        glyphs[-1] = (glyphs[-1][0], 50, glyphs[-1][2])
+    page = table_page([["Category", "Total"], ["Land", original]], ["Category", "Total"], glyphs=glyphs)
+
+    table = pdf_extractor._extract_tables(page, 1)[0]
+
+    assert table["rows"][1][1] == original
+    assert table["text_recoveries"] == []
+
+
+def test_numeric_glyph_recovery_audit_is_bounded_across_pages(monkeypatch):
+    monkeypatch.setattr(pdf_extractor, "MAX_TEXT_RECOVERIES", 1)
+    original = "$1 200 000\n, ,"
+    page = table_page([["Category", "Total"], ["Land", original]], ["Category", "Total"],
+                      glyphs=numeric_glyphs("$1,200,000"))
+    budget = pdf_extractor._read_budget()
+
+    first = pdf_extractor._extract_tables(page, 1, budget)[0]
+    second = pdf_extractor._extract_tables(page, 2, budget)[0]
+
+    assert first["rows"][1][1] == "$1,200,000"
+    assert second["rows"][1][1] == original and second["truncated"]
+    assert second["text_recoveries"] == []
+    assert budget["recoveries"] == 1 and budget["truncated_pages"] == {2}
 
 
 def test_corroborated_decimal_discrepancy_is_bound_to_one_original_cell(monkeypatch):

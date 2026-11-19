@@ -6,7 +6,7 @@ import pytest
 from pydantic import ValidationError
 
 from app.services.return_crosscheck import (
-    CROSSCHECK_KEY, checked_return_crosscheck,
+    CROSSCHECK_KEY, _money, checked_return_crosscheck,
     project_return_crosscheck, return_crosscheck_output_schema,
 )
 
@@ -81,6 +81,43 @@ def test_single_table_quote_supports_ordered_columns_explicit_zero_and_year_foot
     assert [row["amount"] for row in result["rows"]] == [-100000, 0, 121000]
     assert len(result["evidence"]) == 1
     assert all(row["evidence"][0]["excerpt"] == payload["table"]["citation"]["source_excerpt"] for row in result["rows"])
+
+
+@pytest.mark.parametrize("quote,expected", [
+    ("LP cash flow ($100,000) $- $121,000", [-100000, 0, 121000]),
+    ("LP cash flow ($100,000) $- $- $121,000", [-100000, 0, 0, 121000]),
+    ("LP cash flow $- $-100,000 $20,000", [0, -100000, 20000]),
+    ("LP cash flow ($100,000) $- -$12,000 $121,000", [-100000, 0, -12000, 121000]),
+    ("LP cash flow ($100,000) $- ($12,000) $121,000", [-100000, 0, -12000, 121000]),
+    ("LP cash flow ($100,000) $– $121,000", [-100000, 0, 121000]),
+    ("LP cash flow ($100,000)\n$-\n$121,000", [-100000, 0, 121000]),
+    ("LP cash flow ($100,000) $-\t$121,000", [-100000, 0, 121000]),
+])
+def test_quoted_money_keeps_zero_columns_and_following_signed_amounts_in_source_order(quote, expected):
+    assert [amount for amount, _ in _money(quote)] == expected
+
+
+def test_calendar_table_preserves_hyphenated_refinance_and_sale_footnotes():
+    scope = "Estimated annual LP Investor cash flows"
+    header = "Cash Flow 2030 2031** 2032^"
+    cash_row = "LP Investor Cash Flow $(200,000) $40,000 $240,000"
+    table = "\n".join((scope, header, cash_row))
+    refi = "** Re-finance in September 2031"
+    sale = "^ Sale in May 2032"
+    documents, manifest = pdf_sources(["\n".join((table, refi, sale))])
+    record = checked_return_crosscheck({
+        "investor_class": "LP Investor", "scenario": "sale", "currency": "$",
+        "table": {"citation": citation(table), "year_header": header, "cash_flow_row": cash_row},
+        "rows": [
+            {"year": 2030, "amount": -200000},
+            {"year": 2031, "amount": 40000, "flow_scope": "refinance", "event_citation": citation(refi)},
+            {"year": 2032, "amount": 240000, "flow_scope": "sale", "event_citation": citation(sale)},
+        ],
+    }, documents, manifest)
+    result = record["result"]
+    assert result["annual_irr_pct"] == 20 and result["cash_flow_multiple"] == 1.4
+    assert [row["label"] for row in result["rows"]] == ["2030", "2031", "2032"]
+    assert result["rows"][1]["flow_scope_label"] == "Includes refinance proceeds"
 
 
 def test_class_a_refinance_and_sale_years_keep_total_cash_flows_at_twenty_percent_irr():

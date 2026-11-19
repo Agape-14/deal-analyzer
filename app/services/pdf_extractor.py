@@ -13,6 +13,7 @@ import io
 import math
 import os
 import re
+from collections import Counter
 from dataclasses import dataclass, field
 from decimal import Decimal, InvalidOperation
 
@@ -42,6 +43,9 @@ MAX_NUMERIC_CHECKS_PER_PAGE = 12
 MAX_PDF_NUMERIC_CHECKS = 48
 MAX_NUMERIC_DIAGNOSTICS = 80
 MAX_DIAGNOSTIC_TEXT_CHARS = 20000
+MAX_NATIVE_GLYPHS_PER_PAGE = 50000
+MAX_TEXT_RECOVERIES = 128
+MAX_RECOVERY_TEXT_CHARS = 16000
 _TABLE_REVIEW_MARKER = "\n\n--- Extracted PDF table rows ---\n"
 
 _NUMBER = re.compile(r"(?<![\w.])(?:\(\s*)?[-+−]?\s*[$€£]?\s*\d[\d,.]*(?:\s*[%x×])?(?:\s*\))?(?!\w)", re.I)
@@ -102,6 +106,7 @@ def _ocr_page(page: "fitz.Page") -> str:
 def _read_budget():
     return {"tables": 0, "cells": 0, "text_chars": 0, "review_chars": 0, "numeric_checks": 0,
             "diagnostics": 0, "diagnostic_chars": 0, "page_checks": {},
+            "recoveries": 0, "recovery_chars": 0,
             "review_pages": set(), "truncated_pages": set(), "unchecked_pages": set()}
 
 
@@ -125,6 +130,87 @@ def _number_value(token):
         return -value if token.strip().startswith("(") and token.strip().endswith(")") else value
     except InvalidOperation:
         return None
+
+
+def _table_candidates(page):
+    """Prefer physical grid lines, retaining separate unruled layout tables.
+
+    The layout finder can introduce whitespace columns inside a ruled grid.
+    Consume each finder before calling the next: native Table.extract() may
+    depend on the finder's current character state.
+    """
+    try:
+        strict = page.find_tables(strategy="lines_strict", use_layout=False)
+        ruled = getattr(strict, "tables", None) or []
+    except Exception:
+        ruled = []
+    ruled_boxes = []
+    for table in ruled:
+        box = _bbox(getattr(table, "bbox", None))
+        if box:
+            ruled_boxes.append(fitz.Rect(box))
+        yield table
+    try:
+        layout = page.find_tables()
+    except Exception:
+        return
+    for table in getattr(layout, "tables", None) or []:
+        box = _bbox(getattr(table, "bbox", None))
+        if box:
+            rect = fitz.Rect(box)
+            if any((rect & ruled_box).get_area() >= min(rect.get_area(), ruled_box.get_area()) * 0.5
+                   for ruled_box in ruled_boxes):
+                continue
+        yield table
+
+
+def _native_glyphs(page):
+    """Read only positioned text characters, excluding embedded image bytes."""
+    try:
+        data = page.get_text("rawdict", flags=fitz.TEXTFLAGS_RAWDICT & ~fitz.TEXT_PRESERVE_IMAGES)
+        if not isinstance(data, dict):
+            return []
+        glyphs = []
+        for block in data.get("blocks", []):
+            for line in block.get("lines", []):
+                direction = line.get("dir", (1, 0))
+                if len(direction) != 2 or abs(direction[0] - 1) > 0.01 or abs(direction[1]) > 0.01:
+                    continue
+                for span in line.get("spans", []):
+                    for char in span.get("chars", []):
+                        value = char.get("c", "")
+                        if not value or value.isspace():
+                            continue
+                        x, y = map(float, char["origin"])
+                        if not math.isfinite(x) or not math.isfinite(y):
+                            continue
+                        glyphs.append((x, y, value))
+                        if len(glyphs) > MAX_NATIVE_GLYPHS_PER_PAGE:
+                            return []
+        return glyphs
+    except Exception:
+        return []
+
+
+def _positioned_numeric_cell(text, box, glyphs):
+    """Recover reading order only; never add, remove, or replace a glyph.
+
+    A detached comma/decimal can be emitted as a second text line even though
+    its PDF baseline matches the digits. Require a single horizontal baseline,
+    the exact same non-whitespace characters, and one valid numeric token.
+    """
+    if (not box or not re.fullmatch(r"[\d\s,.()$€£%x×+−-]+", text, re.I)
+            or not re.search(r"[,.]", text)):
+        return None
+    compact = "".join(text.split())
+    selected = [(x, y, char) for x, y, char in glyphs if box[0] <= x < box[2] and box[1] <= y < box[3]]
+    if not selected or max(item[1] for item in selected) - min(item[1] for item in selected) > 0.5:
+        return None
+    positioned = "".join(item[2] for item in sorted(selected, key=lambda item: item[0]))
+    if (positioned == compact or Counter(positioned) != Counter(compact)
+            or not _NUMBER.fullmatch(positioned) or _number_value(positioned) is None):
+        return None
+    return positioned
 
 
 def _numeric_issue(native_token, other_token):
@@ -263,16 +349,11 @@ def _extract_tables(page: "fitz.Page", page_num: int, budget=None) -> list[dict]
     results: list[dict] = []
     budget = budget if budget is not None else _read_budget()
     try:
-        tf = page.find_tables()
-    except Exception:
-        return results
-
-    tables = getattr(tf, "tables", None) or []
-    try:
         words = page.get_text("words") or []
     except Exception:
         words = []
-    for idx, tbl in enumerate(tables, 1):
+    glyphs = None
+    for idx, tbl in enumerate(_table_candidates(page), 1):
         if budget["tables"] >= MAX_PDF_TABLES or budget["cells"] >= MAX_PDF_TABLE_CELLS:
             budget["truncated_pages"].add(page_num)
             break
@@ -287,13 +368,15 @@ def _extract_tables(page: "fitz.Page", page_num: int, budget=None) -> list[dict]
         if not original_columns:
             continue
         bounded_rows = []
+        recoveries = []
+        geometry = getattr(tbl, "rows", []) or []
         truncated = original_rows > MAX_TABLE_ROWS or original_columns > MAX_TABLE_COLUMNS
-        for row in rows[:MAX_TABLE_ROWS]:
+        for row_index, row in enumerate(rows[:MAX_TABLE_ROWS], 1):
             if not row:
                 bounded_rows.append([])
                 continue
             bounded = []
-            for value in row[:MAX_TABLE_COLUMNS]:
+            for column, value in enumerate(row[:MAX_TABLE_COLUMNS], 1):
                 if budget["cells"] >= MAX_PDF_TABLE_CELLS:
                     truncated = True
                     break
@@ -302,6 +385,23 @@ def _extract_tables(page: "fitz.Page", page_num: int, budget=None) -> list[dict]
                     marker = "[cell text omitted]"
                     text = marker if budget["text_chars"] + len(marker) <= MAX_TABLE_TEXT_CHARS else None
                     truncated = True
+                elif text is not None and re.search(r"[,.]", text) and not _NUMBER.fullmatch(text.strip()):
+                    if glyphs is None:
+                        glyphs = _native_glyphs(page)
+                    cells = getattr(geometry[row_index - 1], "cells", []) if row_index <= len(geometry) else []
+                    box = _bbox(cells[column - 1]) if column <= len(cells) else None
+                    positioned = _positioned_numeric_cell(text, box, glyphs)
+                    if positioned:
+                        size = len(text) + len(positioned)
+                        if (budget["recoveries"] < MAX_TEXT_RECOVERIES
+                                and budget["recovery_chars"] + size <= MAX_RECOVERY_TEXT_CHARS):
+                            recoveries.append({"row": row_index, "column": column, "original_text": text,
+                                               "positioned_text": positioned, "source": "native_glyph_positions"})
+                            budget["recoveries"] += 1
+                            budget["recovery_chars"] += size
+                            text = positioned
+                        else:
+                            truncated = True
                 if text is not None:
                     budget["text_chars"] += len(text)
                 bounded.append(text)
@@ -352,6 +452,7 @@ def _extract_tables(page: "fitz.Page", page_num: int, budget=None) -> list[dict]
             "original_row_count": original_rows,
             "original_column_count": original_columns,
             "truncated": truncated,
+            "text_recoveries": recoveries,
         }
         table["numeric_diagnostics"] = _table_numeric_diagnostics(page, table, tbl, words, budget)
         results.append(table)

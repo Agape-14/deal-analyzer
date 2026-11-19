@@ -31,8 +31,8 @@ _FLOW_LABELS = {
 }
 _EVENTS = {
     "operating": r"operating (?:cash flows?|distributions?)|cash flows? from operations",
-    "capital_event": r"capital (?:event|return|contribution)|equity (?:contribution|return)|initial (?:investment|contribution|outlay)|sale proceeds|refinanc",
-    "refinance": r"refinanc(?:e|ing)|cash[- ]out",
+    "capital_event": r"capital (?:event|return|contribution)|equity (?:contribution|return)|initial (?:investment|contribution|outlay)|sale proceeds|re[-‐‑–— ]?financ",
+    "refinance": r"re[-‐‑–— ]?financ(?:e|ing)|cash[- ]out",
     "sale": r"\bsale\b|\bdisposition\b",
 }
 
@@ -125,7 +125,9 @@ def _money(text):
         amount = Decimal(match["number"].replace(",", "")) * scale
         if match["open"] or "-" in signs:
             amount = -amount
-        values.append((match.start(), amount, bool(match["symbol"])))
+        # Leading whitespace can start before a masked zero in the prior column.
+        # The number's own position preserves the printed column order.
+        values.append((match.start("number"), amount, bool(match["symbol"])))
     for match in zero_markers:
         values.append((match.start(), Decimal(0), True))
     return [(amount, symbol) for _, amount, symbol in sorted(values)]
@@ -227,7 +229,8 @@ def _validate_scope(payload):
     if not currency_present:
         raise ValueError("Use the currency label printed in the cited sources.")
     scenario = r"\bhold\b|\bholding\b" if payload.scenario == "hold" else r"\bsale\b|\bdisposition\b"
-    if not re.search(scenario, quotes, re.I):
+    event_quotes = " ".join(row.event_citation.source_excerpt for row in payload.rows if row.event_citation)
+    if not re.search(scenario, f"{quotes} {event_quotes}", re.I):
         raise ValueError("The cited source must identify the selected hold or sale scenario.")
     for row in payload.rows:
         citation = _row_citation(payload, row)
@@ -307,7 +310,7 @@ def checked_return_crosscheck(payload, documents, manifest):
         row_evidence = [citation]
         if payload.table and table_evidence != citation:
             row_evidence.insert(0, table_evidence)
-        rows.append({"year": row.year, "label": f"Year {row.year}", "amount": row.amount,
+        rows.append({"year": row.year, "label": str(row.year) if row.year >= 1900 else f"Year {row.year}", "amount": row.amount,
                      "date_label": row.date_label, "flow_scope": row.flow_scope,
                      "flow_scope_label": _FLOW_LABELS[row.flow_scope], "evidence": row_evidence, "event_evidence": event_evidence})
         evidence.extend([*row_evidence, *event_evidence])

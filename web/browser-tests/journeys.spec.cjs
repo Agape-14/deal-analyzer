@@ -460,7 +460,7 @@ test('new deal reviews PDF and workbook through Codex paste, Summary, Compare, a
     const exceptionList = page.getByRole('region', { name: 'Review exceptions', exact: true });
     const conflict = exceptionList.getByText('Multiple values were proposed for this field. Compare the sources before resolving it.', { exact: true });
     await expect(conflict).toHaveCount(2);
-    const conflictChoices = page.getByRole('checkbox', { name: /stabilized noi/i });
+    const conflictChoices = exceptionList.getByRole('checkbox', { name: /stabilized noi/i });
     await expect(conflictChoices).toHaveCount(2);
     for (const choice of await conflictChoices.all()) {
       await expect(choice).toBeDisabled();
