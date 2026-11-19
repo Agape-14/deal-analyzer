@@ -36,6 +36,29 @@ def start_review_repair():
     return asyncio.create_task(_run_repair(selection), name="review-repair")
 
 
+def start_source_replay():
+    selection = os.environ.pop("KENYON_SOURCE_REPLAY", "")
+    return asyncio.create_task(_run_source_replay(selection), name="source-replay") if selection else None
+
+
+async def _run_source_replay(selection):
+    from scripts.source_replay import ReplayRequest, SourceReplayBlocked, replay_source
+    from scripts.verify_review_surfaces import SurfaceMismatch
+
+    try:
+        if len(selection) > 30_000:
+            raise ValueError("Source replay selection exceeds the limit.")
+        request = ReplayRequest.model_validate_json(selection)
+        result = await asyncio.wait_for(replay_source(request, engine=engine), timeout=120)
+    except BackfillFailure as exc:
+        result = exc.report
+    except (SourceReplayBlocked, SurfaceMismatch) as exc:
+        result = {"status": "failed", "error": str(exc)}
+    except Exception as exc:
+        result = {"status": "failed", "error_type": type(exc).__name__}
+    log.info("Source replay result %s", json.dumps(result, separators=(",", ":")))
+
+
 async def _run_repair(selection):
     from scripts.review_repair import RepairBlocked, RepairRequest, execute_repair
     from scripts.verify_review_surfaces import SurfaceMismatch
