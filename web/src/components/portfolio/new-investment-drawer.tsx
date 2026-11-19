@@ -43,6 +43,8 @@ export function NewInvestmentDrawer() {
     investment_class: "",
     projected_irr: "",
     projected_equity_multiple: "",
+    projected_cash_on_cash: "",
+    terms_override_reason: "",
     hold_period_years: "",
     residual_value: "",
     valuation_date: "",
@@ -60,7 +62,7 @@ export function NewInvestmentDrawer() {
       setMode("manual");
       setForm({ deal_id: investment.deal_id?.toString() ?? "", developer_id: investment.developer_id?.toString() ?? "", project_name: investment.project_name, sponsor_name: investment.sponsor_name,
         investment_date: investment.investment_date ?? "", amount_invested: String(investment.amount_invested), investment_class: investment.investment_class ?? "",
-        projected_irr: investment.projected_irr?.toString() ?? "", projected_equity_multiple: investment.projected_equity_multiple?.toString() ?? "", hold_period_years: investment.hold_period_years?.toString() ?? "", residual_value: investment.residual_value?.toString() ?? "", valuation_date: investment.valuation_date ?? "" });
+        projected_irr: investment.projected_irr?.toString() ?? "", projected_equity_multiple: investment.projected_equity_multiple?.toString() ?? "", projected_cash_on_cash: investment.projected_cash_on_cash?.toString() ?? "", terms_override_reason: "", hold_period_years: investment.hold_period_years?.toString() ?? "", residual_value: investment.residual_value?.toString() ?? "", valuation_date: investment.valuation_date ?? "" });
       setOpen(true);
     }
     document.addEventListener("open-new-investment", onOpen);
@@ -103,6 +105,8 @@ export function NewInvestmentDrawer() {
         investment_class: "",
         projected_irr: "",
         projected_equity_multiple: "",
+        projected_cash_on_cash: "",
+        terms_override_reason: "",
         hold_period_years: "",
         residual_value: "",
         valuation_date: "",
@@ -147,6 +151,8 @@ export function NewInvestmentDrawer() {
       if (mode === "manual" && form.projected_irr) body.projected_irr = Number(form.projected_irr);
       if (mode === "manual" && form.projected_equity_multiple)
         body.projected_equity_multiple = Number(form.projected_equity_multiple);
+      if (mode === "manual" && form.projected_cash_on_cash) body.projected_cash_on_cash = Number(form.projected_cash_on_cash);
+      if (mode === "manual" && form.terms_override_reason.trim()) body.terms_override_reason = form.terms_override_reason.trim();
       if (mode === "manual" && form.hold_period_years) body.hold_period_years = Number(form.hold_period_years);
       if (form.residual_value || form.valuation_date || editing) {
         body.residual_value = form.residual_value.trim() ? Number(form.residual_value) : null;
@@ -154,8 +160,9 @@ export function NewInvestmentDrawer() {
       }
       if (editing) {
         body.investment_class = form.investment_class.trim();
+        if (body.investment_class !== editing.investment_class) body.confirmed_class_terms = true;
         body.investment_date = form.investment_date || null;
-        for (const key of ["projected_irr", "projected_equity_multiple", "hold_period_years"] as const) body[key] = form[key].trim() ? Number(form[key]) : null;
+        for (const key of ["projected_irr", "projected_equity_multiple", "projected_cash_on_cash", "hold_period_years"] as const) body[key] = form[key].trim() ? Number(form[key]) : null;
       }
 
       if (editing) await api.put(`/api/investments/${editing.id}`, body);
@@ -244,9 +251,9 @@ export function NewInvestmentDrawer() {
                 ))}
               </select>
               <p className="text-[11px] text-muted-foreground mt-1">
-                Only accepted terms from the selected analysis are copied. Your amount and date are new investor inputs.
+                Accepted terms and their evidence are saved as a forecast snapshot. Your amount and date are new investor inputs.
               </p>
-              {form.deal_id && <div className="rounded-lg border p-3 text-xs space-y-1">{previewError ? "Accepted terms unavailable. Retry selecting this deal before saving." : !preview ? "Loading accepted terms…" : <><p className="font-medium">Analysis revision {preview.analysis?.version ?? "unavailable"} · {preview.analysis?.investor_class ?? "unspecified class"} · {preview.analysis?.primary_strategy ?? "unspecified strategy"}</p><p>IRR: {preview.analysis?.returns.target_irr ?? "Unavailable"}{preview.analysis?.returns.target_irr != null ? "%" : ""} · Multiple: {preview.analysis?.returns.target_equity_multiple ?? "Unavailable"}{preview.analysis?.returns.target_equity_multiple != null ? "x" : ""}</p><p>{preview.analysis?.questions.length ?? 0} evidence questions. Projections are separate from realized performance.</p></>}</div>}
+              {form.deal_id && <div className="rounded-lg border p-3 text-xs space-y-1">{previewError ? "Accepted terms unavailable. Retry selecting this deal before saving." : !preview ? "Loading accepted terms…" : <><p className="font-medium">Analysis revision {preview.analysis?.version ?? "unavailable"} · {preview.analysis?.return_schedule?.investor_class ?? preview.analysis?.investor_class ?? "unspecified class"} · {preview.analysis?.primary_strategy ?? "unspecified strategy"}</p><p>IRR: {preview.analysis?.returns.target_irr ?? "Unavailable"}{preview.analysis?.returns.target_irr != null ? "%" : ""} · Multiple: {preview.analysis?.returns.target_equity_multiple ?? "Unavailable"}{preview.analysis?.returns.target_equity_multiple != null ? "x" : ""} · Cash-on-cash: {preview.analysis?.returns.cash_on_cash ?? "Unavailable"}{preview.analysis?.returns.cash_on_cash != null ? "%" : ""}</p>{preview.analysis?.return_schedule && <p>{preview.analysis.return_schedule.rows.length}-year hold schedule · {preview.analysis.return_schedule.equity_basis} · {preview.analysis.return_schedule.period_basis}</p>}<p>{preview.analysis?.questions.length ?? 0} evidence questions. Projections are separate from realized performance.</p></>}</div>}
             </Field>
           )}
 
@@ -279,10 +286,12 @@ export function NewInvestmentDrawer() {
               <Field label="Class">
                 <Input
                   value={form.investment_class}
-                  onChange={(e) => setForm((f) => ({ ...f, investment_class: e.target.value }))}
+                  onChange={(e) => setForm((f) => ({ ...f, investment_class: e.target.value,
+                    ...(editing && e.target.value !== f.investment_class ? { projected_irr: "", projected_equity_multiple: "", projected_cash_on_cash: "", hold_period_years: "" } : {}) }))}
                   placeholder="LP / Class A / Co-GP"
                 />
               </Field>
+              {editing?.forecast_snapshot && <p className="text-xs text-muted-foreground">The original forecast stays in review history. Changing class clears inherited return assumptions. Enter any replacement terms explicitly below.</p>}
 
               <div className="grid grid-cols-3 gap-4">
                 <Field label="Proj IRR (%)">
@@ -313,6 +322,8 @@ export function NewInvestmentDrawer() {
                   />
                 </Field>
               </div>
+              <Field label="Projected cash-on-cash (%)"><Input type="number" min={-100} max={300} step={0.1} value={form.projected_cash_on_cash} onChange={e => setForm(f => ({ ...f, projected_cash_on_cash: e.target.value }))} placeholder="Annual cash yield if known" /></Field>
+              {editing && <Field label="Reason for term changes (optional)"><Input maxLength={2000} value={form.terms_override_reason} onChange={e => setForm(f => ({ ...f, terms_override_reason: e.target.value }))} placeholder="e.g. My signed Class B subscription" /></Field>}
             </motion.div>
           )}
           <details className="rounded-lg border border-border/70 p-3 text-sm"><summary className="cursor-pointer">Optional current valuation</summary><p className="my-3 text-xs text-muted-foreground">Use the sponsor's dated residual value for your position, excluding cash already paid out. Total-value returns require this value; cash returned is available without it. Clear both fields to remove a valuation.</p><div className="grid grid-cols-2 gap-3"><Field label="Residual value"><Input type="number" min={0} value={form.residual_value} onChange={e => setForm(f => ({ ...f, residual_value: e.target.value }))} /></Field><Field label="Valuation date"><Input type="date" value={form.valuation_date} onChange={e => setForm(f => ({ ...f, valuation_date: e.target.value }))} /></Field></div></details>

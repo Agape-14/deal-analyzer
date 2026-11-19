@@ -145,3 +145,5 @@ def _apply_schema_patches(sync_conn) -> None:
             )
     if insp.has_table("deals"):
         sync_conn.execute(text('CREATE UNIQUE INDEX IF NOT EXISTS uq_deals_intake_token ON deals (intake_token)'))
+    if insp.has_table("distributions"):
+        sync_conn.execute(text('CREATE UNIQUE INDEX IF NOT EXISTS uq_distributions_request ON distributions (investment_id, request_id)'))

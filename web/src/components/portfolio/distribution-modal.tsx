@@ -9,7 +9,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
 import { api } from "@/lib/api";
-import type { Investment } from "@/lib/types";
+import type { Distribution, Investment } from "@/lib/types";
 import { cn, fmtMoney } from "@/lib/utils";
 
 const TYPES = [
@@ -23,13 +23,18 @@ export function DistributionModal({
   investment,
   open,
   onOpenChange,
+  distribution = null,
 }: {
   investment: Investment | null;
   open: boolean;
   onOpenChange: (open: boolean) => void;
+  distribution?: Distribution | null;
 }) {
   const router = useRouter();
   const [submitting, setSubmitting] = React.useState(false);
+  const requestId = React.useRef("");
+  const inFlight = React.useRef(false);
+  const editing = distribution !== null;
   const [form, setForm] = React.useState({
     date: new Date().toISOString().slice(0, 10),
     amount: "",
@@ -41,49 +46,60 @@ export function DistributionModal({
   // Reset form when investment changes (new modal open)
   React.useEffect(() => {
     if (open && investment) {
+      requestId.current = crypto.randomUUID();
       setForm({
-        date: new Date().toISOString().slice(0, 10),
-        amount: "",
-        dist_type: "cash_flow",
-        period: defaultPeriod(),
-        notes: "",
+        date: distribution?.date ?? new Date().toISOString().slice(0, 10),
+        amount: distribution ? String(distribution.amount) : "",
+        dist_type: distribution?.dist_type ?? "cash_flow",
+        period: distribution?.period ?? defaultPeriod(),
+        notes: distribution?.notes ?? "",
       });
     }
-  }, [open, investment]);
+  }, [open, investment?.id, distribution?.id, distribution?.revision]);
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
-    if (!investment) return;
+    if (!investment || inFlight.current) return;
     const amount = Number(form.amount);
     if (!amount || amount <= 0) {
       toast.error("Amount must be > 0");
       return;
     }
+    inFlight.current = true;
     setSubmitting(true);
     try {
-      await api.post(`/api/investments/${investment.id}/distributions`, {
+      const payload = {
         date: form.date,
         amount,
         dist_type: form.dist_type,
         period: form.period,
         notes: form.notes,
-      });
-      toast.success("Distribution added", {
-        description: `${fmtMoney(amount)} to ${investment.project_name}`,
+      };
+      let replayed = false;
+      let removed = false;
+      if (distribution) await api.put(`/api/investments/${investment.id}/distributions/${distribution.id}`, { ...payload, expected_revision: distribution.revision });
+      else {
+        const saved = await api.post<{ replayed?: boolean; removed?: boolean }>(`/api/investments/${investment.id}/distributions`, { ...payload, request_id: requestId.current });
+        replayed = saved.replayed ?? false;
+        removed = saved.removed ?? false;
+      }
+      toast.success(replayed ? "Distribution already recorded" : editing ? "Distribution updated" : "Distribution added", {
+        description: replayed ? removed ? "This payment was removed. Use payment history to restore it if needed." : "Payment history shows its current details." : `${fmtMoney(amount)} to ${investment.project_name}`,
       });
       onOpenChange(false);
       router.refresh();
     } catch (err) {
-      toast.error("Couldn't add distribution", {
+      toast.error(editing ? "Couldn't update distribution" : "Couldn't add distribution", {
         description: (err as { detail?: string })?.detail,
       });
     } finally {
+      inFlight.current = false;
       setSubmitting(false);
     }
   }
 
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
+    <Dialog open={open} onOpenChange={value => { if (!inFlight.current) onOpenChange(value); }}>
       <DialogContent className="max-w-md">
         <form onSubmit={submit}>
           <div className="px-5 py-4 border-b border-border/70">
@@ -92,7 +108,7 @@ export function DistributionModal({
                 <DollarSign className="h-4 w-4 text-success" />
               </div>
               <div>
-                <DialogTitle>Add distribution</DialogTitle>
+                <DialogTitle>{editing ? "Edit distribution" : "Add distribution"}</DialogTitle>
                 <DialogDescription>
                   {investment?.project_name ? `To ${investment.project_name}` : "Record a payout"}
                 </DialogDescription>
@@ -107,8 +123,9 @@ export function DistributionModal({
                 <Input aria-label="Amount"
                   autoFocus
                   type="number"
-                  min={0}
-                  step={100}
+                  min={0.01}
+                  step={0.01}
+                  required
                   value={form.amount}
                   onChange={(e) => setForm((f) => ({ ...f, amount: e.target.value }))}
                   placeholder="2500"
@@ -116,8 +133,11 @@ export function DistributionModal({
               </div>
               <div className="space-y-2">
                 <Label>Date</Label>
-                <Input
+                <Input aria-label="Distribution date"
                   type="date"
+                  required
+                  min={investment?.investment_date ?? undefined}
+                  max={investment?.status === "exited" && investment.exit_date ? investment.exit_date : new Date().toISOString().slice(0, 10)}
                   value={form.date}
                   onChange={(e) => setForm((f) => ({ ...f, date: e.target.value }))}
                 />
@@ -147,7 +167,7 @@ export function DistributionModal({
 
             <div className="space-y-2">
               <Label>Period</Label>
-              <Input
+              <Input aria-label="Distribution period"
                 value={form.period}
                 onChange={(e) => setForm((f) => ({ ...f, period: e.target.value }))}
                 placeholder="Q1 2025"
@@ -156,7 +176,7 @@ export function DistributionModal({
 
             <div className="space-y-2">
               <Label>Notes</Label>
-              <Input
+              <Input aria-label="Distribution notes"
                 value={form.notes}
                 onChange={(e) => setForm((f) => ({ ...f, notes: e.target.value }))}
                 placeholder="Optional"
@@ -170,7 +190,7 @@ export function DistributionModal({
             </Button>
             <Button type="submit" disabled={submitting}>
               {submitting ? <Loader2 className="h-4 w-4 animate-spin" /> : <Plus className="h-4 w-4" />}
-              Add distribution
+              {editing ? "Save distribution" : "Add distribution"}
             </Button>
           </div>
         </form>

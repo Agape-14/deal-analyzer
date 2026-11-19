@@ -12,7 +12,7 @@ PDF generation uses reportlab, Excel uses openpyxl, JSON/CSV use stdlib.
 """
 
 from __future__ import annotations
-from app.services.portfolio_analytics import additional_exit_proceeds
+from app.services.portfolio_analytics import additional_exit_proceeds, active_distributions
 
 import csv
 import io
@@ -455,7 +455,7 @@ async def portfolio_excel_report(db: AsyncSession = Depends(get_db)):
     )
     r = 2
     for inv in investments:
-        for d in sorted(inv.distributions or [], key=lambda x: x.date or date.min):
+        for d in sorted(active_distributions(inv), key=lambda x: x.date or date.min):
             ws.cell(row=r, column=1, value=inv.id)
             ws.cell(row=r, column=2, value=inv.project_name)
             ws.cell(row=r, column=3, value=d.date)
@@ -510,7 +510,7 @@ async def portfolio_quarterly_pdf(db: AsyncSession = Depends(get_db)):
     # Bucket distributions & exits by quarter
     quarters: dict[str, dict] = {}
     for inv in investments:
-        for d in inv.distributions or []:
+        for d in active_distributions(inv):
             if d.date and d.amount:
                 q = _quarter_key(d.date)
                 b = quarters.setdefault(q, {"distributions": 0.0, "exit": 0.0, "new_invested": 0.0})
@@ -655,13 +655,21 @@ async def export_all_json(db: AsyncSession = Depends(get_db)):
         "amount_invested": i.amount_invested, "shares": i.shares,
         "investment_class": i.investment_class, "preferred_return": i.preferred_return,
         "projected_irr": i.projected_irr, "projected_equity_multiple": i.projected_equity_multiple,
+        "projected_cash_on_cash": i.projected_cash_on_cash,
+        "forecast_snapshot": i.forecast_snapshot, "terms_overrides": i.terms_overrides,
+        "source_analysis_version": i.source_analysis_version, "source_analysis_input_hash": i.source_analysis_input_hash,
+        "terms_context": i.terms_context, "residual_value": i.residual_value, "valuation_date": i.valuation_date,
         "hold_period_years": i.hold_period_years, "status": i.status,
         "exit_date": i.exit_date, "exit_amount": i.exit_amount, "notes": i.notes,
         "created_at": i.created_at,
         "distributions": [{
             "id": d.id, "date": d.date, "amount": d.amount,
             "dist_type": d.dist_type, "period": d.period, "notes": d.notes,
-        } for d in i.distributions],
+        } for d in active_distributions(i)],
+        "distribution_ledger": [{"id": d.id, "date": d.date, "amount": d.amount,
+            "dist_type": d.dist_type, "period": d.period, "notes": d.notes,
+            "deleted_at": d.deleted_at, "revision": d.revision, "history": d.history or []}
+            for d in i.distributions],
     } for i in inv_r.scalars().all()]
 
     payload = {
@@ -722,7 +730,7 @@ async def export_all_csv(db: AsyncSession = Depends(get_db)):
     )
     dist_rows = []
     for i in investments:
-        for d in i.distributions or []:
+        for d in active_distributions(i):
             dist_rows.append([
                 d.id, i.id, i.project_name,
                 d.date.isoformat() if d.date else "",

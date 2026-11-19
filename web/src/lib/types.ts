@@ -162,6 +162,8 @@ export interface Investment {
   source_analysis_version?: number | null;
   source_analysis_input_hash?: string | null;
   terms_context?: Record<string, Record<string, unknown>> | null;
+  forecast_snapshot?: InvestmentForecast | null;
+  terms_overrides?: Record<string, InvestmentTermOverride> | null;
   deal_id: number | null;
   deal_name: string | null;
   project_name: string;
@@ -173,6 +175,7 @@ export interface Investment {
   preferred_return: number | null;
   projected_irr: number | null;
   projected_equity_multiple: number | null;
+  projected_cash_on_cash?: number | null;
   hold_period_years: number | null;
   status: "active" | "exited" | "defaulted" | "pending";
   exit_date: string | null;
@@ -185,6 +188,34 @@ export interface Investment {
   actual_coc: number;
   net_profit: number;
   distributions: Distribution[];
+  distribution_ledger?: Distribution[];
+}
+
+export interface InvestmentForecast {
+  schema_version: number;
+  captured_at: string;
+  deal_id: number;
+  deal_revision: number;
+  analysis_version: number;
+  analysis_input_hash: string;
+  analysis_created_at?: string | null;
+  app_commit: string;
+  primary_strategy?: string | null;
+  terms: Record<string, number | string | null>;
+  returns: CanonicalReturnSummary;
+  facts: Record<string, AnalysisFact>;
+  return_schedule: ReturnSchedule | null;
+}
+
+export interface InvestmentTermOverride {
+  previous_value: string | number | null;
+  value: string | number | null;
+  baseline_value: string | number | null;
+  recorded_at: string;
+  reason: string;
+  source: "manual";
+  investor_class?: string | null;
+  history: Array<{ previous_value: string | number | null; value: string | number | null; recorded_at: string; reason: string; source: "manual"; investor_class?: string | null }>;
 }
 
 export interface Distribution {
@@ -194,6 +225,9 @@ export interface Distribution {
   dist_type: string;
   period: string;
   notes: string;
+  revision?: number;
+  deleted_at?: string | null;
+  history?: Array<{ action: string; revision: number; recorded_at: string; previous: Record<string, unknown> }>;
 }
 
 export interface PortfolioSummary {

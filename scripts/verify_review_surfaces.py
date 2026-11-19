@@ -81,6 +81,9 @@ def _pdf(summary, content):
     cost = (metrics.get("deal_structure") or {}).get("total_project_cost")
     if cost is not None:
         _text_check(text, f"Total Project Cost {_fmt_money(cost)}", "project cost", deal_id)
+    minimum = (metrics.get("deal_structure") or {}).get("minimum_investment")
+    if minimum is not None:
+        _text_check(text, f"Minimum Investment {_fmt_money(minimum)}", "minimum investment", deal_id)
     costs = {path: fact for path, fact in analysis["facts"].items() if path.startswith("construction_costs.")
              and fact.get("state") in {"checked", "manual", "calculated"} and fact.get("value") is not None}
     for fact in costs.values():
@@ -148,6 +151,7 @@ def _spreadsheet(workbook, summaries):
             basis = (scores.get("comparison_basis", {}).get(key) or {}).get("inputs") or []
             check("SCORES", f"{label} basis", ", ".join(basis) or None)
         check("DEAL STRUCTURE", "Total Project Cost", (metrics.get("deal_structure") or {}).get("total_project_cost"))
+        check("DEAL STRUCTURE", "Minimum Investment", (metrics.get("deal_structure") or {}).get("minimum_investment"))
         for key, label in BUDGET_ROWS.items():
             value = (metrics.get("construction_costs") or {}).get(key)
             check("CONSTRUCTION COSTS", label, value)

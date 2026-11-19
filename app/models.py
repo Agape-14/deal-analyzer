@@ -171,6 +171,7 @@ class Investment(Base):
     preferred_return = Column(Float, nullable=True)  # %
     projected_irr = Column(Float, nullable=True)
     projected_equity_multiple = Column(Float, nullable=True)
+    projected_cash_on_cash = Column(Float, nullable=True)
     hold_period_years = Column(Float, nullable=True)
     status = Column(String(50), default="active")  # active, exited, defaulted, pending
     exit_date = Column(Date, nullable=True)
@@ -180,6 +181,8 @@ class Investment(Base):
     source_analysis_version = Column(Integer, nullable=True)
     source_analysis_input_hash = Column(String(64), nullable=True)
     terms_context = Column(JSON, nullable=True)
+    forecast_snapshot = Column(JSON, nullable=True)
+    terms_overrides = Column(JSON, nullable=True)
     notes = Column(Text, default="")
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
 
@@ -212,6 +215,7 @@ class Notification(Base):
 
 class Distribution(Base):
     __tablename__ = "distributions"
+    __table_args__ = (UniqueConstraint("investment_id", "request_id", name="uq_distributions_request"),)
 
     id = Column(Integer, primary_key=True, index=True)
     investment_id = Column(Integer, ForeignKey("investments.id"), nullable=False, index=True)
@@ -220,6 +224,11 @@ class Distribution(Base):
     dist_type = Column(String(50), default="cash_flow")  # cash_flow, return_of_capital, sale_proceeds, refinance
     period = Column(String(50), default="")  # Q1 2025, March 2025, etc.
     notes = Column(Text, default="")
+    deleted_at = Column(DateTime, nullable=True)
+    revision = Column(Integer, nullable=False, default=1, server_default="1")
+    request_id = Column(String(100), nullable=True)
+    request_fingerprint = Column(String(64), nullable=True)
+    history = Column(JSON, nullable=True)
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
 
     investment = relationship("Investment", back_populates="distributions")

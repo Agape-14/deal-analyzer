@@ -94,6 +94,7 @@ class ReplayRequest(BaseModel):
     cash_flow_check: CashFlowSelection | None = None
     compare_ids: list[int] = Field(default_factory=list, max_length=8)
     rehearse_recovery: bool = False
+    verify_access: bool = False
     expected_revision: int | None = Field(default=None, gt=0)
     preview_digest: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
 
@@ -108,8 +109,8 @@ class ReplayRequest(BaseModel):
             raise ValueError("Apply requires the exact preview and revision.")
         if self.mode == "verify" and not self.compare_ids:
             raise ValueError("Select at least one existing comparison deal.")
-        if self.rehearse_recovery and self.mode != "verify":
-            raise ValueError("Rehearse recovery during a read-only verification.")
+        if (self.rehearse_recovery or self.verify_access) and self.mode != "verify":
+            raise ValueError("Run operational checks during a read-only verification.")
         if any(set(row.context) - set(DIMENSIONS) for row in self.locators):
             raise ValueError("Invalid source context dimension.")
         return self
@@ -203,6 +204,21 @@ def fact_from_locator(pages, source_id, row):
                       source_excerpt=quote, **row.context)
 
 
+async def _verify_signed_out_access():
+    from httpx import ASGITransport, AsyncClient
+    from app.main import app
+
+    async with AsyncClient(transport=ASGITransport(app=app, raise_app_exceptions=False),
+                           base_url="https://release-check.invalid") as client:
+        responses = {
+            "ready_probe": (await client.get("/api/healthz/ready")).status_code,
+            "signed_out_deals": (await client.get("/api/deals")).status_code,
+            "signed_out_admin": (await client.get("/api/admin/readiness")).status_code,
+        }
+    return {"passed": responses == {"ready_probe": 200, "signed_out_deals": 401, "signed_out_admin": 401},
+            **responses}
+
+
 async def replay_source(request, *, engine):
     async with async_session() as db:
         deal = await db.get(Deal, request.deal_id)
@@ -223,6 +239,8 @@ async def replay_source(request, *, engine):
                 raise SourceReplayBlocked("A comparison deal is unavailable.")
             surfaces = await verify_review_surfaces(db, [deals[i] for i in ids], audit_scores=True)
             result = {"status": "verified", "surfaces": surfaces}
+            if request.verify_access:
+                result["access"] = await _verify_signed_out_access()
             if request.rehearse_recovery:
                 from app.routers.deal_uploads import UPLOAD_DIR
                 from scripts.recovery_rehearsal import RecoveryRehearsalBlocked, rehearse_recovery

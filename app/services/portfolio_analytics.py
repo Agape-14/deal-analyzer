@@ -102,9 +102,14 @@ def xirr(flows: list[tuple[date, float]], guess: float = 0.1) -> float | None:
     return None
 
 
+def active_distributions(inv):
+    """Legacy rows remain active until explicitly soft removed."""
+    return [d for d in (inv.distributions or []) if getattr(d, "deleted_at", None) is None]
+
+
 def additional_exit_proceeds(inv) -> float:
     """exit_amount is total exit proceeds, including recorded sale distributions."""
-    recorded = sum(float(d.amount or 0) for d in (inv.distributions or [])
+    recorded = sum(float(d.amount or 0) for d in active_distributions(inv)
                    if getattr(d, "dist_type", "") in {"sale_proceeds", "exit_proceeds"})
     return max(0.0, float(inv.exit_amount or 0) - recorded)
 
@@ -116,7 +121,7 @@ def residual_valuation(inv):
     if value is None or not as_of:
         return None, None
     # A valuation cannot precede any of the cash flows it is intended to close.
-    dates = [d.date for d in (inv.distributions or []) if d.date]
+    dates = [d.date for d in active_distributions(inv) if d.date]
     if inv.investment_date:
         dates.append(inv.investment_date)
     if as_of > date.today() or (dates and as_of < max(dates)):
@@ -125,7 +130,7 @@ def residual_valuation(inv):
 
 
 def cashflow_dates_complete(inv):
-    return bool(inv.investment_date and all(d.date for d in (inv.distributions or []) if d.amount)
+    return bool(inv.investment_date and all(d.date for d in active_distributions(inv) if d.amount)
                 and (not inv.exit_amount or inv.exit_date) and (inv.status != "exited" or inv.exit_date))
 
 
@@ -138,7 +143,7 @@ def investment_cashflows(inv) -> list[tuple[date, float]]:
     flows: list[tuple[date, float]] = []
     if inv.investment_date and inv.amount_invested:
         flows.append((inv.investment_date, -float(inv.amount_invested)))
-    for d in inv.distributions or []:
+    for d in active_distributions(inv):
         if d.date and d.amount:
             flows.append((d.date, float(d.amount)))
     if inv.exit_date and additional_exit_proceeds(inv):
@@ -149,7 +154,7 @@ def investment_cashflows(inv) -> list[tuple[date, float]]:
 def investment_performance(inv) -> dict:
     """Compute performance metrics and time-series for a single investment."""
     invested = float(inv.amount_invested or 0)
-    distributions = sorted(inv.distributions or [], key=lambda d: d.date or date.min)
+    distributions = sorted(active_distributions(inv), key=lambda d: d.date or date.min)
     total_dist = sum(float(d.amount) for d in distributions if d.amount)
     exit_amount = additional_exit_proceeds(inv)
     total_returned = total_dist + exit_amount
@@ -285,7 +290,7 @@ def portfolio_analytics(investments: Iterable) -> dict:
     for inv in investments:
         if inv.investment_date and inv.amount_invested:
             events.append((inv.investment_date, float(inv.amount_invested), 0.0))
-        for d in inv.distributions or []:
+        for d in active_distributions(inv):
             if d.date and d.amount:
                 events.append((d.date, 0.0, float(d.amount)))
         if inv.exit_date and additional_exit_proceeds(inv):

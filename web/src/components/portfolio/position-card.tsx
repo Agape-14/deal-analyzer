@@ -9,7 +9,10 @@ import { useRouter } from "next/navigation";
 import { Card } from "@/components/ui/card";
 import { cn, fmtMoney, fmtMultiple, fmtPct, fmtDate } from "@/lib/utils";
 import { api } from "@/lib/api";
+import { useCurrentUser } from "@/lib/auth-client";
 import type { Investment, InvestmentPerformance } from "@/lib/types";
+import { InvestmentForecast } from "./investment-forecast";
+import { DistributionLedger } from "./distribution-ledger";
 
 const STATUS_STYLES: Record<string, string> = {
   active: "bg-primary/15 text-primary ring-1 ring-primary/30",
@@ -39,6 +42,7 @@ export function PositionCard({
   onMarkExit: (inv: Investment) => void;
 }) {
   const router = useRouter();
+  const { isAnalyst, loading } = useCurrentUser();
   const [menuOpen, setMenuOpen] = React.useState(false);
   const [deleting, setDeleting] = React.useState(false);
 
@@ -129,7 +133,7 @@ export function PositionCard({
           </div>
 
           {/* Actions */}
-          <div className="relative">
+          {!loading && isAnalyst && <div className="relative">
             <button
               onClick={() => setMenuOpen((o) => !o)}
               onBlur={() => setTimeout(() => setMenuOpen(false), 150)}
@@ -171,7 +175,7 @@ export function PositionCard({
                 </MenuItem>
               </motion.div>
             )}
-          </div>
+          </div>}
         </div>
 
         {/* Big number */}
@@ -245,6 +249,8 @@ export function PositionCard({
             }
           />
         </div>
+        <InvestmentForecast investment={investment} />
+        <DistributionLedger investment={investment} />
       </Card>
     </motion.div>
   );
