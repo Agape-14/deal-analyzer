@@ -10,9 +10,16 @@ TOTAL = "deal_structure.total_project_cost"
 BUDGET_TOTAL = "construction_costs.total_project_cost"
 EQUITY = "deal_structure.total_equity_required"
 DEBT = "deal_structure.debt_amount"
+CONSTRUCTION_LOAN = "deal_structure.construction_loan_amount"
 COSTS = (
     "construction_costs.land_cost_total", "construction_costs.hard_costs_total",
     "construction_costs.soft_costs_total", "construction_costs.financing_costs",
+)
+DETAILED_COSTS = (
+    "construction_costs.land_cost_total", "construction_costs.preconstruction_soft_costs",
+    "construction_costs.city_agency_fees", "construction_costs.offsite_development_costs",
+    "construction_costs.onsite_construction_costs", "construction_costs.construction_leaseup_soft_costs",
+    "construction_costs.financing_costs",
 )
 RETURN_CONTEXT = (
     ("scenario", "scenario"), ("investor_class", "investor class"),
@@ -57,12 +64,20 @@ def _reconcile(facts, key, label, component_paths, total_path, difference_messag
 def _funding_check(facts, financing):
     label = "Funding"
     debt = (facts.get(DEBT) or {}).get("identity") or {}
-    if debt.get("debt_phase") in {"permanent", "bridge"} or financing.get("debt_amount_kind") in {"peak_balance", "modeled_payoff"}:
+    different_balance = (debt.get("debt_phase") in {"permanent", "bridge"}
+                         or financing.get("debt_amount_kind") in {"peak_balance", "modeled_payoff"})
+    debt_path = DEBT
+    if (different_balance or _accepted_number(facts, DEBT) is None) and _accepted_number(facts, CONSTRUCTION_LOAN) is not None:
+        debt_path = CONSTRUCTION_LOAN
+    elif different_balance:
+        draw_checked = any(measure.get("kind") == "draw" and measure.get("state") == "checked"
+                           for measure in financing.get("measures", []))
+        detail = ("Use the reviewed construction draw with costs on the same basis."
+                  if draw_checked else "The saved debt measures a different phase or balance. Find funding and costs on the same basis.")
         return _result("funding", label, "incomplete",
-                       "Find the construction funding amount. The saved debt measures a different phase or balance.",
-                       (DEBT,))
+                       detail, (DEBT,))
     cost = TOTAL if _accepted_number(facts, TOTAL) is not None else BUDGET_TOTAL
-    return _reconcile(facts, "funding", label, (DEBT, EQUITY), cost,
+    return _reconcile(facts, "funding", label, (debt_path, EQUITY), cost,
                       "Debt plus equity differs from project cost by {difference:,.0f}. Check for another funding source or use.")
 
 
@@ -75,8 +90,11 @@ def _budget_check(facts):
         if abs(structure_total - budget_total) > 1:
             return _result("budget", label, "attention", "The accepted project cost and budget total differ.", (TOTAL, BUDGET_TOTAL))
     total_path = BUDGET_TOTAL if budget_total is not None else TOTAL
-    return _reconcile(facts, "budget", label, COSTS, total_path,
-                      "Land, hard costs, soft costs and financing differ from the total by {difference:,.0f}. Check for other costs or overlapping subtotals.")
+    # Some source budgets use phases in place of aggregate hard and soft costs.
+    # Keep each complete breakdown independent so a subtotal cannot be counted twice.
+    components = DETAILED_COSTS if all(_accepted_number(facts, path) is not None for path in DETAILED_COSTS) else COSTS
+    return _reconcile(facts, "budget", label, components, total_path,
+                      "The budget components differ from the total by {difference:,.0f}. Check for other costs or overlapping subtotals.")
 
 
 def _return_check(analysis, coverage):

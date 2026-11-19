@@ -91,6 +91,29 @@ def test_refinance_balance_cannot_complete_funding_readiness():
     funding = next(check for check in readiness["checks"] if check["key"] == "funding")
     assert funding["status"] == "incomplete"
     assert funding["paths"] == [debt_path]
+    construction_loan = "deal_structure.construction_loan_amount"
+    metrics["deal_structure"]["construction_loan_amount"] = 600_000
+    metrics["_provenance"][construction_loan] = {"status": "manual"}
+    funding = next(check for check in build_analysis(metrics, [source()])["readiness"]["checks"] if check["key"] == "funding")
+    assert funding["status"] == "checked"
+    assert construction_loan in funding["paths"] and debt_path not in funding["paths"]
+
+
+def test_phase_budget_is_checked_without_double_counting_aggregate_costs():
+    metrics = reviewed_metrics()
+    metrics["construction_costs"] = {
+        "land_cost_total": 100_000, "preconstruction_soft_costs": 50_000, "city_agency_fees": 25_000,
+        "offsite_development_costs": 75_001, "onsite_construction_costs": 550_000,
+        "construction_leaseup_soft_costs": 125_000, "financing_costs": 75_000,
+        "hard_costs_total": 625_001, "soft_costs_total": 200_000,
+    }
+    metrics["_provenance"].update({path: {"status": "manual"} for path in flatten(metrics)
+                                   if path.startswith("construction_costs.")})
+    readiness = build_analysis(metrics, [source()])["readiness"]
+    budget = next(check for check in readiness["checks"] if check["key"] == "budget")
+    assert budget["status"] == "checked"
+    assert "construction_costs.onsite_construction_costs" in budget["paths"]
+    assert "construction_costs.hard_costs_total" not in budget["paths"]
 
 
 def test_approved_group_assessment_is_bound_to_sources_instead_of_metric_changes():
