@@ -158,7 +158,7 @@ def _spreadsheet(workbook, summaries):
     return costs_count, len(scheduled), len(optional)
 
 
-async def verify_review_surfaces(db, deals: list) -> dict:
+async def verify_review_surfaces(db, deals: list, *, audit_scores=False) -> dict:
     """Verify Summary, Compare and both downloads without saving their contents."""
     ids = [deal.id for deal in deals]
     request = CompareRequest(deal_ids=ids)
@@ -167,7 +167,7 @@ async def verify_review_surfaces(db, deals: list) -> dict:
     _require([row["id"] for row in compared] == ids, "Compare", "selected deal order")
     for summary, comparison in zip(summaries, compared):
         deal_id = summary["id"]
-        for key in ("version", "returns", "return_schedule", "accepted_metrics", "facts", "financing"):
+        for key in ("version", "returns", "return_schedule", "accepted_metrics", "facts", "financing", "readiness"):
             _require(comparison["analysis"][key] == summary["analysis"][key], "Compare", key, deal_id)
         _require(comparison["scores"] == summary["scores"], "Compare", "scores", deal_id)
         _pdf(summary, await _body(await deal_pdf_report(deal_id, db)))
@@ -177,5 +177,20 @@ async def verify_review_surfaces(db, deals: list) -> dict:
             budgets, schedule, sales = _spreadsheet(workbook, summaries)
         finally:
             workbook.close()
-    return {"summary_deals": len(summaries), "compared_deals": len(compared), "pdf_reports": len(ids),
+    result = {"summary_deals": len(summaries), "compared_deals": len(compared), "pdf_reports": len(ids),
             "xlsx_workbooks": 1, "budget_values": budgets, "schedule_rows": schedule, "optional_sale_values": sales}
+    if audit_scores:
+        categories = ("returns", "market", "structure", "risk", "financials", "underwriting", "sponsor")
+        result["review_audit"] = {}
+        for summary in summaries:
+            analysis = summary["analysis"]
+            scores = summary["scores"]
+            result["review_audit"][summary["id"]] = {
+                "revision": analysis["version"],
+                "score_coverage": scores.get("coverage"),
+                "unscored": {category: (scores.get(category) or {}).get("missing_inputs", [])
+                             for category in categories if (scores.get(category) or {}).get("score") is None},
+                "review_groups": {group["key"]: group["status"] for group in analysis["review_coverage"]["groups"]},
+                "readiness": {check["key"]: check["status"] for check in analysis["readiness"]["checks"]},
+            }
+    return result

@@ -16,6 +16,7 @@ from app.services.document_context import documents_fingerprint
 from app.services.document_versions import document_payloads, review_documents
 from app.services.source_evidence import fresh_audit_evidence, normalized_text, numeric_quote_error
 from app.services.review_coverage import GROUP_LABELS, GROUP_REVIEWS_KEY, source_reading
+from app.services.review_readiness import RETURN_CONTEXT
 from app.services.return_schedules import active_sources_fingerprint
 
 DRAFT_KEY = "_review_draft"
@@ -211,6 +212,7 @@ def validate_rows(deal, docs, result):
     sources = review_documents(docs)
     metrics = deal.metrics or {}
     current = flatten(metrics)
+    current_contexts = metrics.get("_fact_context") or {}
     rows = []
     for fact in result.facts:
         path = fact.path
@@ -224,8 +226,17 @@ def validate_rows(deal, docs, result):
         context = {key: getattr(fact, key).strip() for key in DIMENSIONS if getattr(fact, key)}
         issue = _row_issue(fact, unit, citation, source_issue, context, metrics, current, counts,
                            ocr_cost_page=_pdf_ocr_cost_page(fact, unit, sources))
+        saved = next(iter(current.get(path, [])), None)
+        saved_context = current_contexts.get(path) or {}
+        context_changed = any(saved_context.get(key) != context.get(key) for key in DIMENSIONS)
+        missing_context = []
+        if path.startswith("target_returns.") and unit in {"percent", "multiple"} and path != "target_returns.total_fee_drag":
+            proposed_identity = identity(path, unit, context)
+            missing_context = [label for key, label in RETURN_CONTEXT
+                               if getattr(proposed_identity, key).casefold() in {"", "unspecified", "unknown"}]
         rows.append({"path": path, "label": label, "unit": unit, "value": value,
-                     "current": next(iter(current.get(path, [])), None),
+                     "current": saved, "context_changed": saved is not None and context_changed,
+                     "missing_context": missing_context,
                      "evidence": citation, "context": context, "issue": issue})
     return rows
 

@@ -17,6 +17,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from app.services.canonical_metrics import HOLD_CASH_YIELD_PATHS, canonical_return_summary, primary_strategy
 from app.services.return_schedules import SCHEDULE_KEY, active_sources_fingerprint, project_return_schedule
 from app.services.review_coverage import GROUP_REVIEWS_KEY, build_review_coverage
+from app.services.review_readiness import review_readiness
 
 SCHEMA_VERSION = 7
 ACCEPTED = {"checked", "calculated", "manual"}
@@ -489,12 +490,14 @@ def build_analysis(metrics, documents=None, property_type="multifamily"):
     financing = project_financing(metrics, documents, (accepted.get("deal_structure") or {}).get("debt_amount"))
     serialized_facts = {p: f.model_dump() for p, f in sorted(facts.items())}
     review_coverage = build_review_coverage(metrics, serialized_facts, accepted, returns, schedule, documents, property_type)
-    return clean_json({"schema_version": SCHEMA_VERSION, "input_hash": input_fingerprint(metrics, documents, property_type), "version": 0,
+    analysis = {"schema_version": SCHEMA_VERSION, "input_hash": input_fingerprint(metrics, documents, property_type), "version": 0,
             "status": "questions" if questions else "ready", "primary_strategy": strategy, "investor_class": selected_class,
             "facts": serialized_facts, "returns": returns, "accepted_metrics": accepted,
             "return_schedule": schedule, "financing": financing,
             "questions": questions, "coverage": coverage, "review_coverage": review_coverage, "documents": documents,
-            "unclassified_paths": sorted(p for p in flat if p not in REGISTRY)})
+            "unclassified_paths": sorted(p for p in flat if p not in REGISTRY)}
+    analysis["readiness"] = review_readiness(analysis)
+    return clean_json(analysis)
 
 
 def analysis_for_deal(deal):
@@ -516,6 +519,7 @@ def analysis_for_deal(deal):
     preview["review_coverage"] = build_review_coverage(deal.metrics or {}, preview["facts"],
         preview["accepted_metrics"], preview["returns"], preview.get("return_schedule"), preview["documents"],
         deal.property_type or "multifamily", reading_documents)
+    preview["readiness"] = review_readiness(preview)
     return preview
 
 

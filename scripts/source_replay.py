@@ -108,7 +108,7 @@ async def replay_source(request, *, engine):
             )).scalars().all()}
             if len(deals) != len(ids):
                 raise SourceReplayBlocked("A comparison deal is unavailable.")
-            surfaces = await verify_review_surfaces(db, [deals[i] for i in ids])
+            surfaces = await verify_review_surfaces(db, [deals[i] for i in ids], audit_scores=True)
             return {"status": "verified", "surfaces": surfaces}
         revision = deal.revision
         if request.expected_revision and revision != request.expected_revision:

@@ -556,7 +556,7 @@ async def _comparison_deals(data: CompareRequest, db: AsyncSession):
     if len(set(data.deal_ids)) != len(data.deal_ids) or len(data.deal_ids) < 2:
         raise HTTPException(status_code=400, detail="Select at least 2 different deals to compare")
     result = await db.execute(
-        select(Deal).options(selectinload(Deal.developer))
+        select(Deal).options(selectinload(Deal.developer), selectinload(Deal.documents))
         .where(Deal.id.in_(data.deal_ids), Deal.deleted_at.is_(None))
     )
     by_id = {deal.id: deal for deal in result.scalars().all()}

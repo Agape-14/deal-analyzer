@@ -19,6 +19,8 @@ type Row = {
   unit: string;
   value: string | number;
   current: unknown;
+  context_changed?: boolean;
+  missing_context?: string[];
   issue: string;
   evidence: { source_doc_name?: string; source_page?: number; source_sheet?: string; source_cell?: string; source_excerpt?: string; source_value_note?: string };
   context: Record<string, string>;
@@ -50,6 +52,10 @@ function display(value: unknown, unit: string) {
   if (typeof value !== "number") return "—";
   const number = value.toLocaleString("en-US", { maximumFractionDigits: 6 });
   return unit === "percent" ? number + "%" : unit === "multiple" ? number + "×" : number;
+}
+
+function needsAttention(row: Row) {
+  return Boolean(row.issue || row.context_changed || row.missing_context?.length || (row.current != null && row.current !== row.value));
 }
 
 function errorMessage(error: unknown) {
@@ -102,6 +108,8 @@ export function ReviewDraftPanel({ dealId, revision, refreshKey, ready }: {
   const [error, setError] = React.useState("");
   const fileInput = React.useRef<HTMLInputElement>(null);
   const draft = state?.draft;
+  const routineRows = draft?.rows.filter(row => !needsAttention(row)) ?? [];
+  const exceptionRows = draft?.rows.filter(needsAttention) ?? [];
   const running = ["queued", "running"].includes(state?.job?.status || "");
 
   React.useEffect(() => {
@@ -124,7 +132,7 @@ export function ReviewDraftPanel({ dealId, revision, refreshKey, ready }: {
   }, [base, revision, refreshKey, working]);
 
   React.useEffect(() => {
-    setSelected(new Set((draft?.rows || []).filter(row => !row.issue && (row.current == null || row.current === row.value)).map(row => row.path)));
+    setSelected(new Set((draft?.rows || []).filter(row => !needsAttention(row)).map(row => row.path)));
     setSelectedCoverage(new Set());
   // Polling the same draft should preserve the analyst's selections.
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -174,6 +182,40 @@ export function ReviewDraftPanel({ dealId, revision, refreshKey, ready }: {
       busy.current = false;
       setWorking(false);
     }
+  }
+
+  function renderRow(row: Row, index: number) {
+    const changed = row.current != null && row.current !== row.value;
+    const location = row.evidence.source_page ? `page ${row.evidence.source_page}` :
+      [row.evidence.source_sheet, row.evidence.source_cell].filter(Boolean).join(" ");
+    return (
+      <li key={row.path + index} className="space-y-1 px-3 py-2.5 text-xs">
+        <label className="flex items-start gap-2">
+          <input type="checkbox" className="mt-0.5 accent-primary" disabled={!!row.issue || working} checked={!row.issue && selected.has(row.path)} onChange={event => {
+            const checked = event.target.checked;
+            setSelected(current => {
+              const next = new Set(current);
+              if (checked) next.add(row.path);
+              else next.delete(row.path);
+              return next;
+            });
+          }} />
+          <span className="min-w-0 break-words font-medium">
+            {row.label}{row.path.includes(".hold_scenario.") ? " (hold)" : row.path.includes(".sale_scenario.") ? " (sale)" : ""}
+            {" · "}{changed ? `${display(row.current, row.unit)} → ` : ""}{display(row.value, row.unit)}
+          </span>
+        </label>
+        <div className="space-y-1 break-words pl-5 text-muted-foreground">
+          {row.issue && <p className="text-warning">{row.issue}</p>}
+          {!row.issue && row.context_changed && <p className="text-warning">The proposed context differs from the saved context. Check the source before selecting this value.</p>}
+          {!row.issue && !!row.missing_context?.length && <p className="text-warning">Confirm the {row.missing_context.join(", ")} before approving this return.</p>}
+          {Object.values(row.context).length > 0 && <p>{Object.values(row.context).join(" · ")}</p>}
+          <p>{[row.evidence.source_doc_name, location].filter(Boolean).join(" · ")}</p>
+          {row.evidence.source_excerpt && <blockquote className="border-l border-border pl-2">{row.evidence.source_excerpt}</blockquote>}
+          {row.evidence.source_value_note && <p>{row.evidence.source_value_note}</p>}
+        </div>
+      </li>
+    );
   }
 
   return (
@@ -237,42 +279,20 @@ export function ReviewDraftPanel({ dealId, revision, refreshKey, ready }: {
           {draft.stale ? <p className="text-xs text-muted-foreground">The deal or its sources changed. Start a new review or download a fresh packet.</p> :
             draft.rows.length === 0 && !draft.coverage?.length ? <p className="text-xs text-muted-foreground">This review found no supported values in the source package.</p> : (
               <>
-                {draft.rows.length > 0 && <>
-                  <p className="text-xs text-muted-foreground">New values with matching quotes are selected. Select any replacements you want to apply.</p>
-                  <ul className="max-h-[29rem] divide-y divide-border/70 overflow-auto rounded-lg border border-border/70">
-                  {draft.rows.map((row, index) => {
-                    const changed = row.current != null && row.current !== row.value;
-                    const location = row.evidence.source_page ? `page ${row.evidence.source_page}` :
-                      [row.evidence.source_sheet, row.evidence.source_cell].filter(Boolean).join(" ");
-                    return (
-                      <li key={row.path + index} className="space-y-1 px-3 py-2.5 text-xs">
-                        <label className="flex items-start gap-2">
-                          <input type="checkbox" className="mt-0.5 accent-primary" disabled={!!row.issue || working} checked={!row.issue && selected.has(row.path)} onChange={event => {
-                            const checked = event.target.checked;
-                            setSelected(current => {
-                              const next = new Set(current);
-                              if (checked) next.add(row.path);
-                              else next.delete(row.path);
-                              return next;
-                            });
-                          }} />
-                          <span className="min-w-0 break-words font-medium">
-                            {row.label}{row.path.includes(".hold_scenario.") ? " (hold)" : row.path.includes(".sale_scenario.") ? " (sale)" : ""}
-                            {" · "}{changed ? `${display(row.current, row.unit)} → ` : ""}{display(row.value, row.unit)}
-                          </span>
-                        </label>
-                        <div className="space-y-1 break-words pl-5 text-muted-foreground">
-                          {Object.values(row.context).length > 0 && <p>{Object.values(row.context).join(" · ")}</p>}
-                          <p>{[row.evidence.source_doc_name, location].filter(Boolean).join(" · ")}</p>
-                          {row.evidence.source_excerpt && <blockquote className="border-l border-border pl-2">{row.evidence.source_excerpt}</blockquote>}
-                          {row.evidence.source_value_note && <p>{row.evidence.source_value_note}</p>}
-                          {row.issue && <p className="text-warning">{row.issue}</p>}
-                        </div>
-                      </li>
-                    );
-                  })}
+                {exceptionRows.length > 0 && <section aria-label="Review exceptions" className="space-y-2">
+                  <h6 className="text-sm font-medium">Review exceptions</h6>
+                  <ul className="max-h-72 divide-y divide-border/70 overflow-auto rounded-lg border border-border/70">
+                    {exceptionRows.map(renderRow)}
                   </ul>
-                </>}
+                </section>}
+                {routineRows.length > 0 && <details open={routineRows.length <= 5} className="rounded-lg border border-border/70">
+                  <summary className="cursor-pointer px-3 py-2.5 text-sm font-medium">
+                    {routineRows.filter(row => selected.has(row.path)).length} of {routineRows.length} cited values selected
+                  </summary>
+                  <ul className="max-h-80 divide-y divide-border/70 overflow-auto border-t border-border/70">
+                    {routineRows.map(renderRow)}
+                  </ul>
+                </details>}
                 {!!draft.coverage?.length && (
                   <fieldset className="space-y-2 rounded-lg border border-border/70 p-3 text-xs" disabled={working}>
                     <legend className="px-1 font-medium">Coverage findings</legend>

@@ -10,7 +10,7 @@ import { ReturnContextPanel } from "./return-context-panel";
 import { ReturnSchedulePanel } from "./return-schedule-panel";
 import { FinancingMeasuresPanel } from "./financing-measures-panel";
 import { ScoreBreakdown } from "./score-breakdown";
-import { ReviewCoveragePanel } from "./review-coverage";
+import { ReadinessChecks, ReviewCoveragePanel } from "./review-coverage";
 
 const detailSections = [
   { prefix: "deal_structure.", title: "Investment and financing terms" },
@@ -68,8 +68,9 @@ export function AcceptedSummary({ deal }: { deal: DealDetail }) {
         <div><h2 className="text-lg font-semibold">One reviewed view of the deal</h2>
           <p className="mt-1 text-sm text-muted-foreground">{analysis.primary_strategy === "unknown" ? "Strategy needs clarification" : `Primary strategy: ${analysis.primary_strategy.replaceAll("_", " ")}`}{analysis.investor_class !== "unspecified" ? ` · ${analysis.investor_class}` : ""}</p>
         </div>
-        <Link href={`/deals/${deal.id}?tab=questions`} className="rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground">{analysis.questions.length ? `${analysis.questions.length} question${analysis.questions.length === 1 ? "" : "s"}` : "No material questions"}</Link>
+        <Link href={`/deals/${deal.id}?tab=questions`} className="rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground">{analysis.questions.length || analysis.readiness?.attention_count ? "Review exceptions" : "No material questions"}</Link>
       </div>
+      {analysis.readiness && <div className="mt-4 border-t border-border/70 pt-4"><ReadinessChecks analysis={analysis} dealId={deal.id} /></div>}
       {analysis.review_coverage && <ReviewCoveragePanel coverage={analysis.review_coverage} dealId={deal.id} />}
       <details className="mt-3 text-xs text-muted-foreground"><summary className="cursor-pointer">Accepted facts · {analysis.coverage.accepted}/{analysis.coverage.total}</summary>
       <div className="mt-4 h-1.5 rounded-full bg-muted overflow-hidden" role="progressbar" aria-label="Accepted evidence coverage" aria-valuenow={analysis.coverage.accepted} aria-valuemin={0} aria-valuemax={analysis.coverage.total || 1}><div className="h-full bg-primary rounded-full" style={{ width: `${analysis.coverage.total ? analysis.coverage.accepted / analysis.coverage.total * 100 : 0}%` }} /></div>
@@ -79,7 +80,7 @@ export function AcceptedSummary({ deal }: { deal: DealDetail }) {
       </details>
       {intake && <details className="mt-3 text-xs text-muted-foreground"><summary className="cursor-pointer">Deal details from your documents</summary><div className="mt-2 space-y-2">{intake.name_origin === "filename" && !intake.auto_fields?.project_name && <p>The deal title comes from the first filename. You can rename it in Analysis.</p>}{Object.entries(intake.auto_fields ?? {}).map(([key, meta]) => <p key={key}>{key.replaceAll("_", " ")}: {meta.sources.map((source, index) => <a key={index} className="underline mr-2" href={`/api/deals/documents/${source.document_id}/file${source.page ? `#page=${source.page}` : ""}`} target="_blank" rel="noreferrer">{source.document_name}{source.page ? ` · page ${source.page}` : ""}</a>)}</p>)}{!!intake.identity_conflicts?.length && <p className="text-warning">Conflicting document labels: {intake.identity_conflicts.map(key => key.replaceAll("_", " ")).join(", ")}. Check these details in Analysis.</p>}</div></details>}
     </Card>
-    <ScoreBreakdown scores={deal.scores ?? {}} />
+    <ScoreBreakdown scores={deal.scores ?? {}} returnSchedule={analysis.return_schedule} />
     <ReturnContextPanel deal={deal} />
     <ReturnSchedulePanel deal={deal} />
     <Card className="p-5 md:p-6"><h2 className="text-lg font-semibold">Capital, terms and operations</h2>

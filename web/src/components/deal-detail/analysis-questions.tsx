@@ -8,12 +8,16 @@ import { api } from "@/lib/api";
 import { useCurrentUser } from "@/lib/auth-client";
 import type { AnalysisQuestion, DealDetail } from "@/lib/types";
 import { FactEvidence, factValue } from "./accepted-summary";
+import { ReadinessChecks } from "./review-coverage";
 
 export function AnalysisQuestions({ deal }: { deal: DealDetail }) {
   const questions = deal.analysis?.questions ?? [];
+  const readinessAttention = deal.analysis?.readiness?.attention_count ?? 0;
   return <div className="space-y-5">
-    <div><h2 className="text-xl font-semibold">Only the questions that affect the summary</h2><p className="mt-2 text-sm text-muted-foreground">Upload the missing evidence first; document review can resolve these automatically. Save an analyst decision only when you have checked the values yourself. Optional context and investment cautions do not create tasks here.</p></div>
-    {questions.length === 0 ? <Card className="p-6">No material questions remain in this analysis. Accepted facts and their evidence are available in Summary.</Card> : questions.map(q => <QuestionCard key={`${deal.revision}-${q.id}`} question={q} deal={deal} />)}
+    <div><h2 className="text-xl font-semibold">Review exceptions</h2><p className="mt-2 text-sm text-muted-foreground">Check the cited sources and add missing evidence. Save analyst decisions after verifying the figures.</p></div>
+    {deal.analysis && <ReadinessChecks analysis={deal.analysis} dealId={deal.id} exceptionsOnly />}
+    {questions.length === 0 && readinessAttention === 0 && <Card className="p-6">No material questions remain in this analysis. Accepted facts and their evidence are available in Summary.</Card>}
+    {questions.map(q => <QuestionCard key={`${deal.revision}-${q.id}`} question={q} deal={deal} />)}
   </div>;
 }
 

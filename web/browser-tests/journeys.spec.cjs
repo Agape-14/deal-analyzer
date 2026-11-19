@@ -427,7 +427,9 @@ test('new deal reviews PDF and workbook through Codex paste, Summary, Compare, a
     await expect(page.getByRole('heading', { name: 'Codex review draft' })).toBeVisible();
     const apply = page.getByRole('button', { name: 'Apply 9 values', exact: true });
     await expect(apply).toBeEnabled();
-    const conflict = page.getByText('Multiple values were proposed for this field. Compare the sources before resolving it.', { exact: true });
+    await expect(page.getByText('9 of 9 cited values selected', { exact: true })).toBeVisible();
+    const exceptionList = page.getByRole('region', { name: 'Review exceptions', exact: true });
+    const conflict = exceptionList.getByText('Multiple values were proposed for this field. Compare the sources before resolving it.', { exact: true });
     await expect(conflict).toHaveCount(2);
     const conflictChoices = page.getByRole('checkbox', { name: /stabilized noi/i });
     await expect(conflictChoices).toHaveCount(2);
@@ -465,6 +467,10 @@ test('new deal reviews PDF and workbook through Codex paste, Summary, Compare, a
     await expect(coverage.getByText('Sources read', { exact: true })).toBeVisible();
     await expect(coverage.getByRole('listitem').filter({ hasText: 'Construction budget' })).toContainText('Partial coverage');
     await expect(coverage.getByRole('listitem').filter({ hasText: 'Primary return' })).toContainText('Available');
+    const checks = summary.getByRole('region', { name: 'Readiness checks', exact: true });
+    await expect(checks.getByRole('listitem').filter({ hasText: 'Funding' })).toContainText('Checked');
+    await expect(checks.getByRole('listitem').filter({ hasText: 'Construction budget' })).toContainText('Needs evidence');
+    await expect(checks.getByRole('listitem').filter({ hasText: 'Return context' })).toContainText('Checked');
     await expect(summary.getByRole('heading', { name: 'Published returns' })).toBeVisible();
     const publishedReturn = summary.getByRole('listitem').filter({hasText: 'Cash-on-cash'});
     await expect(publishedReturn.getByText('8.9%', { exact: true })).toBeVisible();
@@ -508,6 +514,7 @@ test('new deal reviews PDF and workbook through Codex paste, Summary, Compare, a
     const compare = await page.request.post('/api/deals/compare', {data: {deal_ids: [id, 1]}});
     expect(compare.ok()).toBeTruthy();
     const compared = (await compare.json()).deals.find(deal => deal.id === id).analysis;
+    expect(compared.readiness).toEqual(deal.analysis.readiness);
     expect(compared.facts['project_details.unit_count'].value).toBe(148);
     expect(compared.facts[holdPath]).toMatchObject({value: 8.9, identity: holdContext, evidence: [returnSource]});
     expect(compared.returns.target_irr).toBeNull();
@@ -559,6 +566,7 @@ test('new deal reviews PDF and workbook through Codex paste, Summary, Compare, a
     await expect(summary.getByText('Net irr · 17.4%', { exact: true })).toBeVisible();
     const refreshed = await (await page.request.get(base)).json();
     expect(refreshed.analysis.return_schedule).toEqual(savedSchedule);
+    expect(refreshed.analysis.readiness).toEqual(deal.analysis.readiness);
     expect(refreshed.analysis.returns.cash_on_cash).toBeNull();
     expect(refreshed.analysis.facts[holdPath]).toEqual(deal.analysis.facts[holdPath]);
     expect(refreshed.metrics._return_reviews[holdPath]).toEqual(deal.metrics._return_reviews[holdPath]);
@@ -578,6 +586,19 @@ test('new deal reviews PDF and workbook through Codex paste, Summary, Compare, a
     expect(refreshedRows.comparison['Cash-on-Cash']).toBeNull();
     expect(refreshedRows.projections.filter(row => row[0] === pilotName).map(row => row.slice(1, 3))).toEqual([[1, 3.2], [2, 8.9], [3, 9.1]]);
     expect(refreshedRows.sales).toEqual(rows.sales);
+
+    const refreshedPacket = (await (await page.request.get(base + '/review/packet')).json()).packet;
+    const incompleteReturn = await page.request.post(base + '/review/draft', {
+      data: {package_id: refreshedPacket.package_id, facts: [{...facts.find(fact => fact.path === holdPath), period: null}]},
+    });
+    expect(incompleteReturn.ok()).toBeTruthy();
+    expect((await incompleteReturn.json()).draft.rows[0]).toMatchObject({
+      context_changed: true, missing_context: ['return period'],
+    });
+    await dealPage(page, id, 'documents');
+    const unchecked = page.getByRole('region', {name: 'Review exceptions'}).getByRole('checkbox', {name: /cash.on.cash/i});
+    await expect(unchecked).not.toBeChecked();
+    await expect(page.getByRole('button', {name: 'Apply selected values'})).toBeDisabled();
   } finally {
     expect((await page.request.delete(base)).ok()).toBeTruthy();
   }

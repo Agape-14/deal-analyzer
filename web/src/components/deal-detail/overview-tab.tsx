@@ -74,7 +74,7 @@ export function OverviewTab({ deal }: { deal: DealDetail }) {
           headlineCashOnCash={headlineCashOnCash}
           headlineMultiple={headlineMultiple}
         />
-        <ScoreBreakdown scores={deal.scores ?? {}} viewerMode={!showAnalyst} />
+        <ScoreBreakdown scores={deal.scores ?? {}} viewerMode={!showAnalyst} returnSchedule={deal.analysis?.return_schedule} />
       </div>
 
       {showAnalyst ? (

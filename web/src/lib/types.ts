@@ -76,6 +76,17 @@ export interface ReviewCoverage {
   attention_count: number;
 }
 
+export interface ReviewReadiness {
+  checks: Array<{
+    key: "sources" | "funding" | "budget" | "returns";
+    label: string;
+    status: "checked" | "incomplete" | "attention" | "not_stated" | "not_applicable";
+    detail: string;
+    paths: string[];
+  }>;
+  attention_count: number;
+}
+
 export interface DealAnalysis {
   schema_version: number;
   version: number;
@@ -90,6 +101,7 @@ export interface DealAnalysis {
   returns: CanonicalReturnSummary;
   return_schedule?: ReturnSchedule | null;
   review_coverage?: ReviewCoverage;
+  readiness?: ReviewReadiness;
   coverage: { accepted: number; checked: number; manual: number; calculated: number; total: number };
   unclassified_paths: string[];
 }

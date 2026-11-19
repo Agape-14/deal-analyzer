@@ -50,6 +50,49 @@ def test_read_documents_do_not_turn_missing_information_into_not_stated():
     assert group(coverage, "construction_budget")["status"] != "not_stated"
 
 
+def test_readiness_checks_use_only_accepted_funding_budget_and_return_context():
+    metrics = reviewed_metrics()
+    return_path = "target_returns.hold_scenario.cash_on_cash_return"
+    metrics["construction_costs"] = {
+        "total_project_cost": 1_000_000, "land_cost_total": 100_000, "hard_costs_total": 580_000,
+        "soft_costs_total": 220_000, "financing_costs": 100_000, "contingency_total": 40_000,
+    }
+    metrics["_provenance"].update({path: {"status": "manual"} for path in flatten(metrics)
+                                   if path.startswith("construction_costs.")})
+    metrics["_fact_context"] = {return_path: {"investor_class": "Class A", "basis": "net", "period": "Year 3"}}
+
+    def checks(doc):
+        readiness = build_analysis(metrics, [doc])["readiness"]
+        return readiness, {check["key"]: check for check in readiness["checks"]}
+
+    readiness, actual = checks(source())
+    assert readiness["attention_count"] == 0
+    assert all(check["status"] == "checked" for check in actual.values())
+    assert "construction_costs.contingency_total" not in actual["budget"]["paths"]
+
+    metrics["deal_structure"]["total_equity_required"] = 390_000
+    metrics["construction_costs"]["total_project_cost"] = 980_000
+    metrics["_fact_context"][return_path].pop("period")
+    unread_page = source()
+    unread_page["extraction_quality"]["empty_pages"] = [4]
+    readiness, actual = checks(unread_page)
+    assert readiness["attention_count"] == 4
+    assert actual["sources"]["status"] == "incomplete"
+    assert actual["budget"]["status"] == actual["funding"]["status"] == actual["returns"]["status"] == "attention"
+    assert "return period" in actual["returns"]["detail"]
+    assert "10,000" in actual["funding"]["detail"]
+
+
+def test_refinance_balance_cannot_complete_funding_readiness():
+    metrics = reviewed_metrics()
+    debt_path = "deal_structure.debt_amount"
+    metrics["_fact_context"] = {debt_path: {"debt_phase": "permanent"}}
+    readiness = build_analysis(metrics, [source()])["readiness"]
+    funding = next(check for check in readiness["checks"] if check["key"] == "funding")
+    assert funding["status"] == "incomplete"
+    assert funding["paths"] == [debt_path]
+
+
 def test_approved_group_assessment_is_bound_to_sources_instead_of_metric_changes():
     metrics = reviewed_metrics()
     documents = [source()]
