@@ -5,9 +5,10 @@ import { motion } from "framer-motion";
 import { Crown, ArrowDown, ArrowUp, Info } from "lucide-react";
 import { cn, fmtMoney, fmtMultiple, fmtPct } from "@/lib/utils";
 import type { DealDetail } from "@/lib/types";
+import { operatingFactContext } from "@/lib/fact-context";
 import { getValueAt, type MetricRow } from "./presets";
 import { findExtrema, formatValue, normalize, toNumber, type CellValue } from "./value-format";
-import { compatibleRow, isReturnMetric, rowFact, returnContext } from "./comparison-context";
+import { compatibleRow, isReturnMetric, isScopedOperatingMetric, rowFact, returnContext } from "./comparison-context";
 
 export type CompareMode = "values" | "winners" | "deltas" | "normalized";
 
@@ -137,7 +138,7 @@ function RowLine({
             {row.hint}
           </div>
         )}
-        {!compatible && isReturnMetric(row) && <p className="mt-1 text-[10px] text-warning">Different or unspecified context · values only</p>}
+        {!compatible && (isReturnMetric(row) || isScopedOperatingMetric(row)) && <p className="mt-1 text-[10px] text-warning">Different or unspecified context · values only</p>}
       </div>
 
       {cells.map((cell, index) => {
@@ -169,6 +170,9 @@ function RowLine({
               <p className="mt-1 text-right text-[10px] leading-relaxed text-muted-foreground">
                 {deal.analysis?.financing?.debt_amount_kind ? deal.analysis.financing.debt_amount_label : "Debt basis unspecified"}
               </p>
+            )}
+            {cell.num != null && isScopedOperatingMetric(row) && operatingFactContext(fact) && (
+              <p className="mt-1 text-right text-[10px] leading-relaxed text-muted-foreground">{operatingFactContext(fact)}</p>
             )}
           </div>
         );

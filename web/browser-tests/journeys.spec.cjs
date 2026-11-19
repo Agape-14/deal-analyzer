@@ -448,6 +448,31 @@ test('new deal reviews PDF and workbook through Codex paste, Summary, Compare, a
     await expect(page.getByText(/9 values applied/)).toBeVisible();
     await expect(conflict).toHaveCount(2);
 
+    const approved = await (await page.request.get(base)).json();
+    const scoped = await page.request.put(base + '/analysis/return-context', { data: {
+      expected_revision: approved.revision, action: 'scope', path: holdPath, ...holdContext,
+      source_doc_id: memo.id, source_page: 2, source_excerpt: holdQuote,
+    } });
+    expect(scoped.ok()).toBeTruthy();
+    const scopedDeal = await scoped.json();
+    const schedule = await page.request.put(base + '/analysis/return-schedule', { data: {
+      expected_revision: scopedDeal.revision, investor_class: 'lp', equity_basis: 'Net LP invested equity',
+      period_basis: 'After stabilization', source_doc_id: memo.id, source_page: 2,
+      rows: [
+        { year: 1, cash_on_cash_pct: 3.2, source_excerpt: 'Year 1 after stabilization: 3.2% projected annual net LP cash-on-cash.' },
+        { year: 2, cash_on_cash_pct: 8.9, source_excerpt: holdQuote },
+        { year: 3, cash_on_cash_pct: 9.1, source_excerpt: 'Year 3 after stabilization: 9.1% projected annual net LP cash-on-cash.' },
+      ],
+    } });
+    expect(schedule.ok()).toBeTruthy();
+    const savedSchedule = (await schedule.json()).analysis.return_schedule;
+    expect(savedSchedule.rows.map(row => row.cash_on_cash_pct)).toEqual([3.2, 8.9, 9.1]);
+    const refreshes = [memo, model].map(source => page.waitForResponse(response =>
+      response.url().endsWith('/api/deals/documents/' + source.id + '/reprocess') && response.request().method() === 'POST'));
+    await page.getByRole('button', { name: 'Refresh document text', exact: true }).click();
+    for (const response of await Promise.all(refreshes)) expect(response.ok()).toBeTruthy();
+    await expect(page.getByRole('status').filter({ hasText: 'Document text refreshed.' })).toBeVisible();
+
     await page.getByRole('tab', { name: 'Summary', exact: true }).click();
     const summary = page.getByRole('tabpanel', { name: 'Summary', exact: true });
     await expect(summary.getByText('$125K', { exact: true })).toBeVisible();
@@ -468,6 +493,8 @@ test('new deal reviews PDF and workbook through Codex paste, Summary, Compare, a
     await page.keyboard.press('Escape');
     await expect(summary.getByRole('heading', { name: 'Optional sale scenario', exact: true })).toBeVisible();
     await expect(summary.getByText('Net irr · 17.4%', { exact: true })).toBeVisible();
+    const projectionTable = summary.getByRole('table', { name: 'Projected cash-on-cash by year' });
+    await expect(projectionTable.getByRole('row', { name: /Year 3/ })).toContainText('9.1%');
     const deal = await (await page.request.get(base)).json();
     expect(deal.analysis.facts['deal_structure.minimum_investment']).toMatchObject({value: 125000, state: 'checked'});
     expect(deal.analysis.facts['project_details.unit_count'].evidence[0]).toMatchObject({
@@ -476,6 +503,7 @@ test('new deal reviews PDF and workbook through Codex paste, Summary, Compare, a
     expect(deal.analysis.facts[holdPath]).toMatchObject({value: 8.9, state: 'checked', identity: holdContext, evidence: [returnSource]});
     expect(deal.analysis.facts[salePath]).toMatchObject({value: 17.4, state: 'checked'});
     expect(deal.analysis.returns).toMatchObject({cash_on_cash: 8.9, cash_on_cash_path: holdPath, target_irr: null});
+    expect(deal.analysis.return_schedule).toEqual(savedSchedule);
     expect(deal.analysis.facts[noiPath]?.value ?? null).toBeNull();
     const report = await page.request.get('/api/reports/deal/' + id + '/pdf');
     expect(report.ok()).toBeTruthy();
@@ -489,6 +517,9 @@ test('new deal reviews PDF and workbook through Codex paste, Summary, Compare, a
     expect(reportText).toContain('pilot-offering.pdf, p. 2');
     expect(reportText).toContain('Optional Sale Scenario');
     expect(reportText).toContain('17.40%');
+    expect(reportText).toContain('Projected Cash-on-Cash by Year');
+    expect(reportText).toMatch(/Year 3\s+9\.10%/);
+    expect(reportText).toContain('Net LP invested equity');
     expect(reportText).not.toMatch(/2,040,000|2,160,000/);
 
     await page.goto('/compare?ids=' + id + ',1');
@@ -498,12 +529,15 @@ test('new deal reviews PDF and workbook through Codex paste, Summary, Compare, a
     await expect(cashRow.getByText('8.9%', { exact: true })).toBeVisible();
     await expect(cashRow.getByText(contextText, { exact: true })).toBeVisible();
     await expect(cashRow.getByText('Different or unspecified context · values only')).toBeVisible();
+    await expect(page.getByRole('region', { name: 'Year-by-year return projections' })
+      .getByRole('row', { name: /Year 3/ })).toContainText('9.1%');
     const compare = await page.request.post('/api/deals/compare', {data: {deal_ids: [id, 1]}});
     expect(compare.ok()).toBeTruthy();
     const compared = (await compare.json()).deals.find(deal => deal.id === id).analysis;
     expect(compared.facts['project_details.unit_count'].value).toBe(148);
     expect(compared.facts[holdPath]).toMatchObject({value: 8.9, identity: holdContext, evidence: [returnSource]});
     expect(compared.returns.target_irr).toBeNull();
+    expect(compared.return_schedule).toEqual(savedSchedule);
     expect(compared.facts[noiPath]?.value ?? null).toBeNull();
     const exported = await page.request.post('/api/deals/compare/export', {data: {deal_ids: [id, 1]}});
     expect(exported.ok()).toBeTruthy();
@@ -511,10 +545,10 @@ test('new deal reviews PDF and workbook through Codex paste, Summary, Compare, a
       'from io import BytesIO',
       'from openpyxl import load_workbook',
       'import json, sys',
-      'sheet = load_workbook(BytesIO(sys.stdin.buffer.read())).active',
-      'print(json.dumps({row[0]: row[1] for row in sheet.values if row[0]}))',
+      'book = load_workbook(BytesIO(sys.stdin.buffer.read()), data_only=True)',
+      'print(json.dumps({"comparison": {row[0]: row[1] for row in book.active.values if row[0]}, "projections": list(book["Return Projections"].values)[1:], "sales": list(book["Optional Sale Scenarios"].values)[1:]}))',
     ].join('\n')], {input: await exported.body(), encoding: 'utf8'}));
-    expect(rows).toMatchObject({
+    expect(rows.comparison).toMatchObject({
       'Minimum Investment': 125000,
       'Unit Count': 148,
       'Cash-on-Cash': 8.9,
@@ -523,6 +557,9 @@ test('new deal reviews PDF and workbook through Codex paste, Summary, Compare, a
       'Target IRR': null,
       'Stabilized NOI': null,
     });
+    const pilotName = 'Juniper Station Apartments Synthetic Pilot';
+    expect(rows.projections.filter(row => row[0] === pilotName).map(row => row.slice(1, 3))).toEqual([[1, 3.2], [2, 8.9], [3, 9.1]]);
+    expect(rows.sales.find(row => row[0] === pilotName)).toEqual(expect.arrayContaining([17.4, 'percent', 'pilot-offering.pdf, p. 2']));
   } finally {
     expect((await page.request.delete(base)).ok()).toBeTruthy();
   }

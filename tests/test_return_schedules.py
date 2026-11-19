@@ -170,3 +170,69 @@ async def test_workbook_schedule_checks_the_value_cell_instead_of_neighboring_da
     with fitz.open(stream=report.content, filetype="pdf") as pdf:
         text = "\n".join(page.get_text() for page in pdf)
     assert "Cell B2" in text and "Cell B3" in text
+
+
+@pytest.mark.parametrize(("record", "change_bytes"), [("schedule", False), ("scope", False), ("schedule", True)])
+async def test_legacy_reading_refresh_rebinds_only_unchanged_originals(client, tmp_path, record, change_bytes):
+    from reportlab.pdfgen.canvas import Canvas
+
+    from app.database import async_session
+    from app.models import DealDocument
+
+    url, _, payload = await seed_hold(client)
+    doc_id = payload["source_doc_id"]
+    path = tmp_path / "forecast.pdf"
+
+    def write_source(extra=""):
+        canvas = Canvas(str(path))
+        for index, quote in enumerate(QUOTES):
+            canvas.drawString(60, 700 - 25 * index, quote)
+        if extra:
+            canvas.drawString(60, 600, extra)
+        canvas.save()
+
+    write_source()
+    async with async_session() as db:
+        doc = await db.get(DealDocument, doc_id)
+        doc.file_path = str(path)
+        doc.file_sha256 = ""
+        doc.content_fingerprint = "e" * 64
+        await db.commit()
+    current = (await client.get(url)).json()
+    payload["expected_revision"] = current["revision"]
+    cash_path = "target_returns.hold_scenario.cash_on_cash_return"
+    if record == "schedule":
+        saved = await client.put(f"{url}/analysis/return-schedule", json=payload)
+        assert saved.status_code == 200, saved.text
+        assert len(saved.json()["analysis"]["return_schedule"]["rows"]) == 3
+    else:
+        edit = await client.post(f"{url}/analysis/resolve", json={
+            "expected_revision": current["revision"], "reason": "Synthetic source-backed yield.",
+            "fields": [{"path": cash_path, "value": 12.5}],
+        })
+        assert edit.status_code == 200, edit.text
+        saved = await client.put(f"{url}/analysis/return-context", json={
+            "action": "scope", "path": cash_path, "expected_revision": edit.json()["revision"],
+            "source_doc_id": doc_id, "source_page": 1, "source_excerpt": QUOTES[1],
+            "scenario": "hold", "investor_class": "Class B", "period": "Year 2 after stabilization",
+            "basis": "Prior-year remaining equity",
+        })
+        assert saved.status_code == 200, saved.text
+        assert saved.json()["analysis"]["facts"][cash_path]["identity"]["investor_class"] == "Class B"
+
+    if change_bytes:
+        write_source("A different original, even though the old quote is still present.")
+    reread = await client.post(f"/api/deals/documents/{doc_id}/reprocess")
+    assert reread.status_code == 200, reread.text
+    analysis = (await client.get(url)).json()["analysis"]
+    if change_bytes:
+        assert analysis["return_schedule"] is None
+    elif record == "schedule":
+        assert [row["cash_on_cash_pct"] for row in analysis["return_schedule"]["rows"]] == [0, 12.5, None]
+        assert analysis["return_schedule"]["evidence"][0]["content_hash"] != "e" * 64
+    else:
+        assert analysis["returns"]["cash_on_cash"] == 12.5
+        scope = analysis["facts"][cash_path]["identity"]
+        assert (scope["investor_class"], scope["basis"], scope["period"]) == (
+            "Class B", "Prior-year remaining equity", "Year 2 after stabilization",
+        )

@@ -20,7 +20,8 @@ from app.services.waterfall_calculator import waterfall_from_deal
 from app.services.canonical_metrics import canonical_return_summary
 from app.services.analysis import analysis_for_deal, effective_scores
 from app.services.financial_presentation import (
-    RETURN_LABELS, accepted_return_fact, optional_sale_returns, return_context, return_evidence, schedule_context, schedule_source, source_reference,
+    RETURN_LABELS, accepted_return_fact, operating_fact_context, optional_sale_returns, return_context, return_evidence,
+    schedule_context, schedule_source, source_reference,
 )
 from app.services.data_integrity import ANALYST_REVIEW_RECORD_KEYS, quality_summary
 from app.services.location_intelligence import build_location_bundle
@@ -651,6 +652,9 @@ async def export_comparison(data: CompareRequest, db: AsyncSession = Depends(get
             ("Debt Basis", lambda d: (analyses[d.id].get("financing") or {}).get("debt_amount_label") if
              (analyses[d.id]["accepted_metrics"].get("deal_structure") or {}).get("debt_amount") is not None else None),
             ("LTV", lambda d: (analyses[d.id]["accepted_metrics"].get("deal_structure") or {}).get("ltv")),
+            ("LTV Context", lambda d: operating_fact_context(analyses[d.id]["facts"].get("deal_structure.ltv")) or None),
+            ("Loan-to-cost", lambda d: (analyses[d.id]["accepted_metrics"].get("deal_structure") or {}).get("loan_to_cost")),
+            ("Loan-to-cost Context", lambda d: operating_fact_context(analyses[d.id]["facts"].get("deal_structure.loan_to_cost")) or None),
             ("Interest Rate", lambda d: (analyses[d.id]["accepted_metrics"].get("deal_structure") or {}).get("interest_rate")),
             ("Hold Period (yrs)", lambda d: (analyses[d.id]["accepted_metrics"].get("deal_structure") or {}).get("hold_period_years")),
             ("Preferred Return", lambda d: (analyses[d.id]["accepted_metrics"].get("deal_structure") or {}).get("preferred_return")),
@@ -700,6 +704,9 @@ async def export_comparison(data: CompareRequest, db: AsyncSession = Depends(get
         ]),
         ("FINANCIAL PROJECTIONS", [
             ("Stabilized NOI", lambda d: (analyses[d.id]["accepted_metrics"].get("financial_projections") or {}).get("stabilized_noi")),
+            ("Stabilized NOI Context", lambda d: operating_fact_context(analyses[d.id]["facts"].get("financial_projections.stabilized_noi")) or None),
+            ("Untrended NOI", lambda d: (analyses[d.id]["accepted_metrics"].get("financial_projections") or {}).get("untrended_noi")),
+            ("Untrended NOI Context", lambda d: operating_fact_context(analyses[d.id]["facts"].get("financial_projections.untrended_noi")) or None),
             ("Entry Cap Rate", lambda d: (analyses[d.id]["accepted_metrics"].get("financial_projections") or {}).get("entry_cap_rate")),
             ("Exit Cap Rate", lambda d: (analyses[d.id]["accepted_metrics"].get("financial_projections") or {}).get("exit_cap_rate")),
             ("Avg Rent/Unit", lambda d: (analyses[d.id]["accepted_metrics"].get("financial_projections") or {}).get("avg_rent_per_unit")),

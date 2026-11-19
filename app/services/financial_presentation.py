@@ -41,6 +41,12 @@ def return_context(fact):
     return " · ".join(parts)
 
 
+def operating_fact_context(fact):
+    identity = (fact or {}).get("identity") or {}
+    return " · ".join(identity[key] for key in ("debt_phase", "basis", "period")
+                      if identity.get(key) and identity[key] != "unspecified")
+
+
 def source_reference(evidence):
     parts = []
     for item in evidence or []:

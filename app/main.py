@@ -88,7 +88,10 @@ async def lifespan(app: FastAPI):
     pipeline_task = start_pipeline_runner() if workers_enabled else None
     review_task = start_review_worker() if workers_enabled else None
     backfill_task = None
-    if os.getenv("KENYON_REVIEW_BACKFILL_PLAN"):
+    if os.getenv("KENYON_REVIEW_REPAIR"):
+        from scripts.release_review_backfill import start_review_repair
+        backfill_task = start_review_repair()
+    elif os.getenv("KENYON_REVIEW_BACKFILL_PLAN"):
         from scripts.release_review_backfill import start_review_backfill
         backfill_task = start_review_backfill()
     try:

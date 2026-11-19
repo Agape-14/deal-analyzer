@@ -302,7 +302,7 @@ async def reprocess_document(doc_id: int, db: AsyncSession = Depends(get_db)):
 
     old_len = len(doc.extracted_text or "")
     ext = os.path.splitext(doc.file_path or doc.filename or "")[1].lower()
-    extraction, quality, extracted_text, page_count = _extract_uploaded_file(doc.file_path, ext)
+    extraction, quality, extracted_text, page_count = await asyncio.to_thread(_extract_uploaded_file, doc.file_path, ext)
     if quality.get("status") == "error" or extraction.get("error") or page_count <= 0 or not extracted_text.strip():
         raise HTTPException(422, "Document reading failed or returned no usable text. The previous reading was preserved. Check the original file and retry.")
     doc.extracted_text = extracted_text
@@ -310,6 +310,14 @@ async def reprocess_document(doc_id: int, db: AsyncSession = Depends(get_db)):
     doc.file_sha256 = quality.get("file_sha256") or doc.file_sha256 or sha256_file(doc.file_path)
     doc.content_fingerprint = quality.get("content_fingerprint") or sha256_text(extracted_text)
     doc.extraction_quality = quality
+    from app.services.return_revalidation import revalidate_same_file_returns
+
+    with db.no_autoflush:
+        deal = await db.get(Deal, doc.deal_id)
+        metrics = deal.metrics or {} if deal else {}
+        if metrics.get("_return_schedule") or metrics.get("_return_reviews"):
+            documents = (await db.execute(select(DealDocument).where(DealDocument.deal_id == doc.deal_id))).scalars().all()
+            await revalidate_same_file_returns(db, deal, documents)
     await _commit_with_retry(db, "saving reprocessed document")
 
     return {

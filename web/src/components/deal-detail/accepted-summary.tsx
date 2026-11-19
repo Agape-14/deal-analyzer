@@ -4,6 +4,7 @@ import Link from "next/link";
 import { Card } from "@/components/ui/card";
 import type { AnalysisFact, DealDetail } from "@/lib/types";
 import { fmtMoney, fmtPct, fmtMultiple } from "@/lib/utils";
+import { operatingFactContext } from "@/lib/fact-context";
 import { EvidenceViewer } from "./evidence-viewer";
 import { ReturnContextPanel } from "./return-context-panel";
 import { ReturnSchedulePanel } from "./return-schedule-panel";
@@ -86,7 +87,8 @@ export function AcceptedSummary({ deal }: { deal: DealDetail }) {
       <div className="mt-4 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">{acceptedPaths.map(path => {
         const fact = facts[path];
         const label = path === "deal_structure.debt_amount" ? analysis.financing?.debt_amount_label ?? fact?.label : fact?.label;
-        return <div key={path}><div className="text-xs text-muted-foreground">{label ?? path.split(".").pop()?.replaceAll("_", " ")}</div><div className="mt-1 text-lg font-semibold">{factValue(fact)}</div><FactEvidence fact={fact} /></div>;
+        const context = operatingFactContext(fact);
+        return <div key={path}><div className="text-xs text-muted-foreground">{label ?? path.split(".").pop()?.replaceAll("_", " ")}</div><div className="mt-1 text-lg font-semibold">{factValue(fact)}</div>{context && <p className="mt-1 text-xs text-muted-foreground">{context}</p>}<FactEvidence fact={fact} /></div>;
       })}</div>
       {pendingPaths.length > 0 && <details className="mt-4 border-t border-border pt-3 text-sm"><summary className="cursor-pointer text-muted-foreground">{pendingPaths.length} terms awaiting evidence</summary><div className="mt-3 grid gap-3 sm:grid-cols-2">{pendingPaths.map(path => <div key={path}><span className="text-xs text-muted-foreground">{facts[path]?.label ?? path.split(".").pop()?.replaceAll("_", " ")}</span><FactEvidence fact={facts[path]} /></div>)}</div></details>}
     </Card>
@@ -99,7 +101,7 @@ export function AcceptedSummary({ deal }: { deal: DealDetail }) {
           <div key={path} className={typeof fact.value === "string" && fact.value.length > 100 ? "sm:col-span-2 lg:col-span-3" : ""}>
             <div className="text-xs text-muted-foreground">{fact.label}</div>
             <div className="mt-1 text-sm font-medium whitespace-pre-wrap break-words">{factValue(fact)}</div>
-            {[fact.identity.basis, fact.identity.period].some(value => value && value !== "unspecified") && <p className="mt-1 text-xs text-muted-foreground">{[fact.identity.basis, fact.identity.period].filter(value => value && value !== "unspecified").join(" · ")}</p>}
+            {operatingFactContext(fact) && <p className="mt-1 text-xs text-muted-foreground">{operatingFactContext(fact)}</p>}
             <FactEvidence fact={fact} />
           </div>
         ))}</div>

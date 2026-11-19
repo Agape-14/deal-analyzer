@@ -29,6 +29,29 @@ def start_review_backfill():
     return asyncio.create_task(_run(encoded_plan, mode), name="review-backfill")
 
 
+def start_review_repair():
+    selection = os.environ.pop("KENYON_REVIEW_REPAIR", "")
+    if not selection:
+        return None
+    return asyncio.create_task(_run_repair(selection), name="review-repair")
+
+
+async def _run_repair(selection):
+    from scripts.review_repair import RepairBlocked, RepairRequest, execute_repair
+    from scripts.verify_review_surfaces import SurfaceMismatch
+
+    try:
+        if len(selection) > 20_000:
+            raise ValueError("Review repair selection exceeds the limit.")
+        request = RepairRequest.model_validate_json(selection)
+        result = await asyncio.wait_for(execute_repair(request, engine=engine), timeout=300)
+    except (RepairBlocked, SurfaceMismatch) as exc:
+        result = {"status": "failed", "error": str(exc)}
+    except Exception as exc:
+        result = {"status": "failed", "error_type": type(exc).__name__}
+    log.info("Review repair result %s", json.dumps(result, separators=(",", ":")))
+
+
 async def _run(encoded_plan, mode):
     try:
         if mode not in {"validate", "apply"} or len(encoded_plan) > MAX_PLAN_BYTES:

@@ -33,7 +33,8 @@ from app.services.portfolio_analytics import portfolio_analytics
 from app.services.canonical_metrics import canonical_return_summary
 from app.services.analysis import analysis_for_deal, effective_scores
 from app.services.financial_presentation import (
-    RETURN_LABELS, accepted_return_fact, optional_sale_returns, return_context, return_evidence, schedule_context, schedule_source, source_reference,
+    RETURN_LABELS, accepted_return_fact, operating_fact_context, optional_sale_returns, return_context, return_evidence,
+    schedule_context, schedule_source, source_reference,
 )
 
 router = APIRouter()
@@ -115,6 +116,13 @@ def _pdf_return_value(display, fact, styles):
     details = "<br/>".join(escape(part) for part in (display, return_context(fact), return_evidence(fact)) if part)
     from reportlab.platypus import Paragraph
     return Paragraph(details, styles["Small"])
+
+
+def _pdf_operating_value(display, fact, styles):
+    from reportlab.platypus import Paragraph
+    context = operating_fact_context(fact)
+    source = source_reference((fact or {}).get("evidence"))
+    return Paragraph("<br/>".join(escape(part) for part in (display, context, source) if part), styles["Small"])
 
 
 # ===== Deal PDF =====
@@ -200,7 +208,8 @@ async def deal_pdf_report(deal_id: int, db: AsyncSession = Depends(get_db)):
         ("Total Project Cost", _fmt_money(ds.get("total_project_cost"))),
         ("Total Equity", _fmt_money(ds.get("total_equity_required"))),
         (Paragraph(escape(financing.get("debt_amount_label") or "Debt amount"), styles["Small"]), _fmt_money(ds.get("debt_amount"))),
-        ("LTV", _fmt_pct(ds.get("ltv"))),
+        ("Loan-to-value", _pdf_operating_value(_fmt_pct(ds.get("ltv")), analysis["facts"].get("deal_structure.ltv"), styles)),
+        ("Loan-to-cost", _pdf_operating_value(_fmt_pct(ds.get("loan_to_cost")), analysis["facts"].get("deal_structure.loan_to_cost"), styles)),
         ("Interest Rate", _fmt_pct(ds.get("interest_rate"))),
         ("Hold Period", f"{ds['hold_period_years']} years" if ds.get("hold_period_years") else "—"),
         ("Preferred Return", _pdf_return_value(_fmt_pct(ds["preferred_return"]), analysis["facts"].get("deal_structure.preferred_return"), styles)
@@ -285,7 +294,8 @@ async def deal_pdf_report(deal_id: int, db: AsyncSession = Depends(get_db)):
     # Financial projections
     story.append(Paragraph("Financial Projections", styles["SectionHeading"]))
     story.append(_metric_table([
-        ("Stabilized NOI", _fmt_money(fp.get("stabilized_noi"))),
+        ("Stabilized NOI", _pdf_operating_value(_fmt_money(fp.get("stabilized_noi")), analysis["facts"].get("financial_projections.stabilized_noi"), styles)),
+        ("Untrended NOI", _pdf_operating_value(_fmt_money(fp.get("untrended_noi")), analysis["facts"].get("financial_projections.untrended_noi"), styles)),
         ("Entry Cap Rate", _fmt_pct(fp.get("entry_cap_rate"))),
         ("Exit Cap Rate", _fmt_pct(fp.get("exit_cap_rate"))),
         ("Avg Rent / Unit", _fmt_money(fp.get("avg_rent_per_unit"))),
