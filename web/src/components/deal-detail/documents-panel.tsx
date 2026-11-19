@@ -14,7 +14,6 @@ import {
   Image as ImageIcon,
   Table as TableIcon,
   ScanText,
-  RefreshCw,
   AlertCircle,
   Clock3,
 } from "lucide-react";
@@ -86,7 +85,7 @@ export function DocumentsPanel({
   const { isAnalyst } = useCurrentUser();
   const [reviewRefresh, refreshReview] = React.useReducer((count: number) => count + 1, 0);
   const primaryDocuments = documents.filter(doc => doc.included_in_review !== false);
-  const packetReady = primaryDocuments.some(doc => doc.has_text) && primaryDocuments.every(doc => !["queued", "extracting"].includes((doc.extraction_quality as ExtractionQuality | undefined)?.status || ""));
+  const readingSources = primaryDocuments.some(doc => ["queued", "extracting"].includes(getExtractionQuality(doc)?.status || ""));
   const [dragActive, setDragActive] = React.useState(false);
   const [docType, setDocType] = React.useState<string>("offering_memo");
   const [uploads, setUploads] = React.useState<UploadState[]>([]);
@@ -95,22 +94,34 @@ export function DocumentsPanel({
   const dragDepth = React.useRef(0);
   const [reviewPending, setReviewPending] = React.useState(false);
   const [refreshingText, setRefreshingText] = React.useState(false);
-  const [refreshTextStatus, setRefreshTextStatus] = React.useState("");
+  const [refreshTextStatus, setRefreshTextStatus] = React.useState<{ text: string; error?: boolean } | null>(null);
+  const sourceStatus = readingSources || refreshingText ? "reading"
+    : !primaryDocuments.length ? "missing"
+    : primaryDocuments.some(doc => doc.has_text) ? "ready"
+    : "unread";
+
+  React.useEffect(() => {
+    if (!readingSources || refreshingText) return;
+    const timer = setInterval(() => router.refresh(), 4000);
+    return () => clearInterval(timer);
+  }, [readingSources, refreshingText, router]);
 
   async function refreshDocumentText() {
     if (refreshingText) return;
     setRefreshingText(true);
     try {
       for (const [index, document] of primaryDocuments.entries()) {
-        setRefreshTextStatus(`Reading ${index + 1} of ${primaryDocuments.length} · ${document.filename}`);
+        setRefreshTextStatus({ text: `Reading ${index + 1} of ${primaryDocuments.length} · ${document.filename}` });
         const response = await fetch(`/api/deals/documents/${document.id}/reprocess`, { method: "POST", credentials: "include" });
         if (!response.ok) throw new Error(await responseErrorMessage(response));
       }
-      setRefreshTextStatus("Document text refreshed. Download a new packet to review the expanded source text.");
+      setRefreshTextStatus({ text: "Document text refreshed. Download a new packet to review the latest source text." });
       refreshReview();
       router.refresh();
     } catch (error) {
-      setRefreshTextStatus(error instanceof Error ? error.message : "Document reading failed. Retry the refresh.");
+      setRefreshTextStatus({ text: error instanceof Error ? error.message : "Document reading failed. Retry the refresh.", error: true });
+      refreshReview();
+      router.refresh();
     } finally {
       setRefreshingText(false);
     }
@@ -126,6 +137,7 @@ export function DocumentsPanel({
     });
 
     if (list.length === 0) return;
+    setRefreshTextStatus(null);
 
     const uploadItems = list.map((file) => ({
       file,
@@ -353,15 +365,14 @@ export function DocumentsPanel({
           </Button>}
         </div>
 
-        {isAnalyst && primaryDocuments.length > 0 && <div className="mb-4">
-          <Button type="button" size="sm" variant="outline" disabled={refreshingText || reviewPending}
-            onClick={() => void refreshDocumentText()}>
-            <RefreshCw className={cn("mr-1.5 h-3.5 w-3.5", refreshingText && "animate-spin")} />
-            {refreshingText ? "Reading original files…" : "Refresh document text"}
-          </Button>
-          {refreshTextStatus && <p role="status" className="mt-2 text-xs text-muted-foreground">{refreshTextStatus}</p>}
-        </div>}
-        {isAnalyst && documents.length > 0 && <ReviewDraftPanel dealId={dealId} revision={revision} refreshKey={reviewRefresh} ready={packetReady && !refreshingText} />}
+        {isAnalyst && documents.length > 0 && (
+          <ReviewDraftPanel key={dealId} dealId={dealId} revision={revision} refreshKey={reviewRefresh} source={{
+            status: sourceStatus,
+            refreshing: refreshingText,
+            feedback: refreshTextStatus,
+            refresh: primaryDocuments.length > 0 && !reviewPending ? () => void refreshDocumentText() : undefined,
+          }} />
+        )}
         {isAnalyst && documents.length > 0 && creditReview && (
           <details className="mb-5 rounded-lg border border-border/70 px-3 py-2">
             <summary className="cursor-pointer text-sm font-medium">Review options</summary>
@@ -369,7 +380,7 @@ export function DocumentsPanel({
               <p className="text-xs text-muted-foreground">
                 {review === "unavailable" ? reviewMessage : "GPT-6 Astra checks the source package and prepares a cited draft for approval."}
               </p>
-              <Button size="sm" variant="outline" disabled={!packetReady || reviewPending || review !== "configured"} onClick={startDocumentReview}>
+              <Button size="sm" variant="outline" disabled={sourceStatus !== "ready" || reviewPending || review !== "configured"} onClick={startDocumentReview}>
                 {reviewPending ? "Queuing…" : "Review with API credits"}
               </Button>
             </div>
@@ -379,7 +390,7 @@ export function DocumentsPanel({
         {documents.length === 0 ? (
           <div className="py-10 text-center text-sm text-muted-foreground">
             <FileText className="h-6 w-6 mx-auto mb-2 opacity-60" />
-            Upload a PDF, Excel model, or CSV to extract metrics and run scoring.
+            Upload a PDF, Excel model, or CSV to start a source review.
           </div>
         ) : (
           <ul className="divide-y divide-border/60">
@@ -488,7 +499,7 @@ export function DocumentsPanel({
         </AnimatePresence>
       </Card>
 
-      <Card elevated className="p-6 flex flex-col">
+      <Card id="deal-documents-upload" elevated className="scroll-mt-20 p-6 flex flex-col">
         <h3 className="text-base font-semibold tracking-tight mb-1">Upload</h3>
         <p className="text-xs text-muted-foreground mb-4">
           Upload PDFs, Excel models, or CSVs. We&apos;ll extract text, tables, sheets, and formulas automatically.
@@ -538,7 +549,7 @@ export function DocumentsPanel({
           <div className="text-xs text-muted-foreground mt-1">PDF, Excel, CSV</div>
           <Button
             size="sm"
-            variant="secondary"
+            variant={documents.length === 0 ? "default" : "secondary"}
             className="mt-4"
             onClick={(e) => {
               e.preventDefault();

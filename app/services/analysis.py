@@ -546,6 +546,9 @@ def effective_scores(deal):
     gate = dict(scores.get("data_quality") or {})
     gate["analysis_version"] = analysis["version"]
     scores["data_quality"] = gate
+    from app.services.score_comparison import comparison_basis
+
+    scores["comparison_basis"] = comparison_basis(scores, analysis["facts"])
     return scores
 
 

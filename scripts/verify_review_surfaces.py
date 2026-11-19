@@ -8,8 +8,8 @@ from openpyxl import load_workbook
 from app.routers.deals import CompareRequest, compare_deals, export_comparison, get_deal, list_deals
 from app.routers.reports import _fmt_money, _fmt_pct, deal_pdf_report
 from app.services.financial_presentation import (
-    RETURN_LABELS, accepted_return_fact, operating_fact_context, optional_sale_returns,
-    return_context, return_evidence, schedule_context, schedule_source,
+    RETURN_LABELS, accepted_return_fact, cash_flow_check_context, operating_fact_context, optional_sale_returns,
+    return_context, return_evidence, schedule_context, schedule_source, source_reference,
 )
 
 
@@ -38,6 +38,7 @@ BUDGET_ROWS = {
 SCORE_ROWS = {
     "overall": "Overall Score", "returns": "Returns Score", "market": "Market Score",
     "structure": "Structure Score", "risk": "Risk Score", "financials": "Financials Score",
+    "underwriting": "Underwriting Score", "sponsor": "Sponsor Score",
 }
 
 
@@ -107,6 +108,20 @@ def _pdf(summary, content):
         for row in schedule["rows"]:
             value = _fmt_pct(row["cash_on_cash_pct"]) if row["cash_on_cash_pct"] is not None else "Not projected"
             _text_check(text, f"Year {row['year']} {value}", "schedule row", deal_id)
+    check = analysis.get("return_crosscheck")
+    if check:
+        _text_check(text, "PDF Cash-Flow Check", "cash-flow check", deal_id)
+        _text_check(text, cash_flow_check_context(check), "cash-flow check context", deal_id)
+        if check["status"] == "current":
+            _text_check(text, f"Annual-period IRR {_fmt_pct(check['annual_irr_pct'])}", "cash-flow IRR", deal_id)
+            if check["cash_flow_multiple"] is not None:
+                _text_check(text, f"Cash-flow multiple {check['cash_flow_multiple']:.2f}x", "cash-flow multiple", deal_id)
+            for row in check["rows"]:
+                _text_check(text, f"{row['label']} {check['currency']} {row['amount']:,.2f}", "annual cash-flow row", deal_id)
+                for item in (row.get("flow_scope_label"), source_reference(row["evidence"])):
+                    _text_check(text, item, "cash-flow row context", deal_id)
+        else:
+            _text_check(text, "Source version changed. Recheck the calculation.", "cash-flow stale status", deal_id)
 
 
 def _spreadsheet(workbook, summaries):
@@ -118,7 +133,7 @@ def _spreadsheet(workbook, summaries):
             section = label
         elif label:
             rows[section, label] = values
-    costs_count, scheduled, optional = 0, [], []
+    costs_count, scheduled, optional, cashflows = 0, [], [], []
     for index, summary in enumerate(summaries):
         deal_id, name, analysis, scores = summary["id"], summary["project_name"], summary["analysis"], summary["scores"]
         metrics = analysis["accepted_metrics"]
@@ -130,6 +145,8 @@ def _spreadsheet(workbook, summaries):
         for key, label in SCORE_ROWS.items():
             score = scores.get(key) if key == "overall" else (scores.get(key) or {}).get("score")
             check("SCORES", label, score)
+            basis = (scores.get("comparison_basis", {}).get(key) or {}).get("inputs") or []
+            check("SCORES", f"{label} basis", ", ".join(basis) or None)
         check("DEAL STRUCTURE", "Total Project Cost", (metrics.get("deal_structure") or {}).get("total_project_cost"))
         for key, label in BUDGET_ROWS.items():
             value = (metrics.get("construction_costs") or {}).get(key)
@@ -152,10 +169,21 @@ def _spreadsheet(workbook, summaries):
             for row in schedule["rows"]:
                 scheduled.append((name, row["year"], row["cash_on_cash_pct"], schedule_context(schedule),
                                   row.get("note") or None, schedule.get("assumptions") or None, schedule_source(schedule, row)))
-    for name, expected in (("Optional Sale Scenarios", optional), ("Return Projections", scheduled)):
+        flow = analysis.get("return_crosscheck")
+        if flow:
+            current = flow["status"] == "current"
+            for row in flow["rows"] if current else [{}]:
+                sources = (row.get("evidence") or []) + (row.get("event_evidence") or [])
+                cashflows.append((name, "Checked" if current else "Source changed", cash_flow_check_context(flow),
+                                  flow["annual_irr_pct"], flow["cash_flow_multiple"], row.get("label"), row.get("amount"),
+                                  row.get("flow_scope_label"), row.get("date_label"), flow["calculation_basis"],
+                                  source_reference(sources or flow["evidence"])))
+    for name, expected in (("Optional Sale Scenarios", optional), ("Return Projections", scheduled), ("PDF Cash Flow Checks", cashflows)):
         actual = list(workbook[name].iter_rows(min_row=2, values_only=True)) if name in workbook.sheetnames else []
-        _require(actual == expected, "XLSX", name)
-    return costs_count, len(scheduled), len(optional)
+        _require(len(actual) == len(expected) and all(len(a) == len(b) and all(
+            (abs(x - y) < 1e-9 if isinstance(x, (float, int)) and isinstance(y, (float, int)) else x == y)
+            for x, y in zip(a, b)) for a, b in zip(actual, expected)), "XLSX", name)
+    return costs_count, len(scheduled), len(optional), len(cashflows)
 
 
 async def verify_review_surfaces(db, deals: list, *, audit_scores=False) -> dict:
@@ -175,11 +203,12 @@ async def verify_review_surfaces(db, deals: list, *, audit_scores=False) -> dict
     with BytesIO(await _body(await export_comparison(request, db))) as buffer:
         workbook = load_workbook(buffer, read_only=True, data_only=True)
         try:
-            budgets, schedule, sales = _spreadsheet(workbook, summaries)
+            budgets, schedule, sales, cashflows = _spreadsheet(workbook, summaries)
         finally:
             workbook.close()
     result = {"summary_deals": len(summaries), "compared_deals": len(compared), "pdf_reports": len(ids),
-            "xlsx_workbooks": 1, "budget_values": budgets, "schedule_rows": schedule, "optional_sale_values": sales}
+            "xlsx_workbooks": 1, "budget_values": budgets, "schedule_rows": schedule, "optional_sale_values": sales,
+            "cash_flow_check_rows": cashflows}
     if audit_scores:
         dashboard = {item["id"]: item for item in await list_deals(False, db)}
         for summary in summaries:

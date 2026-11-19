@@ -100,3 +100,11 @@ jobs:
             web/diagnostics/
           retention-days: 7
 
+  release:
+    name: Release gate
+    needs: [backend, frontend]
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Record the exact green revision
+        run: printf 'Backend, frontend, and both browser modes passed for commit `%s`.\n' "$GITHUB_SHA" >> "$GITHUB_STEP_SUMMARY"
+

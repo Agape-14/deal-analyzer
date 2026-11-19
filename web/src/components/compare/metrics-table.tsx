@@ -8,7 +8,7 @@ import type { DealDetail } from "@/lib/types";
 import { operatingFactContext } from "@/lib/fact-context";
 import { getValueAt, type MetricRow } from "./presets";
 import { findExtrema, formatValue, normalize, toNumber, type CellValue } from "./value-format";
-import { compatibleRow, isReturnMetric, isScopedOperatingMetric, rowFact, returnContext } from "./comparison-context";
+import { compatibleRow, isReturnMetric, isScopedOperatingMetric, rowFact, returnContext, scoreCategory, scoreComparisonBasis } from "./comparison-context";
 
 export type CompareMode = "values" | "winners" | "deltas" | "normalized";
 
@@ -110,6 +110,7 @@ function RowLine({
     return { dealId: d.id, raw, num: toNumber(raw) };
   });
   const compatible = compatibleRow(deals, row);
+  const scored = scoreCategory(row);
 
   return (
     <motion.div
@@ -123,7 +124,7 @@ function RowLine({
       <div className="min-w-0">
         <div className="text-sm font-medium flex items-center gap-1.5 min-w-0">
           <span className="truncate">{row.label}</span>
-          {row.direction !== "none" && (
+          {row.direction !== "none" && (!scored || compatible) && (
             <span
               title={row.direction === "higher" ? "Higher is better" : "Lower is better"}
               className="shrink-0 text-[9px] uppercase tracking-wider text-muted-foreground"
@@ -139,11 +140,15 @@ function RowLine({
           </div>
         )}
         {!compatible && (isReturnMetric(row) || isScopedOperatingMetric(row)) && <p className="mt-1 text-[10px] text-warning">Different or unspecified context · values only</p>}
+        {!compatible && scored && cells.filter(cell => cell.num != null).length >= 2 && (
+          <p className="mt-1 text-[10px] text-warning">Different evidence behind these scores · values only</p>
+        )}
       </div>
 
       {cells.map((cell, index) => {
         const deal = deals[index];
         const fact = rowFact(deal, row);
+        const scoreBasis = scoreComparisonBasis(deal, row);
         return (
           <div key={cell.dealId} className="min-w-0">
             <Cell
@@ -173,6 +178,12 @@ function RowLine({
             )}
             {cell.num != null && isScopedOperatingMetric(row) && operatingFactContext(fact) && (
               <p className="mt-1 text-right text-[10px] leading-relaxed text-muted-foreground">{operatingFactContext(fact)}</p>
+            )}
+            {cell.num != null && scoreBasis && scoreBasis.inputs.length > 0 && (
+              <details className="mt-1 text-right text-[10px] text-muted-foreground">
+                <summary className="cursor-pointer">{scoreBasis.inputs.length} {scored === "overall" ? "score categories" : "scored inputs"}</summary>
+                <p className="mt-1 break-words">{scoreBasis.inputs.join(", ")}</p>
+              </details>
             )}
           </div>
         );

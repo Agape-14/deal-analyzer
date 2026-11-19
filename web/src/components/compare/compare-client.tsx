@@ -72,6 +72,10 @@ export function CompareClient({ deals }: { deals: DealSummary[] }) {
   const [loading, setLoading] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
   const [retryCount, setRetryCount] = React.useState(0);
+  const [exporting, setExporting] = React.useState(false);
+  const exportRequest = React.useRef<AbortController | null>(null);
+
+  React.useEffect(() => () => exportRequest.current?.abort(), [idsParam]);
 
   // Load custom preset once on mount
   React.useEffect(() => {
@@ -140,26 +144,46 @@ export function CompareClient({ deals }: { deals: DealSummary[] }) {
     });
   }
 
-  function exportExcel() {
-    if (selectedIds.length < 2) return;
-    // Open in new tab so the browser handles the download. Backend endpoint
-    // streams an .xlsx with color-coded best/worst per metric.
-    fetch("/api/deals/compare/export", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ deal_ids: selectedIds }),
-    })
-      .then(async (r) => {
-        if (!r.ok) throw new Error(`HTTP ${r.status}`);
-        const blob = await r.blob();
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement("a");
-        a.href = url;
-        a.download = `compare-${selectedIds.join("-")}.xlsx`;
-        a.click();
-        URL.revokeObjectURL(url);
-      })
-      .catch((e) => toast.error("Export failed", { description: (e as Error).message }));
+  async function exportExcel() {
+    if (selectedIds.length < 2 || exportRequest.current) return;
+    const controller = new AbortController();
+    exportRequest.current = controller;
+    setExporting(true);
+    let timedOut = false;
+    const timer = setTimeout(() => {
+      timedOut = true;
+      controller.abort();
+    }, 30_000);
+    try {
+      const response = await fetch("/api/deals/compare/export", {
+        method: "POST",
+        credentials: "same-origin",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ deal_ids: selectedIds }),
+        signal: controller.signal,
+      });
+      if (response.status === 401 || response.redirected) throw new Error("Sign in again to download the comparison.");
+      if (!response.ok || !response.headers.get("content-type")?.includes("spreadsheetml.sheet")) {
+        throw new Error("The workbook could not be prepared. Use Export Excel to retry.");
+      }
+      const url = URL.createObjectURL(await response.blob());
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = `compare-${selectedIds.join("-")}.xlsx`;
+      document.body.append(link);
+      link.click();
+      link.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+    } catch (error) {
+      if (timedOut) toast.error("Export timed out", { description: "Use Export Excel to retry." });
+      else if (!controller.signal.aborted) toast.error("Export failed", {
+        description: error instanceof Error ? error.message : "Use Export Excel to retry.",
+      });
+    } finally {
+      clearTimeout(timer);
+      exportRequest.current = null;
+      setExporting(false);
+    }
   }
 
   const cols = selectedIds.length;
@@ -223,9 +247,9 @@ export function CompareClient({ deals }: { deals: DealSummary[] }) {
             <Plus className="h-4 w-4" />
             Change selection
           </Button>
-          <Button size="sm" variant="outline" onClick={exportExcel}>
+          <Button size="sm" variant="outline" onClick={exportExcel} disabled={exporting} aria-busy={exporting}>
             <FileSpreadsheet className="h-4 w-4" />
-            Export Excel
+            {exporting ? "Preparing Excel…" : "Export Excel"}
           </Button>
         </div>
         <span className="text-xs text-muted-foreground">

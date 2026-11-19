@@ -36,7 +36,7 @@ from app.services.document_context import documents_fingerprint, sha256_file
 from app.services.document_versions import file_hash, review_documents
 from app.services.financial_presentation import optional_sale_returns
 from app.services.review_drafts import (
-    DRAFT_KEY, ReviewResult, draft_record, load_documents, package_identity, validate_rows,
+    DRAFT_KEY, ReviewResult, draft_record, draft_view, load_documents, package_identity, validate_rows,
 )
 from app.services.return_schedules import active_sources_fingerprint
 
@@ -62,6 +62,8 @@ class DealPlan(BaseModel):
     rebind_after_refresh: bool = False
     review: ReviewResult | None = None
     approve_paths: list[str] = Field(default_factory=list)
+    approve_findings: bool = False
+    approve_return_crosscheck: bool = False
     financing: dict | None = None
     return_reviews: list[dict] = Field(default_factory=list)
     return_schedule: dict | None = None
@@ -70,13 +72,17 @@ class DealPlan(BaseModel):
     def explicit_selection(self):
         if len(self.approve_paths) != len(set(self.approve_paths)):
             raise ValueError("List each approved fact path once.")
-        if self.review is None and self.approve_paths:
-            raise ValueError("Approved fact paths need a review result.")
+        if self.review is None and (self.approve_paths or self.approve_findings or self.approve_return_crosscheck):
+            raise ValueError("Approved items need a review result.")
         if self.review is not None:
             if self.review.package_id != self.package_id:
                 raise ValueError("The review and deal package IDs must agree.")
-            if not self.approve_paths:
-                raise ValueError("Select the review facts to approve explicitly.")
+            if not (self.approve_paths or self.approve_findings or self.approve_return_crosscheck):
+                raise ValueError("Select the items to approve explicitly.")
+            if self.approve_findings and not self.review.findings:
+                raise ValueError("The plan has no source findings to approve.")
+            if self.approve_return_crosscheck and self.review.return_crosscheck is None:
+                raise ValueError("The plan has no PDF cash-flow check to approve.")
             if not set(self.approve_paths).issubset({fact.path for fact in self.review.facts}):
                 raise ValueError("Every approved path must occur in the review result.")
             if self.refresh_sources and not self.rebind_after_refresh:
@@ -153,6 +159,11 @@ def _analysis_summary(deal, analysis=None):
             for fact in optional_sale_returns(analysis)
         ],
         "return_schedule_rows": len((analysis.get("return_schedule") or {}).get("rows") or []),
+        "finding_count": len(analysis.get("findings", [])),
+        "return_crosscheck": {
+            key: (analysis.get("return_crosscheck") or {}).get(key)
+            for key in ("status", "annual_irr_pct", "cash_flow_multiple")
+        } if analysis.get("return_crosscheck") else None,
         "score_coverage": effective_scores(deal).get("coverage") or {},
     }
 
@@ -240,6 +251,10 @@ async def _check_target(item, deal, docs, summary, plan_hash, report):
 
 async def _save_deal(db, item, deal, docs, summary, plan_hash, report):
     review = item.review
+    preserved_draft = copy.deepcopy((deal.metrics or {}).get(DRAFT_KEY)) if (
+        item.approve_findings or item.approve_return_crosscheck) else None
+    preserved_is_current = (isinstance(preserved_draft, dict) and not item.refresh_sources and
+                            (preserved_draft.get("result") or {}).get("package_id") == package_identity(deal, docs))
     if item.refresh_sources:
         for refresh in item.refresh_sources:
             await reprocess_document(refresh.document_id, db)
@@ -258,10 +273,25 @@ async def _save_deal(db, item, deal, docs, summary, plan_hash, report):
         deal.metrics = {**(deal.metrics or {}), DRAFT_KEY: draft_record(review, "codex")}
         await db.commit()
         await db.refresh(deal)
+        view = draft_view(deal, docs)["draft"]
+        if item.approve_findings and any(row["issue"] for row in view["findings"]):
+            raise BackfillFailure(f"Deal {deal.id} has unresolved finding citations.", report)
+        if item.approve_return_crosscheck and (view.get("return_crosscheck") or {}).get("issue"):
+            raise BackfillFailure(f"Deal {deal.id} has unresolved cash-flow evidence.", report)
         await approve_draft(deal.id, ReviewApproval(
             draft_id=deal.metrics[DRAFT_KEY]["id"], expected_revision=deal.revision,
             paths=item.approve_paths,
+            finding_ids=[row["id"] for row in view["findings"]] if item.approve_findings else [],
+            apply_return_crosscheck=item.approve_return_crosscheck,
         ), db)
+        if preserved_draft:
+            if (deal.metrics or {}).get(DRAFT_KEY):
+                raise BackfillFailure(f"Deal {deal.id} needs to retain its existing draft.", report)
+            if preserved_is_current:
+                kept = ReviewResult.model_validate(preserved_draft["result"]).model_copy(
+                    update={"package_id": package_identity(deal, docs)})
+                preserved_draft = draft_record(kept, preserved_draft["provider"], preserved_draft.get("usage"))
+            deal.metrics = {**deal.metrics, DRAFT_KEY: preserved_draft}
     remaining = copy.deepcopy((deal.metrics or {}).get(DRAFT_KEY))
     remaining_is_current = (
         isinstance(remaining, dict)
@@ -302,7 +332,12 @@ async def _save_deal(db, item, deal, docs, summary, plan_hash, report):
 
 async def execute_plan(plan: BackfillPlan, *, engine, apply=False):
     """Route commits use savepoints. Only the outer transaction may persist."""
-    plan_hash = digest(plan.model_dump())
+    payload = plan.model_dump()
+    for item in payload["deals"]:
+        for key in ("approve_findings", "approve_return_crosscheck"):
+            if not item[key]:
+                item.pop(key)
+    plan_hash = digest(payload)
     report = {"mode": "apply" if apply else "dry_run", "plan_digest": plan_hash,
               "status": "pending", "deals": []}
     if engine.url.get_backend_name() == "sqlite" and not Path(engine.url.database or "").is_file():

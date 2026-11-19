@@ -5,7 +5,7 @@ import asyncio
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
-from fastapi import FastAPI, Request as FastRequest
+from fastapi import Depends, FastAPI, HTTPException, Request as FastRequest
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from fastapi.requests import Request
@@ -35,6 +35,8 @@ from app.auth import (
     current_user,
     describe_auth,
     is_public_path,
+    is_analyst,
+    require_auth,
     session_secret,
 )
 from app.rate_limit import describe_policies
@@ -46,6 +48,7 @@ from app.routers import review_drafts as review_drafts_router
 from app.routers import return_schedules as return_schedules_router
 from sqlalchemy.orm.exc import StaleDataError
 from app.services.review_jobs import start_review_worker, stop_review_worker
+from app.services.operational_readiness import readiness_report
 
 
 # ----------------------------- logging setup ----------------------------- #
@@ -267,6 +270,24 @@ async def healthz():
     body["release"] = release_identity()
     body["provider_readiness"] = "Configuration only; credits and semantic accuracy are not verified by this probe."
     return JSONResponse(body, headers={"Cache-Control": "private, max-age=10"})
+
+
+@app.get("/api/healthz/ready", include_in_schema=False)
+async def deployment_readiness():
+    """Minimal deployment probe; detailed operational checks require an admin."""
+    report = await readiness_report()
+    return JSONResponse({"status": "ready" if report["deploy_ready"] else "not_ready"},
+                        status_code=200 if report["deploy_ready"] else 503,
+                        headers={"Cache-Control": "no-store"})
+
+
+@app.get("/api/admin/readiness", include_in_schema=False)
+async def operational_readiness(user: dict = Depends(require_auth)):
+    if not is_analyst(user):
+        raise HTTPException(status_code=403, detail="Admin access is required")
+    report = await readiness_report()
+    return JSONResponse(report, status_code=200 if report["deploy_ready"] else 503,
+                        headers={"Cache-Control": "no-store"})
 
 
 @app.get("/")

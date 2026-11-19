@@ -2,7 +2,7 @@
 
 import * as React from "react";
 import { useRouter } from "next/navigation";
-import { ClipboardPaste, Download, FileUp } from "lucide-react";
+import { ClipboardPaste, Download, FileUp, RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { api } from "@/lib/api";
 import type { ReturnCrosscheck, ReviewCoverageGroup, SourceFinding } from "@/lib/types";
@@ -53,6 +53,28 @@ type ReviewState = {
   } | null;
 };
 
+type ReviewSource = {
+  status: "ready" | "reading" | "unread" | "missing";
+  refreshing: boolean;
+  feedback: { text: string; error?: boolean } | null;
+  refresh?: () => void;
+};
+
+type Handoff = "packet" | "codex" | "result";
+type ReviewStep = Handoff | "load" | "retry" | "sources" | "pending" | "approve" | "saved";
+
+const STEP_LABELS: Record<ReviewStep, string> = {
+  load: "Checking for a saved review",
+  retry: "Could not load the saved review",
+  sources: "Get source documents ready",
+  pending: "Review in progress",
+  packet: "1 of 4 · Download the source packet",
+  codex: "2 of 4 · Review the packet in Codex",
+  result: "3 of 4 · Return the result to Deal Analyzer",
+  approve: "4 of 4 · Resume your saved draft",
+  saved: "Review saved",
+};
+
 function display(value: unknown, unit: string) {
   if (typeof value === "string") return value;
   if (typeof value !== "number") return "—";
@@ -94,11 +116,11 @@ function parseResult(text: string): Record<string, unknown> {
   return payload as Record<string, unknown>;
 }
 
-export function ReviewDraftPanel({ dealId, revision, refreshKey, ready }: {
+export function ReviewDraftPanel({ dealId, revision, refreshKey, source }: {
   dealId: number;
   revision?: number;
   refreshKey: number;
-  ready: boolean;
+  source: ReviewSource;
 }) {
   const router = useRouter();
   const base = `/api/deals/${dealId}/review`;
@@ -107,10 +129,16 @@ export function ReviewDraftPanel({ dealId, revision, refreshKey, ready }: {
   const [selectedCoverage, setSelectedCoverage] = React.useState<Set<ReviewCoverageGroup>>(new Set());
   const [selectedFindings, setSelectedFindings] = React.useState<Set<string>>(new Set());
   const [applyCheck, setApplyCheck] = React.useState(false);
-  const [working, setWorking] = React.useState(false);
+  const [operation, setOperation] = React.useState<"import" | "approve" | null>(null);
+  const working = operation !== null;
   const busy = React.useRef(false);
   const [showPaste, setShowPaste] = React.useState(false);
   const [pastedResult, setPastedResult] = React.useState("");
+  const [handoff, setHandoff] = React.useState<Handoff>("packet");
+  const [needsFreshPacket, setNeedsFreshPacket] = React.useState(false);
+  const [saved, setSaved] = React.useState(false);
+  const [loadError, setLoadError] = React.useState("");
+  const [retry, retryDraft] = React.useReducer((count: number) => count + 1, 0);
   const pasteId = React.useId();
   const [message, setMessage] = React.useState("");
   const [error, setError] = React.useState("");
@@ -120,6 +148,17 @@ export function ReviewDraftPanel({ dealId, revision, refreshKey, ready }: {
   const exceptionRows = draft?.rows.filter(needsAttention) ?? [];
   const savingReview = selectedCoverage.size > 0 || selectedFindings.size > 0 || applyCheck;
   const running = ["queued", "running"].includes(state?.job?.status || "");
+  const ready = source.status === "ready";
+  const hasDraft = Boolean(draft && !draft.stale);
+  const waitingForDraft = !state || (revision != null && state.revision < revision);
+  let step: ReviewStep = handoff;
+  if (!ready) step = "sources";
+  else if (waitingForDraft) step = loadError ? "retry" : "load";
+  else if (needsFreshPacket && !hasDraft) step = "packet";
+  else if (showPaste && !running) step = "result";
+  else if (hasDraft) step = "approve";
+  else if (running) step = "pending";
+  else if (saved) step = "saved";
 
   React.useEffect(() => {
     if (working) return;
@@ -130,21 +169,32 @@ export function ReviewDraftPanel({ dealId, revision, refreshKey, ready }: {
       try {
         const next = await api.get<ReviewState>(base + "/draft", { signal: controller.signal });
         if (!active || busy.current) return;
+        setLoadError("");
         setState(current => current && current.revision > next.revision ? current : next);
         if (["queued", "running"].includes(next.job?.status || "")) timer = setTimeout(load, 3000);
       } catch (err) {
-        if (active && !busy.current) setError(errorMessage(err));
+        if (active && !busy.current) setLoadError(errorMessage(err));
       }
     }
     void load();
     return () => { active = false; controller.abort(); clearTimeout(timer); };
-  }, [base, revision, refreshKey, working]);
+  }, [base, revision, refreshKey, retry, working]);
+
+  React.useEffect(() => {
+    setSaved(false);
+    setHandoff("packet");
+    setNeedsFreshPacket(false);
+  }, [dealId, refreshKey]);
 
   React.useEffect(() => {
     setSelected(new Set((draft?.rows || []).filter(row => !needsAttention(row)).map(row => row.path)));
     setSelectedCoverage(new Set());
     setSelectedFindings(new Set(draft?.findings?.filter(row => !row.issue).map(row => row.id) ?? []));
     setApplyCheck(Boolean(draft?.return_crosscheck?.value && !draft.return_crosscheck.issue));
+    if (draft?.stale) {
+      setSaved(false);
+      setHandoff("packet");
+    }
   // Polling the same draft should preserve the analyst's selections.
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [draft?.id, draft?.stale]);
@@ -154,28 +204,34 @@ export function ReviewDraftPanel({ dealId, revision, refreshKey, ready }: {
     busy.current = true;
     setError("");
     setMessage("");
-    setWorking(true);
+    setOperation("import");
     try {
       if (typeof source !== "string" && source.size > MAX_RESULT_BYTES) {
         throw new Error("Use a review result of 512 KB or less.");
       }
       const payload = parseResult(typeof source === "string" ? source : await source.text());
       setState(await api.post<ReviewState>(base + "/draft", payload));
+      setSaved(false);
+      setNeedsFreshPacket(false);
       setPastedResult("");
       setShowPaste(false);
       setMessage("Review draft ready.");
     } catch (err) {
       setError(errorMessage(err));
+      if ((err as { status?: number })?.status === 409) {
+        setHandoff("packet");
+        setNeedsFreshPacket(true);
+      }
     } finally {
       busy.current = false;
-      setWorking(false);
+      setOperation(null);
     }
   }
 
   async function approve() {
-    if (busy.current || !draft || !state || (!selected.size && !savingReview)) return;
+    if (busy.current || !ready || !draft || draft.stale || !state || waitingForDraft || (!selected.size && !savingReview)) return;
     busy.current = true;
-    setWorking(true);
+    setOperation("approve");
     setError("");
     setMessage("");
     try {
@@ -184,6 +240,8 @@ export function ReviewDraftPanel({ dealId, revision, refreshKey, ready }: {
         finding_ids: [...selectedFindings], apply_return_crosscheck: applyCheck,
       });
       setState(result);
+      setSaved(result.draft == null);
+      setShowPaste(false);
       const applied = [
         result.applied ? `${result.applied} ${result.applied === 1 ? "value applied" : "values applied"}` : "",
         result.coverage_applied ? `${result.coverage_applied} coverage ${result.coverage_applied === 1 ? "finding" : "findings"} saved` : "",
@@ -196,7 +254,7 @@ export function ReviewDraftPanel({ dealId, revision, refreshKey, ready }: {
       setError(errorMessage(err));
     } finally {
       busy.current = false;
-      setWorking(false);
+      setOperation(null);
     }
   }
 
@@ -241,18 +299,49 @@ export function ReviewDraftPanel({ dealId, revision, refreshKey, ready }: {
   }
 
   return (
-    <section className="mb-5 space-y-3 rounded-xl border border-border/70 bg-muted/20 p-4" id="codex-review" aria-label="Review with Codex and review drafts">
+    <section className="mb-5 scroll-mt-20 space-y-3 rounded-xl border border-border/70 bg-muted/20 p-4" id="codex-review" aria-label="Review with Codex and review drafts">
       <div>
         <h4 className="text-sm font-semibold">Review with Codex</h4>
-        <p className="mt-1 text-xs text-muted-foreground">
-          Download the packet and attach it in Codex. Choose <strong>GPT-6 Astra</strong> with <strong>Extra High</strong> reasoning if available, then import the result here.
+        <p className="mt-1 text-sm font-medium" role="status">
+          {operation === "import" ? "Checking the imported result…" : operation === "approve" ? "Saving the reviewed selections…" : STEP_LABELS[step]}
         </p>
+        {step === "packet" || step === "codex" ? (
+          <p className="mt-1 text-xs text-muted-foreground">
+            Attach the downloaded packet in Codex. Choose <strong>GPT-6 Astra</strong> with <strong>Extra High</strong> reasoning if available.
+          </p>
+        ) : step === "result" ? (
+          <p className="mt-1 text-xs text-muted-foreground">Paste the JSON Codex produced or import its saved JSON file.</p>
+        ) : step === "approve" ? (
+          <p className="mt-1 text-xs text-muted-foreground">Your draft is still here. Check the exceptions and apply the supported selections below.</p>
+        ) : null}
       </div>
       <div className="flex flex-wrap gap-2">
-        {ready && <Button asChild size="sm">
-          <a href={base + "/packet"}><Download className="mr-1.5 h-3.5 w-3.5" />Download packet</a>
+        {ready && <Button asChild size="sm" variant={step === "packet" ? "default" : "outline"}>
+          <a href={base + "/packet"} onClick={() => {
+            setHandoff("codex");
+            setNeedsFreshPacket(false);
+            setShowPaste(false);
+            setSaved(false);
+            setError("");
+          }}><Download className="mr-1.5 h-3.5 w-3.5" />Download packet</a>
         </Button>}
-        <Button asChild variant="outline" size="sm"><a href={CODEX_LINK}>Open Codex</a></Button>
+        {step === "saved" && <Button asChild size="sm">
+          <a href={`/deals/${dealId}?tab=overview`}>Open Summary</a>
+        </Button>}
+        {loadError && <Button type="button" size="sm" variant={step === "retry" ? "default" : "outline"} onClick={retryDraft} disabled={working}>
+          Retry loading draft
+        </Button>}
+        {source.refresh && <Button type="button" size="sm" variant={source.status === "unread" ? "default" : "outline"}
+          disabled={source.status === "reading" || running || working} onClick={source.refresh}>
+          <RefreshCw className={`mr-1.5 h-3.5 w-3.5${source.refreshing ? " animate-spin" : ""}`} />
+          {source.refreshing ? "Reading original files…" : "Refresh document text"}
+        </Button>}
+        {source.status === "missing" && <Button asChild size="sm">
+          <a href="#deal-documents-upload">Upload a primary document</a>
+        </Button>}
+        <Button asChild variant={step === "codex" ? "default" : "outline"} size="sm">
+          <a href={CODEX_LINK} onClick={() => { setHandoff("result"); setSaved(false); }}>Open Codex</a>
+        </Button>
         <Button type="button" variant="outline" size="sm" disabled={working} onClick={() => fileInput.current?.click()}>
           <FileUp className="mr-1.5 h-3.5 w-3.5" />Import result
         </Button>
@@ -261,7 +350,8 @@ export function ReviewDraftPanel({ dealId, revision, refreshKey, ready }: {
           event.currentTarget.value = "";
           if (file) void importResult(file);
         }} />
-        <Button type="button" variant="outline" size="sm" disabled={working} aria-expanded={showPaste} aria-controls={pasteId} onClick={() => setShowPaste(current => !current)}>
+        <Button type="button" variant={step === "result" && !showPaste ? "default" : "outline"}
+          size="sm" disabled={working} aria-expanded={showPaste} aria-controls={pasteId} onClick={() => setShowPaste(current => !current)}>
           <ClipboardPaste className="mr-1.5 h-3.5 w-3.5" />Paste JSON
         </Button>
       </div>
@@ -282,12 +372,24 @@ export function ReviewDraftPanel({ dealId, revision, refreshKey, ready }: {
             autoFocus
             className="w-full resize-y rounded-md border border-border bg-background px-3 py-2 font-mono text-xs focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
           />
-          <Button type="submit" size="sm" disabled={working || !pastedResult.trim()}>Check pasted result</Button>
+          <Button type="submit" size="sm" variant={step === "result" ? "default" : "outline"}
+            disabled={working || !pastedResult.trim()}>Check pasted result</Button>
         </form>
       )}
-      {!ready && <p className="text-xs text-muted-foreground">The packet is available after the primary documents are read.</p>}
+      {source.status === "reading" && !source.feedback && (
+        <p className="text-xs text-muted-foreground" role="status">Reading the source documents. The packet will appear when they are ready.</p>
+      )}
+      {source.status === "unread" && (
+        <p className="text-xs text-warning">There is no readable source text. Refresh the document text or upload a readable copy.</p>
+      )}
+      {source.feedback && (
+        <p role={source.feedback.error ? "alert" : "status"} className={source.feedback.error ? "text-xs text-destructive" : "text-xs text-muted-foreground"}>
+          {source.feedback.text}
+        </p>
+      )}
       {running && <p className="text-xs text-muted-foreground" role="status">API credit review {state?.job?.status === "queued" ? "queued" : "in progress"}…</p>}
       {state?.job?.error && !running && !draft && <p className="text-xs text-destructive">{state.job.error}</p>}
+      {loadError && <p className="text-xs text-destructive" role="alert">{loadError}</p>}
       {error && <p className="text-xs text-destructive" role="alert">{error}</p>}
       {message && <p className="text-xs text-muted-foreground" role="status">{message}</p>}
       {draft && (
@@ -298,7 +400,9 @@ export function ReviewDraftPanel({ dealId, revision, refreshKey, ready }: {
               <span className="text-xs text-muted-foreground">${draft.usage.estimated_cost_usd.toFixed(3)} estimated API usage</span>
             )}
           </div>
-          {draft.stale ? <p className="text-xs text-muted-foreground">The deal or its sources changed. Start a new review or download a fresh packet.</p> :
+          {draft.stale ? <p className="rounded-md border border-warning/30 p-2 text-xs text-warning" role="alert">
+            This draft is out of date. The deal or its source files changed. Download a fresh packet before running the review again.
+          </p> :
             draft.rows.length === 0 && !draft.coverage?.length && !draft.findings?.length && !draft.return_crosscheck ? <p className="text-xs text-muted-foreground">This review found no supported values in the source package.</p> : (
               <>
                 {(exceptionRows.length > 0 || !!draft.reconciliation_warnings?.length) && <section aria-label="Review exceptions" className="space-y-2">
@@ -383,7 +487,8 @@ export function ReviewDraftPanel({ dealId, revision, refreshKey, ready }: {
                     {draft.return_crosscheck.value && <ReturnCrosscheckDetails check={draft.return_crosscheck.value} />}
                   </fieldset>
                 )}
-                <Button size="sm" type="button" disabled={(!selected.size && !savingReview) || working} onClick={() => void approve()}>
+                <Button size="sm" type="button" variant={step === "approve" ? "default" : "outline"}
+                  disabled={(!selected.size && !savingReview) || !ready || working || waitingForDraft} onClick={() => void approve()}>
                   {selected.size ? `Apply ${selected.size} ${selected.size === 1 ? "value" : "values"}${savingReview ? " and save review" : ""}` : savingReview ? "Save review" : "Apply selected values"}
                 </Button>
               </>

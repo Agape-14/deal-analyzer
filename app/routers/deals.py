@@ -657,15 +657,28 @@ async def export_comparison(data: CompareRequest, db: AsyncSession = Depends(get
         cell.alignment = Alignment(horizontal="center")
         ws.column_dimensions[openpyxl.utils.get_column_letter(col_idx)].width = 36
 
+    scores_by_deal = {deal.id: effective_scores(deal) for deal in deals}
+    score_rows = {
+        "Overall Score": "overall", "Returns Score": "returns", "Market Score": "market",
+        "Structure Score": "structure", "Risk Score": "risk", "Financials Score": "financials",
+        "Underwriting Score": "underwriting", "Sponsor Score": "sponsor",
+    }
+
+    def score_value(deal, category):
+        scores = scores_by_deal[deal.id]
+        return scores.get("overall") if category == "overall" else (scores.get(category) or {}).get("score")
+
+    def score_basis(deal, category):
+        basis = (scores_by_deal[deal.id]["comparison_basis"].get(category) or {}).get("inputs") or []
+        return ", ".join(basis) or None
+
     # Define metric rows by section
     sections = [
         ("SCORES", [
-            ("Overall Score", lambda d: effective_scores(d).get("overall")),
-            ("Returns Score", lambda d: (effective_scores(d).get("returns") or {}).get("score")),
-            ("Market Score", lambda d: (effective_scores(d).get("market") or {}).get("score")),
-            ("Structure Score", lambda d: (effective_scores(d).get("structure") or {}).get("score")),
-            ("Risk Score", lambda d: (effective_scores(d).get("risk") or {}).get("score")),
-            ("Financials Score", lambda d: (effective_scores(d).get("financials") or {}).get("score")),
+            entry for label, category in score_rows.items() for entry in (
+                (label, lambda d, category=category: score_value(d, category)),
+                (f"{label} basis", lambda d, category=category: score_basis(d, category)),
+            )
         ]),
         ("DEAL STRUCTURE", [
             ("Investment Class", lambda d: (analyses[d.id]["accepted_metrics"].get("deal_structure") or {}).get("investment_class")),
@@ -764,14 +777,16 @@ async def export_comparison(data: CompareRequest, db: AsyncSession = Depends(get
                 if isinstance(val, (int, float)):
                     values.append((col_idx, val))
 
-            # Only scores have an unambiguous "higher is better" meaning.
-            # Size, leverage, costs and sponsor projections are not winners.
-            if section_name == "SCORES" and len(values) >= 2:
-                best_col = max(values, key=lambda x: x[1])[0]
-                worst_col = min(values, key=lambda x: x[1])[0]
-                if best_col != worst_col:
-                    ws.cell(row=row, column=best_col).fill = green_fill
-                    ws.cell(row=row, column=worst_col).fill = red_fill
+            if section_name == "SCORES" and metric_name in score_rows and len(values) >= 2:
+                category = score_rows[metric_name]
+                signatures = [(scores_by_deal[deals[col - 2].id]["comparison_basis"].get(category) or {}).get("signature")
+                              for col, _ in values]
+                if signatures[0] and len(set(signatures)) == 1:
+                    highest, lowest = max(value for _, value in values), min(value for _, value in values)
+                    if highest != lowest:
+                        for col, value in values:
+                            if value == highest or value == lowest:
+                                ws.cell(row=row, column=col).fill = green_fill if value == highest else red_fill
             row += 1
         row += 1  # Space between sections
 

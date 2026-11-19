@@ -1,40 +1,46 @@
-# Release validation — October 28, 2026
+# Production release and validation
 
-The draft branch contains the current implementation. Production deployment is a
-separate approval and has not been performed. Record the final reviewed commit
-and successful regression run in the PR before release; diagnostics exposes the
-running frontend and backend commits so a stale service can be identified.
+Deal Analyzer runs on the web and API services in Railway production. Use
+Diagnostics to confirm that both services run the approved commit. The previous
+verified release, `52bd533b`, passed the backend, frontend and two browser
+suites in [run 44617841521](https://github.com/Agape-14/deal-analyzer/actions/runs/44617841521).
+Its live release check covered the dashboard, Summary, Compare, four deal PDFs
+and the Excel comparison with the four saved deals.
 
 ## Release gates
 
-A guarded release may ship the UI, deterministic calculations and saved-source
-workflows with the owner's explicit authorization and `PAID_REVIEW_ENABLED=0`.
-This flag blocks paid review routes and provider entry points, pauses queued paid
-work without retry loops, and leaves free document reading and evidence lookup
-available. Keep automatic paid upload review off. The two provider retests and
-independently reviewed real-source accuracy labels below remain required before
-enabling paid AI review. A guarded release does not certify extraction accuracy.
+Codex is the primary review workflow. Production paid fallback qualification
+requires representative PDF-only and PDF-plus-workbook runs using authorized
+credits, independently checked evidence, measured costs, and retry checks.
+The paid review pause leaves document reading and evidence lookup available.
 
-1. Full backend tests, frontend unit tests, production build, production and
-   development browser journeys, including repeated saved-deal reloads.
+1. Wait for the **Release gate** on the exact commit. It depends on the backend,
+   frontend build, and production and development browser jobs. Pin both
+   services to that tested commit and inspect the staged changes.
 2. Reviewed dependency locks. Python targets Linux/Python 3.12. The Dependency
    candidate workflow produces a candidate lock for review, without changing
    the accepted lock or deploying anything. Run full regression tests for updates.
    `.python-version` and Nixpacks now select Python 3.12 to match CI. Verify the
    runtime selection in the approved staging build before production rollout.
    The frontend `.nvmrc` selects Node 22, matching its CI runtime.
-3. A current, verified backup and a private staging copy. Apply additive Alembic
-   migrations through `c211028a007`; verify counts, document hashes, saved
+3. Confirm the most recent independent backup and retention schedule. Rehearse
+   recovery of the database and originals in isolation. A bounded, in-service
+   rehearsal verifies a temporary copy and replay. It does not verify the
+   backup provider's schedule or restore point. Apply candidate migrations to
+   a private copy first and verify counts, document hashes, saved
    analyses, manual locks, distributions and stable sponsor associations.
    The migration does not rewrite investment amounts or accepted financial facts.
 4. Replay every saved deal on the private copy. Compare Summary, Questions,
    comparison, Assistant and exports. Keep financial files and replay evidence
    outside this public repository and public CI artifacts.
-5. Two pending provider extraction/verification retests require usable credits.
-   Configuration health alone does not establish credits or semantic correctness.
-6. Separately authorize a coordinated backend/frontend release. Verify both
-   commit identities, authenticated PDF preview, upload/reading/review status,
-   and rollback using the actual backup before treating production as updated.
+5. Verify both service commit identities and run the read-only source replay
+   verification against the production records. It compares dashboard,
+   Summary and Compare with their PDF and Excel output. Keep the source
+   scope and data inside the service and clear the temporary replay selection.
+6. Check a signed-in analyst and read-only viewer on the deployed domain.
+   Railway uses `/api/healthz/ready` to gate deployment. The admin readiness
+   view checks database schema, storage and review queue health. Confirm the
+   uptime and backup alerts reach the designated recipient.
 
 ## Portfolio definitions
 
@@ -68,9 +74,10 @@ page/sheet/cell/quote, required facts and deliberately unsupported claims. Have
 an analyst review the expected labels before using a passing score as an accuracy
 claim. Do not derive expected labels from the output being tested.
 
-The current five-case public benchmark is synthetic. A reviewed real-source
-label set and fresh paid extraction runs remain release gates; a green synthetic
-suite is not a substitute.
+The public benchmark uses synthetic source labels. Keep the existing real
+deal source reviews and independently checked figures in private storage.
+Record which reviewed values, source locators, and export contexts a real-deal
+replay covered. Qualify fresh provider extraction separately when enabling it.
 
 ## External context
 

@@ -431,6 +431,7 @@ export interface DealScores {
   provisional_overall?: number | null;
   coverage?: { supported_categories: number; total_categories: number };
   data_quality?: DataQualityGate;
+  comparison_basis?: Record<string, {signature: string | null; inputs: string[]}>;
   returns: ScoreCategory;
   market: ScoreCategory;
   structure: ScoreCategory;

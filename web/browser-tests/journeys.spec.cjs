@@ -181,6 +181,7 @@ test('Codex review comes first with API credits available under review options',
   await dealPage(page, id, 'documents');
 
   await expect(page.getByRole('link', { name: 'Review with Codex', exact: true })).toBeVisible();
+  await expect(page.getByText('1 of 4 · Download the source packet', { exact: true })).toBeVisible();
   await expect(page.getByText('GPT-6 Astra', { exact: true })).toBeVisible();
   const apiReview = page.getByRole('button', { name: 'Review with API credits', exact: true });
   await expect(apiReview).toBeHidden();
@@ -193,6 +194,11 @@ test('Codex review comes first with API credits available under review options',
     page.waitForEvent('download'), page.getByRole('link', { name: 'Download packet', exact: true }).click(),
   ]);
   expect(download.suggestedFilename()).toBe(`deal-${id}-review-packet.json`);
+  await expect(page.getByText('2 of 4 · Review the packet in Codex', { exact: true })).toBeVisible();
+  // The synthetic test exercises the handoff control without launching a desktop application.
+  await codex.evaluate(link => link.addEventListener('click', event => event.preventDefault(), { once: true }));
+  await codex.click();
+  await expect(page.getByText('3 of 4 · Return the result to Deal Analyzer', { exact: true })).toBeVisible();
   const { packet } = JSON.parse(await fs.readFile(await download.path(), 'utf8'));
   const source = packet.sources[0];
   const excerpt = source.text.split('\n').find(line => line.includes('B2=40000'));
@@ -205,6 +211,8 @@ test('Codex review comes first with API credits available under review options',
     name: 'deal-review-result.json', mimeType: 'application/json', buffer: Buffer.from(JSON.stringify(result)),
   });
   await expect(page.getByRole('heading', { name: 'Codex review draft' })).toBeVisible();
+  await page.reload();
+  await expect(page.getByText('4 of 4 · Resume your saved draft', { exact: true })).toBeVisible();
   await expect(page.getByRole('checkbox', { name: 'Minimum investment · 40,000' })).toBeChecked();
   await expect(page.getByText(excerpt, { exact: true })).toBeVisible();
 
@@ -231,6 +239,7 @@ test('Codex review comes first with API credits available under review options',
 
   await page.getByRole('button', { name: 'Apply 1 value', exact: true }).click();
   await expect(page.getByText(/1 value applied/)).toBeVisible();
+  await expect(page.getByRole('link', { name: 'Open Summary', exact: true })).toHaveAttribute('href', `/deals/${id}?tab=overview`);
   const deal = await (await page.request.get(`/api/deals/${id}`)).json();
   expect(deal.analysis.facts['deal_structure.minimum_investment']).toMatchObject({ value: 40000, state: 'checked' });
   expect((await page.request.delete(`/api/deals/${id}`)).ok()).toBeTruthy();

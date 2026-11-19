@@ -42,21 +42,30 @@ def start_source_replay():
 
 
 async def _run_source_replay(selection):
-    from scripts.source_replay import ReplayRequest, SourceReplayBlocked, replay_source
+    from scripts.source_replay import ReplayBatch, ReplayRequest, SourceReplayBlocked, replay_source
     from scripts.verify_review_surfaces import SurfaceMismatch
 
     try:
         if len(selection) > 30_000:
             raise ValueError("Source replay selection exceeds the limit.")
-        request = ReplayRequest.model_validate_json(selection)
-        result = await asyncio.wait_for(replay_source(request, engine=engine), timeout=120)
-    except BackfillFailure as exc:
-        result = exc.report
-    except (SourceReplayBlocked, SurfaceMismatch) as exc:
-        result = {"status": "failed", "error": str(exc)}
+        payload = json.loads(selection)
+        batch = isinstance(payload, dict) and "requests" in payload
+        requests = ReplayBatch.model_validate(payload).requests if batch else [ReplayRequest.model_validate(payload)]
     except Exception as exc:
-        result = {"status": "failed", "error_type": type(exc).__name__}
-    log.info("Source replay result %s", json.dumps(result, separators=(",", ":")))
+        log.info("Source replay result %s", json.dumps({"status": "failed", "error_type": type(exc).__name__}))
+        return
+    for request in requests:
+        try:
+            timeout = 240 if request.rehearse_recovery else 120
+            result = await asyncio.wait_for(replay_source(request, engine=engine), timeout=timeout)
+        except BackfillFailure as exc:
+            result = exc.report
+        except (SourceReplayBlocked, SurfaceMismatch) as exc:
+            result = {"status": "failed", "error": str(exc)}
+        except Exception as exc:
+            result = {"status": "failed", "error_type": type(exc).__name__}
+        report = {"deal_id": request.deal_id, "mode": request.mode, **result}
+        log.info("Source replay result %s", json.dumps(report, separators=(",", ":")))
 
 
 async def _run_repair(selection):
