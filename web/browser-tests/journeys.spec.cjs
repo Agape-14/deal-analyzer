@@ -114,7 +114,7 @@ test('hold summary keeps primary returns distinct from the accepted optional sal
   }
   await expect(main.getByRole('heading', { name: 'Investment considerations' })).toHaveCount(0);
   await page.getByRole('tab', { name: 'Questions', exact: true }).click();
-  await expect(page.getByText(/No material questions remain/)).toBeVisible();
+  await expect(page.getByText('No field decisions remain', { exact: true })).toBeVisible();
   await page.getByRole('tab', { name: 'Analysis', exact: true }).click();
   await page.getByRole('tab', { name: 'Evidence and history', exact: true }).click();
   await expect(page.getByRole('heading', { name: 'Analysis history', exact: true })).toBeVisible();
@@ -131,7 +131,7 @@ test('material decision persists as a manual lock and a new revision', async ({ 
   const saved = page.waitForResponse(r => r.url().endsWith('/analysis/resolve') && r.request().method() === 'POST');
   await page.getByRole('button', { name: 'Save these decisions', exact: true }).click();
   expect((await saved).ok()).toBeTruthy();
-  await expect(page.getByText(/No material questions remain/)).toBeVisible();
+  await expect(page.getByText('No field decisions remain', { exact: true })).toBeVisible();
   await expect(page.getByText('$30K', { exact: true })).toBeVisible();
   await page.reload();
   const response = await page.request.get('/api/deals/2');
@@ -676,7 +676,7 @@ test('mobile summary keeps the main workflow reachable', async ({ page }, info) 
   await page.screenshot({ path: info.outputPath('mobile-brief.png') });
   expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(390);
   await page.getByRole('tab', { name: 'Questions', exact: true }).click();
-  await expect(page.getByRole('heading', { name: 'Only the questions that affect the summary', exact: true })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Review exceptions', exact: true })).toBeVisible();
   await page.getByRole('tab', { name: 'Documents', exact: true }).click();
   await expect(page.getByRole('button', { name: 'Choose files', exact: true })).toBeVisible();
   expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(390);

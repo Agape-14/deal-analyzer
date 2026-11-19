@@ -16,7 +16,12 @@ export function AnalysisQuestions({ deal }: { deal: DealDetail }) {
   return <div className="space-y-5">
     <div><h2 className="text-xl font-semibold">Review exceptions</h2><p className="mt-2 text-sm text-muted-foreground">Check the cited sources and add missing evidence. Save analyst decisions after verifying the figures.</p></div>
     {deal.analysis && <ReadinessChecks analysis={deal.analysis} dealId={deal.id} exceptionsOnly />}
-    {questions.length === 0 && readinessAttention === 0 && <Card className="p-6">No material questions remain in this analysis. Accepted facts and their evidence are available in Summary.</Card>}
+    {questions.length === 0 && <Card className="p-6">
+      <p className="font-medium">No field decisions remain</p>
+      <p className="mt-1 text-sm text-muted-foreground">
+        {readinessAttention > 0 ? "Check the evidence and context flagged above." : "Browse the reviewed facts and evidence in Summary."}
+      </p>
+    </Card>}
     {questions.map(q => <QuestionCard key={`${deal.revision}-${q.id}`} question={q} deal={deal} />)}
   </div>;
 }
