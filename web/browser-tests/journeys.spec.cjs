@@ -320,7 +320,12 @@ test('new deal reviews PDF and workbook through Codex paste, Summary, Compare, a
     '    "Year 1 after stabilization: 3.2% projected annual net LP cash-on-cash.",',
     '    "Annual net LP hold cash-on-cash target, Year 2 after stabilization: 8.9%.",',
     '    "Year 3 after stabilization: 9.1% projected annual net LP cash-on-cash.",',
-    '    "Illustrative sale after 5 years: 17.4% projected net LP IRR.")):',
+    '    "Illustrative sale after 5 years: 17.4% projected net LP IRR.",',
+    '    "Class A net LP sale cash flows (USD).",',
+    '    "Cash flows by period | Year 0 | Year 1 | Year 2",',
+    '    "Class A cash flows | ($100,000) | $20,000 | $120,000",',
+    '    "Year 1 includes refinance proceeds.",',
+    '    "Year 2 includes sale proceeds.")):',
     '    memo.drawString(60, 740 - y * 24, line)',
     'memo.save()',
     'workbook = BytesIO()',
@@ -412,7 +417,29 @@ test('new deal reviews PDF and workbook through Codex paste, Summary, Compare, a
       scenario: null, investor_class: null, basis: null, period: null, debt_phase: null, currency: null,
       ...fact,
     }));
-    const result = { package_id: packet.package_id, facts };
+    const scopeQuote = 'Class A net LP sale cash flows (USD).';
+    const yearHeader = 'Cash flows by period | Year 0 | Year 1 | Year 2';
+    const cashFlowRow = 'Class A cash flows | ($100,000) | $20,000 | $120,000';
+    const pdfCitation = (quote, sourcePage = 2) => ({
+      source_doc_id: memo.id, source_page: sourcePage, source_excerpt: quote,
+    });
+    const result = { package_id: packet.package_id, facts, findings: [{
+      kind: 'conflict', title: 'Stabilized NOI differs',
+      detail: 'The memo and the workbook report different stabilized NOI for the same fiscal year.',
+      citations: [pdfCitation(memoNoiQuote, 1), {
+        source_doc_id: model.id, source_sheet: 'Funding and Operations', source_cell: 'B7', source_excerpt: modelNoiQuote,
+      }],
+    }], return_crosscheck: {
+      investor_class: 'Class A', basis: 'net', currency: 'USD', scenario: 'sale', scope_citation: pdfCitation(scopeQuote),
+      table: { citation: pdfCitation([scopeQuote, yearHeader, cashFlowRow].join('\n')), year_header: yearHeader, cash_flow_row: cashFlowRow },
+      rows: [
+        { year: 0, amount: -100000, citation: pdfCitation(cashFlowRow) },
+        { year: 1, amount: 20000, citation: pdfCitation(cashFlowRow), flow_scope: 'refinance',
+          event_citation: pdfCitation('Year 1 includes refinance proceeds.') },
+        { year: 2, amount: 120000, citation: pdfCitation(cashFlowRow), flow_scope: 'sale',
+          event_citation: pdfCitation('Year 2 includes sale proceeds.') },
+      ],
+    }};
 
     const wrongPage = await page.request.post(base + '/review/draft', {
       data: { package_id: packet.package_id, facts: [{...facts.find(fact => fact.path === holdPath), source_page: 1}] },
@@ -425,8 +452,10 @@ test('new deal reviews PDF and workbook through Codex paste, Summary, Compare, a
     await page.getByRole('textbox', { name: 'Codex review JSON' }).fill(['```json', JSON.stringify(result), '```'].join('\n'));
     await page.getByRole('button', { name: 'Check pasted result', exact: true }).click();
     await expect(page.getByRole('heading', { name: 'Codex review draft' })).toBeVisible();
-    const apply = page.getByRole('button', { name: 'Apply 9 values', exact: true });
+    const apply = page.getByRole('button', { name: 'Apply 9 values and save review', exact: true });
     await expect(apply).toBeEnabled();
+    await expect(page.getByRole('checkbox', { name: 'Stabilized NOI differs', exact: true })).toBeChecked();
+    await expect(page.getByRole('checkbox', { name: 'Save cash-flow check', exact: true })).toBeChecked();
     await expect(page.getByText('9 of 9 cited values selected', { exact: true })).toBeVisible();
     const exceptionList = page.getByRole('region', { name: 'Review exceptions', exact: true });
     const conflict = exceptionList.getByText('Multiple values were proposed for this field. Compare the sources before resolving it.', { exact: true });
@@ -482,6 +511,13 @@ test('new deal reviews PDF and workbook through Codex paste, Summary, Compare, a
     await expect(summary.getByRole('heading', { name: 'Optional sale scenario', exact: true })).toBeVisible();
     await expect(summary.getByText('Net irr · 17.4%', { exact: true })).toBeVisible();
     const deal = await (await page.request.get(base)).json();
+    const cashFlowCheck = deal.analysis.return_crosscheck;
+    expect(cashFlowCheck).toMatchObject({status: 'current', annual_irr_pct: 20, cash_flow_multiple: 1.4});
+    expect(deal.analysis.findings[0]).toMatchObject({kind: 'conflict', title: 'Stabilized NOI differs', status: 'current'});
+    await expect(summary.getByRole('heading', { name: 'PDF cash-flow check', exact: true })).toBeVisible();
+    await summary.getByText('Cited cash flows', { exact: true }).click();
+    await expect(summary.getByRole('row', { name: /Year 1.*Includes refinance proceeds/ })).toBeVisible();
+    await expect(summary.getByRole('row', { name: /Year 2.*Includes sale proceeds/ })).toBeVisible();
     expect(deal.analysis.facts['deal_structure.minimum_investment']).toMatchObject({value: 125000, state: 'checked'});
     expect(deal.analysis.facts['project_details.unit_count'].evidence[0]).toMatchObject({
       document_name: 'pilot-underwriting.xlsx', sheet: 'Funding and Operations', cell: 'B2', excerpt: unitQuote,
@@ -502,6 +538,8 @@ test('new deal reviews PDF and workbook through Codex paste, Summary, Compare, a
     expect(reportText).toContain('pilot-offering.pdf, p. 2');
     expect(reportText).toContain('Optional Sale Scenario');
     expect(reportText).toContain('17.40%');
+    expect(reportText).toContain('PDF Cash-Flow Check');
+    expect(reportText).toContain('20.00%');
     expect(reportText).not.toMatch(/2,040,000|2,160,000/);
 
     await page.goto('/compare?ids=' + id + ',1');
@@ -515,6 +553,8 @@ test('new deal reviews PDF and workbook through Codex paste, Summary, Compare, a
     expect(compare.ok()).toBeTruthy();
     const compared = (await compare.json()).deals.find(deal => deal.id === id).analysis;
     expect(compared.readiness).toEqual(deal.analysis.readiness);
+    expect(compared.return_crosscheck).toEqual(cashFlowCheck);
+    await expect(page.getByRole('region', {name: 'PDF cash-flow checks'})).toContainText('Annual-period IRR');
     expect(compared.facts['project_details.unit_count'].value).toBe(148);
     expect(compared.facts[holdPath]).toMatchObject({value: 8.9, identity: holdContext, evidence: [returnSource]});
     expect(compared.returns.target_irr).toBeNull();
@@ -526,7 +566,7 @@ test('new deal reviews PDF and workbook through Codex paste, Summary, Compare, a
       'from openpyxl import load_workbook',
       'import json, sys',
       'book = load_workbook(BytesIO(sys.stdin.buffer.read()), data_only=True)',
-      'print(json.dumps({"comparison": {row[0]: row[1] for row in book.active.values if row[0]}, "projections": list(book["Return Projections"].values)[1:] if "Return Projections" in book else [], "sales": list(book["Optional Sale Scenarios"].values)[1:]}))',
+      'print(json.dumps({"comparison": {row[0]: row[1] for row in book.active.values if row[0]}, "projections": list(book["Return Projections"].values)[1:] if "Return Projections" in book else [], "sales": list(book["Optional Sale Scenarios"].values)[1:], "checks": list(book["PDF Cash Flow Checks"].values)[1:]}))',
     ].join('\n')], {input, encoding: 'utf8'}));
     const rows = readWorkbook(await exported.body());
     expect(rows.comparison).toMatchObject({
@@ -540,6 +580,8 @@ test('new deal reviews PDF and workbook through Codex paste, Summary, Compare, a
     });
     const pilotName = 'Juniper Station Apartments Synthetic Pilot';
     expect(rows.sales.find(row => row[0] === pilotName)).toEqual(expect.arrayContaining([17.4, 'percent', 'pilot-offering.pdf, p. 2']));
+    expect(rows.checks).toHaveLength(3);
+    expect(rows.checks[1]).toEqual(expect.arrayContaining([pilotName, 20, 1.4, 'Includes refinance proceeds', 'pilot-offering.pdf, p. 2']));
 
     const schedule = await page.request.put(base + '/analysis/return-schedule', { data: {
       expected_revision: deal.revision, investor_class: 'lp', equity_basis: 'Net LP invested equity',
@@ -566,6 +608,7 @@ test('new deal reviews PDF and workbook through Codex paste, Summary, Compare, a
     await expect(summary.getByText('Net irr · 17.4%', { exact: true })).toBeVisible();
     const refreshed = await (await page.request.get(base)).json();
     expect(refreshed.analysis.return_schedule).toEqual(savedSchedule);
+    expect(refreshed.analysis.return_crosscheck).toEqual(cashFlowCheck);
     expect(refreshed.analysis.readiness).toEqual(deal.analysis.readiness);
     expect(refreshed.analysis.returns.cash_on_cash).toBeNull();
     expect(refreshed.analysis.facts[holdPath]).toEqual(deal.analysis.facts[holdPath]);
@@ -599,6 +642,21 @@ test('new deal reviews PDF and workbook through Codex paste, Summary, Compare, a
     const unchecked = page.getByRole('region', {name: 'Review exceptions'}).getByRole('checkbox', {name: /cash.on.cash/i});
     await expect(unchecked).not.toBeChecked();
     await expect(page.getByRole('button', {name: 'Apply selected values'})).toBeDisabled();
+
+    await page.getByRole('tab', {name: 'Questions', exact: true}).click();
+    const findings = page.getByRole('region', {name: 'Source findings', exact: true});
+    await findings.getByRole('button', {name: 'Record decision', exact: true}).click();
+    await findings.getByRole('textbox', {name: 'Decision and basis'}).fill('Retain both source quotes and leave this figure open.');
+    await findings.getByRole('button', {name: 'Save decision', exact: true}).click();
+    await expect(findings.getByText('Decision recorded', {exact: true})).toBeVisible();
+    const replacement = await page.request.post(base + '/documents/upload', {
+      multipart: {file: {name: 'pilot-offering.pdf', mimeType: 'application/pdf',
+        buffer: Buffer.concat([Buffer.from(artifacts.pdf, 'base64'), Buffer.from('\n% replacement edition\n')])}},
+    });
+    expect(replacement.ok()).toBeTruthy();
+    const stale = (await (await page.request.get(base)).json()).analysis;
+    expect(stale.findings[0]).toMatchObject({status: 'needs_review', decision: {text: 'Retain both source quotes and leave this figure open.'}});
+    expect(stale.return_crosscheck).toMatchObject({status: 'needs_review', annual_irr_pct: null, cash_flow_multiple: null});
   } finally {
     expect((await page.request.delete(base)).ok()).toBeTruthy();
   }

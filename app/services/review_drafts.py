@@ -9,14 +9,18 @@ from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import select
 
 from app.models import DealDocument
-from app.services.analysis import REGISTRY, digest, flatten, identity, input_fingerprint, set_path, valid_number
+from app.services.analysis import REGISTRY, build_analysis, digest, flatten, identity, input_fingerprint, set_path, valid_number
 from app.services.analysis_store import document_manifest
 from app.services.data_integrity import is_path_locked, now_iso
 from app.services.document_context import documents_fingerprint
 from app.services.document_versions import document_payloads, review_documents
 from app.services.source_evidence import fresh_audit_evidence, normalized_text, numeric_quote_error
 from app.services.review_coverage import GROUP_LABELS, GROUP_REVIEWS_KEY, source_reading
+from app.services.review_findings import SourceFinding, finding_rows, findings_output_schema
+from app.services.review_pdf_tables import table_fact_evidence, table_locators, table_number_warning
 from app.services.review_readiness import RETURN_CONTEXT
+from app.services.return_crosscheck import (CROSSCHECK_KEY, ReturnCrosscheckInput, checked_return_crosscheck,
+                                            project_return_crosscheck, return_crosscheck_output_schema)
 from app.services.return_schedules import active_sources_fingerprint
 
 DRAFT_KEY = "_review_draft"
@@ -47,7 +51,10 @@ Provide an exact quote containing the label and value from each cited PDF page
 or sheet and cell. For a spreadsheet use its exact sheet name and the A1-style
 value cell with the printed cell assignment (for example B12=450000); quote
 contiguous text and include nearby labels if present. Use null for inapplicable
-locator fields. When sources agree, use the clearest primary quote. When active
+locator fields. For a labeled PDF table row, use the provided 1-based table,
+row and column locators and quote its value with the column label. Check any
+reading warning against the original PDF before proposing that field.
+When sources agree, use the clearest primary quote. When active
 sources disagree for the same fact and context, include each distinct cited value
 for the same path. Compare capital sources against project cost and check whether
 differences come from dates, financing phases, currencies, or scopes. Verify that
@@ -69,6 +76,16 @@ active source in source_doc_ids and explain the conclusion. Group names are
 project_details, construction_budget, primary_return and scoring_inputs. Unread
 or partial sources cannot support an absence conclusion. Omission of a field
 is not evidence that it is absent. Return an empty coverage array when unsure.
+Use findings for material source conflicts or useful source qualifications.
+Give each finding a short, stable title and exact supporting citations. A
+conflict needs two distinct quotes. Phrase findings as source observations.
+If one PDF shows a complete annual LP cash-flow series for one class and
+scenario, include a return_crosscheck with its exact quoted years, signed
+cash amounts and scope. Include all years, including an explicit zero.
+Use the source's visible payment labels and separately identify an operating
+or capital-event year only when the source says so. Give the app the inputs
+and citations. The app computes the check. Use null when the source does
+not support a complete attributable series.
 """
 
 
@@ -80,6 +97,9 @@ class ReviewFact(BaseModel):
     source_page: int | None = Field(default=None, gt=0)
     source_sheet: str | None = Field(default=None, max_length=200)
     source_cell: str | None = Field(default=None, max_length=30)
+    source_table_index: int | None = Field(default=None, gt=0)
+    source_table_row: int | None = Field(default=None, gt=0)
+    source_table_column: int | None = Field(default=None, gt=0)
     source_excerpt: str = Field(min_length=8, max_length=1500)
     scenario: str | None = Field(default=None, max_length=100)
     investor_class: str | None = Field(default=None, max_length=100)
@@ -102,12 +122,16 @@ class ReviewResult(BaseModel):
     package_id: str = Field(pattern=r"^[0-9a-f]{64}$")
     facts: list[ReviewFact] = Field(max_length=2 * len(FIELDS))
     coverage: list[GroupCoverage] = Field(default_factory=list, max_length=4)
+    findings: list[SourceFinding] = Field(default_factory=list, max_length=20)
+    return_crosscheck: ReturnCrosscheckInput | None = None
 
 
 def output_schema():
     # Strict Structured Outputs requires every property, including nullable
     # locators. Runtime validation below additionally bounds untrusted imports.
     nullable_string = {"type": ["string", "null"]}
+    return_schema = return_crosscheck_output_schema()
+    definitions = return_schema.pop("$defs", {})
     fact_properties = {
         "path": {"type": "string", "enum": list(FIELDS)},
         "value": {"anyOf": [{"type": "string"}, {"type": "number"}]},
@@ -115,11 +139,14 @@ def output_schema():
         "source_page": {"type": ["integer", "null"]},
         "source_sheet": nullable_string,
         "source_cell": nullable_string,
+        **{key: {"type": ["integer", "null"]} for key in ("source_table_index", "source_table_row", "source_table_column")},
         "source_excerpt": {"type": "string"},
         **{key: nullable_string for key in DIMENSIONS},
     }
     return {
-        "type": "object", "additionalProperties": False, "required": ["package_id", "facts", "coverage"],
+        "type": "object", "additionalProperties": False,
+        **({"$defs": definitions} if definitions else {}),
+        "required": ["package_id", "facts", "coverage", "findings", "return_crosscheck"],
         "properties": {
             "package_id": {"type": "string"},
             "facts": {"type": "array", "items": {
@@ -136,6 +163,8 @@ def output_schema():
                 },
                 "required": ["group", "status", "reason", "source_doc_ids"],
             }},
+            "findings": findings_output_schema(),
+            "return_crosscheck": {"anyOf": [return_schema, {"type": "null"}]},
         },
     }
 
@@ -168,7 +197,8 @@ def review_packet(deal, docs):
         "fields": [{"path": path, "unit": unit, "label": label} for path, (unit, label) in FIELDS.items()],
         "sources": [
             {"id": doc.id, "filename": doc.filename, "document_type": doc.doc_type,
-             "reading": info["extraction_quality"], "text": doc.extracted_text or ""}
+             "reading": info["extraction_quality"], "text": doc.extracted_text or "",
+             **({"pdf_table_locators": locators} if (locators := table_locators(doc)) else {})}
             for doc, info in zip(sources, document_payloads(sources))
         ],
     }
@@ -210,6 +240,7 @@ def validate_rows(deal, docs, result):
     counts = Counter(fact.path for fact in result.facts)
     manifest = document_manifest(docs)
     sources = review_documents(docs)
+    sources_by_id = {source.id: source for source in sources}
     metrics = deal.metrics or {}
     current = flatten(metrics)
     current_contexts = metrics.get("_fact_context") or {}
@@ -219,13 +250,17 @@ def validate_rows(deal, docs, result):
         unit, label = FIELDS.get(path, ("", path))
         value = fact.value
         citation, source_issue = fresh_audit_evidence(fact.model_dump(), sources, manifest)
+        source_doc = sources_by_id.get(fact.source_doc_id)
+        cell_text, cell_context, cell_issue = table_fact_evidence(fact, source_doc)
+        citation.update(cell_context)
         if _workbook_cost_magnitude(fact, unit) and isinstance(value, (int, float)) and value < 0:
             value = abs(value)
             fact = fact.model_copy(update={"value": value})
             citation["source_value_note"] = COST_MAGNITUDE_NOTE
         context = {key: getattr(fact, key).strip() for key in DIMENSIONS if getattr(fact, key)}
-        issue = _row_issue(fact, unit, citation, source_issue, context, metrics, current, counts,
-                           ocr_cost_page=_pdf_ocr_cost_page(fact, unit, sources))
+        issue = _row_issue(fact, unit, citation, source_issue or cell_issue, context, metrics, current, counts,
+                           ocr_cost_page=_pdf_ocr_cost_page(fact, unit, sources), cited_cell=cell_text)
+        issue = issue or table_number_warning(fact, source_doc)
         saved = next(iter(current.get(path, [])), None)
         saved_context = current_contexts.get(path) or {}
         context_changed = any(saved_context.get(key) != context.get(key) for key in DIMENSIONS)
@@ -241,7 +276,7 @@ def validate_rows(deal, docs, result):
     return rows
 
 
-def _row_issue(fact, unit, citation, source_issue, context, metrics, current, counts, *, ocr_cost_page=False):
+def _row_issue(fact, unit, citation, source_issue, context, metrics, current, counts, *, ocr_cost_page=False, cited_cell=None):
     path, value = fact.path, fact.value
     if path not in FIELDS:
         return "This field is outside the review vocabulary."
@@ -269,7 +304,7 @@ def _row_issue(fact, unit, citation, source_issue, context, metrics, current, co
     if any(getattr(dimensions, key) != val for key, val in context.items()):
         return "The proposed context disagrees with this field's definition."
 
-    quote = fact.source_excerpt
+    quote = cited_cell if cited_cell is not None else fact.source_excerpt
     if fact.source_cell:
         # Check the value in the cited cell, even when the quote includes
         # neighboring labels or other numeric cells.
@@ -327,11 +362,42 @@ def draft_view(deal, docs):
         return {"draft": None, "revision": deal.revision}
     result = ReviewResult.model_validate(draft["result"])
     stale = result.package_id != package_identity(deal, docs)
+    rows = [] if stale else validate_rows(deal, docs, result)
+    findings, return_check = [], None
+    if not stale and (result.findings or result.return_crosscheck is not None):
+        manifest = document_manifest(docs)
+        findings = finding_rows(result.findings, docs, manifest)
+        if result.return_crosscheck is not None:
+            try:
+                record = checked_return_crosscheck(result.return_crosscheck, docs, manifest)
+                value = project_return_crosscheck({CROSSCHECK_KEY: record}, manifest)
+            except ValueError as exc:
+                return_check = {"value": None, "issue": str(exc)}
+            else:
+                return_check = {"value": value, "issue": "" if value else "The cash-flow check could not be verified."}
     return {"revision": deal.revision, "draft": {
         "id": draft["id"], "provider": draft["provider"], "stale": stale, "usage": draft.get("usage"),
-        "rows": [] if stale else validate_rows(deal, docs, result),
+        "rows": rows,
+        "reconciliation_warnings": _draft_reconciliation(deal, docs, rows),
         "coverage": [] if stale else coverage_rows(docs, result),
+        "findings": findings,
+        "return_crosscheck": return_check,
     }}
+
+
+def _draft_reconciliation(deal, docs, rows):
+    defaults = [row for row in rows if row["unit"] == "currency" and not row["issue"]
+                and not row["context_changed"] and row["current"] in (None, row["value"])
+                and row["path"].startswith(("deal_structure.", "construction_costs."))]
+    if not any(row["path"] in {"deal_structure.debt_amount", "deal_structure.total_equity_required",
+                                "deal_structure.total_project_cost", "deal_structure.construction_loan_amount"}
+               or row["path"].startswith("construction_costs.") for row in defaults):
+        return []
+    analysis = build_analysis(apply_rows(deal, docs, defaults), document_manifest(docs), deal.property_type)
+    proposed = {row["path"] for row in defaults}
+    return [check for check in analysis["readiness"]["checks"]
+            if check["key"] in {"funding", "budget"} and check["status"] == "attention"
+            and proposed.intersection(check["paths"])]
 
 
 def apply_rows(deal, docs, rows, coverage=None):
@@ -346,6 +412,7 @@ def apply_rows(deal, docs, rows, coverage=None):
             citation_fields = {
                 "source_doc_id", "source_doc_name", "source_page", "source_sheet", "source_cell", "source_range",
                 "source_excerpt", "source_document_hash", "verification_source", "source_value_note",
+                "source_table_index", "source_table_row", "source_table_column", "source_column_label",
             }
             checked_at = now_iso()
             provenance[path] = {

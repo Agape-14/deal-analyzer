@@ -17,6 +17,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from app.services.canonical_metrics import HOLD_CASH_YIELD_PATHS, canonical_return_summary, primary_strategy
 from app.services.return_schedules import SCHEDULE_KEY, active_sources_fingerprint, project_return_schedule
 from app.services.review_coverage import GROUP_REVIEWS_KEY, build_review_coverage
+from app.services.review_findings import FINDINGS_KEY, project_findings
 from app.services.review_readiness import review_readiness
 
 SCHEMA_VERSION = 7
@@ -109,6 +110,9 @@ def input_fingerprint(metrics, documents, property_type, *, schema_version=None)
     for key in ("_provenance", "_locks", "_fact_context", "_analysis_context", "_verified_document_set"):
         keys[key] = metrics.get(key)
     for key in (SCHEDULE_KEY, "_financing_measures", RETURN_REVIEWS_KEY, GROUP_REVIEWS_KEY):
+        if key in metrics:
+            keys[key] = metrics[key]
+    for key in (FINDINGS_KEY, "_return_crosscheck"):
         if key in metrics:
             keys[key] = metrics[key]
     if isinstance(keys.get("_provenance"), dict):
@@ -258,6 +262,9 @@ def evidence_for(prov, documents):
     sheet, cell = prov.get("source_sheet"), prov.get("source_cell") or prov.get("source_range")
     locator = (isinstance(page, int) and not isinstance(page, bool) and page > 0 and (not doc.get("page_count") or page <= doc["page_count"])) or (isinstance(sheet, str) and bool(sheet.strip()) and isinstance(cell, str) and bool(cell.strip()))
     item = {"document_id": doc["id"], "document_name": doc["filename"], "content_hash": doc["content_hash"], "page": page, "sheet": sheet, "cell": cell, "excerpt": str(prov.get("source_excerpt") or source)[:1000]}
+    if page and prov.get("source_table_index"):
+        item.update({"table_index": prov["source_table_index"], "table_row": prov.get("source_table_row"),
+                     "table_column": prov.get("source_table_column"), "column_label": prov.get("source_column_label")})
     return [item], "" if locator else "A page or spreadsheet cell citation is needed."
 
 
@@ -490,17 +497,21 @@ def build_analysis(metrics, documents=None, property_type="multifamily"):
     financing = project_financing(metrics, documents, (accepted.get("deal_structure") or {}).get("debt_amount"))
     serialized_facts = {p: f.model_dump() for p, f in sorted(facts.items())}
     review_coverage = build_review_coverage(metrics, serialized_facts, accepted, returns, schedule, documents, property_type)
+    from app.services.return_crosscheck import project_return_crosscheck
+
     analysis = {"schema_version": SCHEMA_VERSION, "input_hash": input_fingerprint(metrics, documents, property_type), "version": 0,
             "status": "questions" if questions else "ready", "primary_strategy": strategy, "investor_class": selected_class,
             "facts": serialized_facts, "returns": returns, "accepted_metrics": accepted,
             "return_schedule": schedule, "financing": financing,
+            "findings": project_findings(metrics, documents),
+            "return_crosscheck": project_return_crosscheck(metrics, documents),
             "questions": questions, "coverage": coverage, "review_coverage": review_coverage, "documents": documents,
             "unclassified_paths": sorted(p for p in flat if p not in REGISTRY)}
     analysis["readiness"] = review_readiness(analysis)
     return clean_json(analysis)
 
 
-def analysis_for_deal(deal):
+def analysis_for_deal(deal, *, reading_documents=None):
     stored = getattr(deal, "analysis_snapshot", None)
     if isinstance(stored, dict) and stored.get("schema_version") == SCHEMA_VERSION:
         preview = copy.deepcopy(stored)
@@ -512,14 +523,15 @@ def analysis_for_deal(deal):
             preview["version"] = stored.get("version", 0)
             if stored.get("created_at"):
                 preview["created_at"] = stored["created_at"]
-    reading_documents = None
-    if "documents" in deal.__dict__:
+    if reading_documents is None and "documents" in deal.__dict__:
         from app.services.document_versions import document_payloads
         reading_documents = document_payloads(deal.__dict__["documents"])
     preview["review_coverage"] = build_review_coverage(deal.metrics or {}, preview["facts"],
         preview["accepted_metrics"], preview["returns"], preview.get("return_schedule"), preview["documents"],
         deal.property_type or "multifamily", reading_documents)
     preview["readiness"] = review_readiness(preview)
+    preview.setdefault("findings", [])
+    preview.setdefault("return_crosscheck", None)
     return preview
 
 

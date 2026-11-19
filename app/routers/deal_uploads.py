@@ -528,6 +528,10 @@ def _extract_uploaded_file(file_path: str, ext: str) -> tuple[dict, dict, str, i
             quality["text_format_version"] = 2
             quality["cell_provenance"] = cells[:500]
             quality["key_rows"] = key_rows[:100]
+        else:
+            quality["pdf_text_format_version"] = 2
+            quality["pdf_tables"] = result_x.tables
+            quality["numeric_diagnostics"] = result_x.numeric_diagnostics
         return extraction, quality, extracted_text, page_count
     except Exception as e:
         file_hash = sha256_file(file_path)

@@ -7,6 +7,7 @@ import { fmtMoney, fmtPct, fmtMultiple } from "@/lib/utils";
 import { operatingFactContext } from "@/lib/fact-context";
 import { EvidenceViewer } from "./evidence-viewer";
 import { ReturnContextPanel } from "./return-context-panel";
+import { ReturnCrosscheckPanel } from "./return-crosscheck";
 import { ReturnSchedulePanel } from "./return-schedule-panel";
 import { FinancingMeasuresPanel } from "./financing-measures-panel";
 import { ScoreBreakdown } from "./score-breakdown";
@@ -68,7 +69,10 @@ export function AcceptedSummary({ deal }: { deal: DealDetail }) {
         <div><h2 className="text-lg font-semibold">One reviewed view of the deal</h2>
           <p className="mt-1 text-sm text-muted-foreground">{analysis.primary_strategy === "unknown" ? "Strategy needs clarification" : `Primary strategy: ${analysis.primary_strategy.replaceAll("_", " ")}`}{analysis.investor_class !== "unspecified" ? ` · ${analysis.investor_class}` : ""}</p>
         </div>
-        <Link href={`/deals/${deal.id}?tab=questions`} className="rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground">{analysis.questions.length || analysis.readiness?.attention_count ? "Review exceptions" : "No material questions"}</Link>
+        <Link href={`/deals/${deal.id}?tab=questions`} className="rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground">
+          {analysis.questions.length || analysis.readiness?.attention_count || analysis.findings?.some(item => item.status === "needs_review" || item.kind === "conflict" && item.status === "current")
+            ? "Review exceptions" : analysis.findings?.length ? "Source findings" : "No material questions"}
+        </Link>
       </div>
       {analysis.readiness && <div className="mt-4 border-t border-border/70 pt-4"><ReadinessChecks analysis={analysis} dealId={deal.id} /></div>}
       {analysis.review_coverage && <ReviewCoveragePanel coverage={analysis.review_coverage} dealId={deal.id} />}
@@ -82,6 +86,7 @@ export function AcceptedSummary({ deal }: { deal: DealDetail }) {
     </Card>
     <ScoreBreakdown scores={deal.scores ?? {}} returnSchedule={analysis.return_schedule} />
     <ReturnContextPanel deal={deal} />
+    <ReturnCrosscheckPanel check={analysis.return_crosscheck} />
     <ReturnSchedulePanel deal={deal} />
     <Card className="p-5 md:p-6"><h2 className="text-lg font-semibold">Capital, terms and operations</h2>
       {acceptedPaths.length === 0 && <p className="mt-3 text-sm text-muted-foreground">Add source documents to populate these terms. Open Questions for evidence that needs clarification.</p>}

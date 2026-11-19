@@ -167,7 +167,8 @@ async def verify_review_surfaces(db, deals: list, *, audit_scores=False) -> dict
     _require([row["id"] for row in compared] == ids, "Compare", "selected deal order")
     for summary, comparison in zip(summaries, compared):
         deal_id = summary["id"]
-        for key in ("version", "returns", "return_schedule", "accepted_metrics", "facts", "financing", "readiness"):
+        for key in ("version", "returns", "return_schedule", "return_crosscheck", "findings",
+                    "accepted_metrics", "facts", "financing", "readiness"):
             _require(comparison["analysis"][key] == summary["analysis"][key], "Compare", key, deal_id)
         _require(comparison["scores"] == summary["scores"], "Compare", "scores", deal_id)
         _pdf(summary, await _body(await deal_pdf_report(deal_id, db)))

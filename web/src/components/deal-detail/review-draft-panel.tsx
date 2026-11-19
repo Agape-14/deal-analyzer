@@ -5,8 +5,10 @@ import { useRouter } from "next/navigation";
 import { ClipboardPaste, Download, FileUp } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { api } from "@/lib/api";
-import type { ReviewCoverageGroup } from "@/lib/types";
+import type { ReturnCrosscheck, ReviewCoverageGroup, SourceFinding } from "@/lib/types";
+import { EvidenceViewer } from "./evidence-viewer";
 import { coverageLabels } from "./review-coverage";
+import { ReturnCrosscheckDetails } from "./return-crosscheck";
 
 const CODEX_LINK = "codex://new?prompt=" + encodeURIComponent(
   "I will attach a Deal Analyzer review packet. Follow its instructions and output schema. Check each quote and compare the figures across sources. Return one JSON code block so I can use Paste JSON in Deal Analyzer.",
@@ -22,7 +24,8 @@ type Row = {
   context_changed?: boolean;
   missing_context?: string[];
   issue: string;
-  evidence: { source_doc_name?: string; source_page?: number; source_sheet?: string; source_cell?: string; source_excerpt?: string; source_value_note?: string };
+  evidence: { source_doc_id?: number; source_doc_name?: string; source_document_hash?: string; source_page?: number; source_sheet?: string; source_cell?: string; source_excerpt?: string; source_value_note?: string;
+    source_table_index?: number; source_table_row?: number; source_column_label?: string };
   context: Record<string, string>;
 };
 
@@ -43,6 +46,9 @@ type ReviewState = {
     stale: boolean;
     rows: Row[];
     coverage?: CoverageRow[];
+    findings?: Array<Omit<SourceFinding, "status" | "decision"> & { issue: string }>;
+    return_crosscheck?: { value: ReturnCrosscheck | null; issue: string } | null;
+    reconciliation_warnings?: Array<{ key: string; label: string; detail: string }>;
     usage?: { estimated_cost_usd: number | null };
   } | null;
 };
@@ -99,6 +105,8 @@ export function ReviewDraftPanel({ dealId, revision, refreshKey, ready }: {
   const [state, setState] = React.useState<ReviewState | null>(null);
   const [selected, setSelected] = React.useState<Set<string>>(new Set());
   const [selectedCoverage, setSelectedCoverage] = React.useState<Set<ReviewCoverageGroup>>(new Set());
+  const [selectedFindings, setSelectedFindings] = React.useState<Set<string>>(new Set());
+  const [applyCheck, setApplyCheck] = React.useState(false);
   const [working, setWorking] = React.useState(false);
   const busy = React.useRef(false);
   const [showPaste, setShowPaste] = React.useState(false);
@@ -110,6 +118,7 @@ export function ReviewDraftPanel({ dealId, revision, refreshKey, ready }: {
   const draft = state?.draft;
   const routineRows = draft?.rows.filter(row => !needsAttention(row)) ?? [];
   const exceptionRows = draft?.rows.filter(needsAttention) ?? [];
+  const savingReview = selectedCoverage.size > 0 || selectedFindings.size > 0 || applyCheck;
   const running = ["queued", "running"].includes(state?.job?.status || "");
 
   React.useEffect(() => {
@@ -134,6 +143,8 @@ export function ReviewDraftPanel({ dealId, revision, refreshKey, ready }: {
   React.useEffect(() => {
     setSelected(new Set((draft?.rows || []).filter(row => !needsAttention(row)).map(row => row.path)));
     setSelectedCoverage(new Set());
+    setSelectedFindings(new Set(draft?.findings?.filter(row => !row.issue).map(row => row.id) ?? []));
+    setApplyCheck(Boolean(draft?.return_crosscheck?.value && !draft.return_crosscheck.issue));
   // Polling the same draft should preserve the analyst's selections.
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [draft?.id, draft?.stale]);
@@ -162,19 +173,24 @@ export function ReviewDraftPanel({ dealId, revision, refreshKey, ready }: {
   }
 
   async function approve() {
-    if (busy.current || !draft || !state || (!selected.size && !selectedCoverage.size)) return;
+    if (busy.current || !draft || !state || (!selected.size && !savingReview)) return;
     busy.current = true;
     setWorking(true);
     setError("");
     setMessage("");
     try {
-      const result = await api.post<ReviewState & { applied: number; coverage_applied?: number }>(base + "/approve", {
+      const result = await api.post<ReviewState & { applied: number; coverage_applied?: number; findings_applied?: number; return_crosscheck_applied?: boolean }>(base + "/approve", {
         draft_id: draft.id, expected_revision: state.revision, paths: [...selected], coverage_groups: [...selectedCoverage],
+        finding_ids: [...selectedFindings], apply_return_crosscheck: applyCheck,
       });
       setState(result);
-      setMessage(result.coverage_applied
-        ? `${result.applied} values applied and ${result.coverage_applied} coverage findings saved. Summary and scoring were refreshed.`
-        : `${result.applied} ${result.applied === 1 ? "value applied" : "values applied"}. Summary and scoring were refreshed.`);
+      const applied = [
+        result.applied ? `${result.applied} ${result.applied === 1 ? "value applied" : "values applied"}` : "",
+        result.coverage_applied ? `${result.coverage_applied} coverage ${result.coverage_applied === 1 ? "finding" : "findings"} saved` : "",
+        result.findings_applied ? `${result.findings_applied} source ${result.findings_applied === 1 ? "finding" : "findings"} saved` : "",
+        result.return_crosscheck_applied ? "Cash-flow check saved" : "",
+      ].filter(Boolean);
+      setMessage(applied.join(" · ") + ". Summary and scoring were refreshed.");
       router.refresh();
     } catch (err) {
       setError(errorMessage(err));
@@ -186,8 +202,11 @@ export function ReviewDraftPanel({ dealId, revision, refreshKey, ready }: {
 
   function renderRow(row: Row, index: number) {
     const changed = row.current != null && row.current !== row.value;
-    const location = row.evidence.source_page ? `page ${row.evidence.source_page}` :
-      [row.evidence.source_sheet, row.evidence.source_cell].filter(Boolean).join(" ");
+    const location = row.evidence.source_page ? [
+      `page ${row.evidence.source_page}`,
+      row.evidence.source_table_index && `table ${row.evidence.source_table_index}, row ${row.evidence.source_table_row}`,
+      row.evidence.source_column_label,
+    ].filter(Boolean).join(" · ") : [row.evidence.source_sheet, row.evidence.source_cell].filter(Boolean).join(" ");
     return (
       <li key={row.path + index} className="space-y-1 px-3 py-2.5 text-xs">
         <label className="flex items-start gap-2">
@@ -213,6 +232,9 @@ export function ReviewDraftPanel({ dealId, revision, refreshKey, ready }: {
           <p>{[row.evidence.source_doc_name, location].filter(Boolean).join(" · ")}</p>
           {row.evidence.source_excerpt && <blockquote className="border-l border-border pl-2">{row.evidence.source_excerpt}</blockquote>}
           {row.evidence.source_value_note && <p>{row.evidence.source_value_note}</p>}
+          {row.issue && row.evidence.source_document_hash && row.evidence.source_page &&
+            <a href={`/api/deals/documents/${row.evidence.source_doc_id}/file#page=${row.evidence.source_page}`}
+              target="_blank" rel="noreferrer" className="inline-block text-primary underline">Open original page</a>}
         </div>
       </li>
     );
@@ -277,13 +299,18 @@ export function ReviewDraftPanel({ dealId, revision, refreshKey, ready }: {
             )}
           </div>
           {draft.stale ? <p className="text-xs text-muted-foreground">The deal or its sources changed. Start a new review or download a fresh packet.</p> :
-            draft.rows.length === 0 && !draft.coverage?.length ? <p className="text-xs text-muted-foreground">This review found no supported values in the source package.</p> : (
+            draft.rows.length === 0 && !draft.coverage?.length && !draft.findings?.length && !draft.return_crosscheck ? <p className="text-xs text-muted-foreground">This review found no supported values in the source package.</p> : (
               <>
-                {exceptionRows.length > 0 && <section aria-label="Review exceptions" className="space-y-2">
+                {(exceptionRows.length > 0 || !!draft.reconciliation_warnings?.length) && <section aria-label="Review exceptions" className="space-y-2">
                   <h6 className="text-sm font-medium">Review exceptions</h6>
-                  <ul className="max-h-72 divide-y divide-border/70 overflow-auto rounded-lg border border-border/70">
+                  {draft.reconciliation_warnings?.map(check => (
+                    <p key={check.key} className="rounded-lg border border-border/70 p-3 text-xs text-warning">
+                      <strong>{check.label}</strong> · {check.detail}
+                    </p>
+                  ))}
+                  {exceptionRows.length > 0 && <ul className="max-h-72 divide-y divide-border/70 overflow-auto rounded-lg border border-border/70">
                     {exceptionRows.map(renderRow)}
-                  </ul>
+                  </ul>}
                 </section>}
                 {routineRows.length > 0 && <details open={routineRows.length <= 5} className="rounded-lg border border-border/70">
                   <summary className="cursor-pointer px-3 py-2.5 text-sm font-medium">
@@ -317,8 +344,47 @@ export function ReviewDraftPanel({ dealId, revision, refreshKey, ready }: {
                     ))}
                   </fieldset>
                 )}
-                <Button size="sm" type="button" disabled={(!selected.size && !selectedCoverage.size) || working} onClick={() => void approve()}>
-                  {selected.size ? `Apply ${selected.size} ${selected.size === 1 ? "value" : "values"}${selectedCoverage.size ? " and save findings" : ""}` : selectedCoverage.size ? "Save review findings" : "Apply selected values"}
+                {!!draft.findings?.length && (
+                  <fieldset className="space-y-3 rounded-lg border border-border/70 p-3 text-xs" disabled={working}>
+                    <legend className="px-1 font-medium">Source findings</legend>
+                    {draft.findings.map((finding, index) => (
+                      <div key={`${finding.id}-${index}`} className="space-y-1.5">
+                        <label className="flex items-start gap-2 font-medium">
+                          <input className="mt-0.5 accent-primary" type="checkbox" disabled={Boolean(finding.issue)}
+                            checked={!finding.issue && selectedFindings.has(finding.id)} onChange={event => {
+                              const next = new Set(selectedFindings);
+                              if (event.target.checked) next.add(finding.id);
+                              else next.delete(finding.id);
+                              setSelectedFindings(next);
+                            }} />
+                          {finding.title}
+                        </label>
+                        <p className="pl-5 text-muted-foreground">{finding.detail}</p>
+                        {finding.issue ? <p className="pl-5 text-warning">{finding.issue}</p> : (
+                          <div className="flex flex-wrap gap-2 pl-5">
+                            {finding.evidence.map((source, position) => (
+                              <EvidenceViewer key={`${source.document_id}-${position}`} source={source} />
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    ))}
+                  </fieldset>
+                )}
+                {draft.return_crosscheck && (
+                  <fieldset className="space-y-2 rounded-lg border border-border/70 p-3" disabled={working}>
+                    <legend className="px-1 text-xs font-medium">PDF cash-flow check</legend>
+                    <label className="flex items-center gap-2 text-sm font-medium">
+                      <input type="checkbox" className="accent-primary" disabled={!draft.return_crosscheck.value || Boolean(draft.return_crosscheck.issue)}
+                        checked={applyCheck} onChange={event => setApplyCheck(event.target.checked)} />
+                      Save cash-flow check
+                    </label>
+                    {draft.return_crosscheck.issue && <p className="text-xs text-warning">{draft.return_crosscheck.issue}</p>}
+                    {draft.return_crosscheck.value && <ReturnCrosscheckDetails check={draft.return_crosscheck.value} />}
+                  </fieldset>
+                )}
+                <Button size="sm" type="button" disabled={(!selected.size && !savingReview) || working} onClick={() => void approve()}>
+                  {selected.size ? `Apply ${selected.size} ${selected.size === 1 ? "value" : "values"}${savingReview ? " and save review" : ""}` : savingReview ? "Save review" : "Apply selected values"}
                 </Button>
               </>
             )}

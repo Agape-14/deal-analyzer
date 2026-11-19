@@ -82,3 +82,11 @@ def schedule_context(schedule):
         f" · Equity basis: {schedule['equity_basis']}"
         f" · Period: {schedule['period_basis']}"
     )
+
+
+def cash_flow_check_context(check):
+    return " · ".join(part for part in (
+        f"Investor class: {check['investor_class']}", f"Scenario: {check['scenario']}",
+        f"Calculation basis: {check['basis']}" if check.get("basis") else None,
+        "Period: annual", check["currency"],
+    ) if part)

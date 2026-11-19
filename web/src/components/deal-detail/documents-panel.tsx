@@ -386,7 +386,7 @@ export function DocumentsPanel({
             {documents.map((d) => {
               const status = documentStatus(d);
               return (
-                <li key={d.id} className="py-3 flex items-center gap-3 group">
+                <li id={`document-${d.id}`} key={d.id} className="scroll-mt-20 py-3 flex items-center gap-3 group">
                   <div className="h-9 w-9 rounded-md bg-muted/60 ring-1 ring-border/70 grid place-items-center shrink-0">
                     <FileText className="h-4 w-4 text-muted-foreground" />
                   </div>
@@ -402,6 +402,21 @@ export function DocumentsPanel({
                     {d.extraction_quality?.warnings?.map((warning) => (
                       <p key={warning} className="mt-1 text-xs text-warning">{warning}</p>
                     ))}
+                    {!!d.extraction_quality?.numeric_diagnostics?.length && (
+                      <details className="mt-2 text-xs">
+                        <summary className="cursor-pointer font-medium">Suspect table values</summary>
+                        <ul className="mt-1 space-y-1 text-muted-foreground">
+                          {d.extraction_quality.numeric_diagnostics.map((item, index) => (
+                            <li key={`${item.page}-${index}`}>
+                              <a href={`/api/deals/documents/${d.id}/file#page=${item.page}`} target="_blank" rel="noreferrer" className="text-primary underline">
+                                Page {item.page}
+                              </a>
+                              {" · "}{[item.row_label, item.column_label, item.native_token, item.corroborating_token].filter(Boolean).join(" · ")}
+                            </li>
+                          ))}
+                        </ul>
+                      </details>
+                    )}
                     <div className="text-[11px] text-muted-foreground mt-0.5 flex items-center gap-2 flex-wrap">
                       <span className="uppercase tracking-wider">{d.doc_type.replace(/_/g, " ")}</span>
                       <span className="opacity-40">-</span>

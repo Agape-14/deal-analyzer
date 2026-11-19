@@ -15,6 +15,7 @@ import { DealHeaderRow } from "./deal-header-row";
 import { MetricsTable, type CompareMode } from "./metrics-table";
 import { CustomPresetDrawer, readCustomPreset } from "./custom-preset-drawer";
 import { ReturnScheduleTable } from "@/components/deal-detail/return-schedule-panel";
+import { ReturnCrosscheckDetails } from "@/components/deal-detail/return-crosscheck";
 import { OptionalSaleReturns } from "@/components/deal-detail/return-context-panel";
 
 const VALID_MODES: CompareMode[] = ["values", "winners", "deltas", "normalized"];
@@ -279,6 +280,20 @@ export function CompareClient({ deals }: { deals: DealSummary[] }) {
                   <Card key={deal.id} className="space-y-3 p-4">
                     <h3 className="text-sm font-semibold">{deal.project_name}</h3>
                     <ReturnScheduleTable schedule={schedule} />
+                  </Card>
+                ) : null;
+              })}
+            </section>
+          )}
+          {details.some(deal => deal.analysis?.return_crosscheck) && (
+            <section className="mt-6 grid gap-4" aria-label="PDF cash-flow checks">
+              <h2 className="text-base font-semibold">PDF cash-flow checks</h2>
+              {details.map(deal => {
+                const check = deal.analysis?.return_crosscheck;
+                return check ? (
+                  <Card key={deal.id} className="space-y-3 p-4">
+                    <h3 className="text-sm font-semibold">{deal.project_name}</h3>
+                    <ReturnCrosscheckDetails check={check} />
                   </Card>
                 ) : null;
               })}

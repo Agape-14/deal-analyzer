@@ -32,7 +32,8 @@ export interface AnalysisFact {
   state: "reported" | "checked" | "calculated" | "disputed" | "missing" | "manual" | "unclassified";
   reason: string;
   identity: { metric: string; unit: string; scenario: string; investor_class: string; basis: string; debt_phase: string; period: string; currency: string };
-  evidence: Array<{ document_id: number; document_name: string; content_hash: string; page?: number; sheet?: string; cell?: string; excerpt?: string }>;
+  evidence: Array<{ document_id: number; document_name: string; content_hash: string; page?: number; sheet?: string; cell?: string; excerpt?: string;
+    table_index?: number; table_row?: number; table_column?: number; column_label?: string | null }>;
   dependencies: string[];
   formula?: string;
   alternatives: unknown[];
@@ -87,6 +88,39 @@ export interface ReviewReadiness {
   attention_count: number;
 }
 
+export interface SourceFinding {
+  id: string;
+  kind: "conflict" | "source_note";
+  title: string;
+  detail: string;
+  evidence: AnalysisFact["evidence"];
+  status: "current" | "needs_review" | "resolved";
+  decision?: { text: string; at: string; by: string };
+}
+
+export interface ReturnCrosscheck {
+  status: "current" | "needs_review";
+  scenario: "hold" | "sale";
+  investor_class: string;
+  basis?: string | null;
+  currency: string;
+  calculation_basis: string;
+  annual_irr_pct: number | null;
+  cash_flow_multiple: number | null;
+  rows: Array<{
+    year: number;
+    label?: string;
+    amount: number;
+    flow_scope: "unspecified" | "operating" | "capital_event" | "refinance" | "sale";
+    date_label?: string | null;
+    flow_scope_label?: string;
+    evidence?: AnalysisFact["evidence"];
+    event_evidence?: AnalysisFact["evidence"];
+  }>;
+  warnings: string[];
+  evidence: AnalysisFact["evidence"];
+}
+
 export interface DealAnalysis {
   schema_version: number;
   version: number;
@@ -102,6 +136,8 @@ export interface DealAnalysis {
   return_schedule?: ReturnSchedule | null;
   review_coverage?: ReviewCoverage;
   readiness?: ReviewReadiness;
+  findings?: SourceFinding[];
+  return_crosscheck?: ReturnCrosscheck | null;
   coverage: { accepted: number; checked: number; manual: number; calculated: number; total: number };
   unclassified_paths: string[];
 }
@@ -228,6 +264,14 @@ export interface DealDocument {
   upload_date: string;
   has_text: boolean;
   extraction_quality?: {
+    numeric_diagnostics?: Array<{
+      code: string;
+      page: number;
+      row_label?: string | null;
+      column_label?: string | null;
+      native_token: string;
+      corroborating_token?: string | null;
+    }>;
     warnings?: string[];
     quality_score: number | null;
     ocr_pages: number;

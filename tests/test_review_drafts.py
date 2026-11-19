@@ -549,3 +549,117 @@ async def test_analysis_schema_upgrade_preserves_existing_review_packets_and_dra
     approved = await client.post(base + "/approve", json=approval(draft))
     assert approved.status_code == 200, approved.text
     assert approved.json()["applied"] == 1
+
+
+async def test_cited_finding_and_decision_survive_unrelated_upload_but_flag_new_version(client):
+    deal_id = await upload_csv(client)
+    await upload_csv(client, deal_id, "alternate.csv", value=600000)
+    deal_url = f"/api/deals/{deal_id}"
+    base = deal_url + "/review"
+    packet = await packet_for(client, base)
+    citations = []
+    for source in packet["sources"]:
+        citations.append({
+            "source_doc_id": source["id"], "source_sheet": "CSV", "source_cell": "B2",
+            "source_excerpt": next(line for line in source["text"].splitlines() if "B2=" in line),
+        })
+    finding = {"kind": "conflict", "title": "Minimum commitment differs",
+               "detail": "The two source files state different minimum commitments.", "citations": citations}
+    payload = {"package_id": packet["package_id"], "facts": [], "findings": [finding]}
+    wrong = {**finding, "citations": [{**citations[0], "source_excerpt": "Minimum commitment invented quote"}, citations[1]]}
+    invalid = (await client.post(base + "/draft", json={**payload, "findings": [wrong]})).json()
+    row = invalid["draft"]["findings"][0]
+    assert "quote" in row["issue"].lower()
+    assert (await client.post(base + "/approve", json={
+        "draft_id": invalid["draft"]["id"], "expected_revision": invalid["revision"], "finding_ids": [row["id"]],
+    })).status_code == 422
+
+    imported = await client.post(base + "/draft", json=payload)
+    assert imported.status_code == 200, imported.text
+    view = imported.json()
+    row = view["draft"]["findings"][0]
+    assert not row["issue"] and len(row["evidence"]) == 2
+    assert not (await client.get(deal_url)).json()["analysis"]["findings"]
+    saved = await client.post(base + "/approve", json={
+        "draft_id": view["draft"]["id"], "expected_revision": view["revision"], "finding_ids": [row["id"]],
+    })
+    assert saved.status_code == 200, saved.text
+    assert saved.json()["findings_applied"] == 1
+    detail = (await client.get(deal_url)).json()
+    assert detail["analysis"]["findings"][0]["status"] == "current"
+    assert detail["analysis"]["facts"][PATH]["value"] is None
+    decision_url = base + f"/findings/{row['id']}/resolve"
+    decided = await client.post(decision_url, json={
+        "expected_revision": detail["revision"], "decision": "Both terms are retained for this comparison.",
+    })
+    assert decided.status_code == 200, decided.text
+    assert decided.json()["findings"][0]["status"] == "resolved"
+
+    await upload_csv(client, deal_id, "independent-source.csv", value=700000)
+    assert (await client.get(deal_url)).json()["analysis"]["findings"][0]["status"] == "resolved"
+    await upload_csv(client, deal_id, "terms.csv", value=550000)
+    changed = (await client.get(deal_url)).json()
+    [current] = changed["analysis"]["findings"]
+    assert current["status"] == "needs_review"
+    assert current["decision"]["text"] == "Both terms are retained for this comparison."
+    assert (await client.post(decision_url, json={
+        "expected_revision": changed["revision"], "decision": "Keep the previous note.",
+    })).status_code == 409
+
+
+async def test_pdf_table_citation_checks_the_selected_cell_and_only_flags_affected_value():
+    from types import SimpleNamespace
+    from app.services.review_drafts import ReviewResult, validate_rows
+
+    row_quote = "Table 1 row 2 | Item=Construction loan | Commitment=$160,000 | Peak balance=$180,000"
+    doc = SimpleNamespace(id=1, filename="synthetic-table.pdf", page_count=1, file_sha256="a" * 64,
+                          extracted_text=f"--- Page 1 ---\n{row_quote}", extraction_quality={
+        "pdf_tables": [{
+            "page": 1, "table_index": 1, "column_labels": ["Item", "Commitment", "Peak balance"],
+            "rows": [["Item", "Commitment", "Peak balance"], ["Construction loan", "$160,000", "$180,000"]],
+            "review_rows": [{"row": 2, "text": row_quote}],
+        }],
+        "numeric_diagnostics": [{
+            "page": 1, "table_index": 1, "row": 2, "column": 2, "source_row": row_quote,
+            "row_label": "Construction loan", "column_label": "Commitment", "native_token": "$160,000",
+            "corroborating_token": "$16,000",
+        }],
+    })
+    shared = dict(source_doc_id=1, source_page=1, source_excerpt=row_quote, source_table_index=1, source_table_row=2)
+    result = ReviewResult.model_validate({"package_id": "a" * 64, "facts": [
+        {**shared, "path": "deal_structure.construction_loan_amount", "value": 160000, "source_table_column": 2},
+        {**shared, "path": "deal_structure.debt_amount", "value": 180000, "source_table_column": 3},
+        {**shared, "path": "deal_structure.permanent_loan_amount", "value": 180000, "source_table_column": 2},
+    ]})
+    suspect, supported, neighboring = validate_rows(SimpleNamespace(metrics={}), [doc], result)
+    assert "Readings differ" in suspect["issue"]
+    assert supported["issue"] == ""
+    assert supported["evidence"]["source_column_label"] == "Peak balance"
+    assert "does not contain the audited value" in neighboring["issue"]
+
+
+async def test_draft_reconciles_funding_before_any_values_are_saved(client):
+    created = await client.post("/api/deals", json={"project_name": "Synthetic project funding"})
+    deal_url = f"/api/deals/{created.json()['id']}"
+    upload = await client.post(deal_url + "/documents/upload", files={
+        "file": ("funding.csv", b"Line,Amount\nTotal cost,500000\nEquity,100000\nConstruction loan,350000\n", "text/csv"),
+    })
+    assert upload.status_code == 200, upload.text
+    base = deal_url + "/review"
+    packet = await packet_for(client, base)
+    source = packet["sources"][0]
+    facts = []
+    for row, path, value in [
+        (2, "deal_structure.total_project_cost", 500000),
+        (3, "deal_structure.total_equity_required", 100000),
+        (4, "deal_structure.debt_amount", 350000),
+    ]:
+        cell = f"B{row}"
+        facts.append({"path": path, "value": value, "source_doc_id": source["id"], "source_sheet": "CSV",
+                      "source_cell": cell, "source_excerpt": next(line for line in source["text"].splitlines() if cell + "=" in line)})
+    saved = await client.post(base + "/draft", json={"package_id": packet["package_id"], "facts": facts})
+    assert saved.status_code == 200, saved.text
+    assert all(not row["issue"] for row in saved.json()["draft"]["rows"])
+    [warning] = saved.json()["draft"]["reconciliation_warnings"]
+    assert warning["key"] == "funding" and "50,000" in warning["detail"]
+    assert (await client.get(deal_url)).json()["analysis"]["facts"]["deal_structure.total_project_cost"]["value"] is None

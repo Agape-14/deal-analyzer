@@ -4,7 +4,8 @@ import * as React from "react";
 import { api } from "@/lib/api";
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 
-export type EvidenceSource = { document_id: number; document_name: string; page?: number | null; sheet?: string | null; cell?: string | null; excerpt?: string; content_hash?: string };
+export type EvidenceSource = { document_id: number; document_name: string; page?: number | null; sheet?: string | null; cell?: string | null; excerpt?: string; content_hash?: string;
+  table_index?: number; table_row?: number; table_column?: number; column_label?: string | null };
 type Excerpt = { text: string; included_in_review: boolean; hash_matches: boolean; analysis_version: number; truncated: boolean };
 
 export function EvidenceViewer({ source, autoOpen = false, onClose }: { source: EvidenceSource; autoOpen?: boolean; onClose?: () => void }) {
@@ -22,7 +23,11 @@ export function EvidenceViewer({ source, autoOpen = false, onClose }: { source: 
     api.get<Excerpt>(`/api/deals/documents/${source.document_id}/excerpt?${params}`).then(value => { if (active) setData(value); }).catch(() => { if (active) setError(true); });
     return () => { active = false; };
   }, [open, source.document_id, source.page, source.sheet, source.cell, source.content_hash, retry]);
-  const location = source.page ? `page ${source.page}` : source.sheet ? `${source.sheet} ${source.cell ?? ""}` : "extracted text";
+  const location = source.page ? [
+    `page ${source.page}`,
+    source.table_index && `table ${source.table_index}, row ${source.table_row}`,
+    source.table_index && (source.column_label || `column ${source.table_column}`),
+  ].filter(Boolean).join(" · ") : source.sheet ? `${source.sheet} ${source.cell ?? ""}` : "extracted text";
   const quote = source.excerpt?.trim() ?? "";
   const index = data && quote ? data.text.indexOf(quote) : -1;
   return <>{!autoOpen && <button type="button" className="underline text-left text-primary" onClick={() => setOpen(true)}>{source.document_name} · {location}</button>}

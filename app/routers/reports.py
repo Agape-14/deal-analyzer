@@ -34,6 +34,7 @@ from app.services.canonical_metrics import canonical_return_summary
 from app.services.analysis import analysis_for_deal, effective_scores
 from app.services.financial_presentation import (
     RETURN_LABELS, accepted_return_fact, operating_fact_context, optional_sale_returns, return_context, return_evidence,
+    cash_flow_check_context,
     schedule_context, schedule_source, source_reference,
 )
 
@@ -265,6 +266,28 @@ async def deal_pdf_report(deal_id: int, db: AsyncSession = Depends(get_db)):
             details = " · ".join(part for part in (value, period.get("note"), cell) if part)
             rows.append((f"Year {period['year']}", Paragraph(escape(details), styles["Small"])))
         story.append(_metric_table(rows))
+
+    check = analysis.get("return_crosscheck")
+    if check:
+        story.append(Paragraph("PDF Cash-Flow Check", styles["SectionHeading"]))
+        story.append(Paragraph(escape(cash_flow_check_context(check)), styles["Small"]))
+        if check["status"] == "needs_review":
+            story.append(Paragraph("Source version changed. Recheck the calculation.", styles["Small"]))
+        else:
+            multiple = check["cash_flow_multiple"]
+            story.append(_metric_table([
+                ("Annual-period IRR", _fmt_pct(check["annual_irr_pct"])),
+                ("Cash-flow multiple", f"{multiple:.2f}x" if multiple is not None else "Unavailable"),
+            ]))
+            story.append(Paragraph(escape(check["calculation_basis"]), styles["Small"]))
+            rows = []
+            for period in check["rows"]:
+                reference = source_reference([*period["evidence"], *period["event_evidence"]])
+                details = " · ".join(part for part in (
+                    f"{check['currency']} {period['amount']:,.2f}", period["flow_scope_label"], period["date_label"], reference,
+                ) if part)
+                rows.append((period["label"], Paragraph(escape(details), styles["Small"])))
+            story.append(_metric_table(rows))
 
     # Project details
     story.append(Paragraph("Project Details", styles["SectionHeading"]))

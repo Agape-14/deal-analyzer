@@ -111,7 +111,7 @@ def _repair_review_rows(deal, docs, item):
         metrics["_fact_context"][row["path"]] = row["context"]
     metrics = apply_rows(shadow, docs, rows)
     remaining = [fact for fact in review.facts if fact.path not in selected]
-    if remaining or review.coverage:
+    if remaining or review.coverage or review.findings or review.return_crosscheck:
         updated = review.model_copy(update={
             "facts": remaining, "package_id": package_identity(SimpleNamespace(
                 id=deal.id, property_type=deal.property_type, metrics=metrics), docs),

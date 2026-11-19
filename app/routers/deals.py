@@ -1,12 +1,13 @@
 import os
 import io
+from collections import defaultdict
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Response
 from fastapi.responses import StreamingResponse
 from app.rate_limit import limit
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import selectinload
 from pydantic import BaseModel, Field, field_validator
 from typing import Optional
@@ -21,8 +22,10 @@ from app.services.canonical_metrics import canonical_return_summary
 from app.services.analysis import analysis_for_deal, effective_scores
 from app.services.financial_presentation import (
     RETURN_LABELS, accepted_return_fact, operating_fact_context, optional_sale_returns, return_context, return_evidence,
+    cash_flow_check_context,
     schedule_context, schedule_source, source_reference,
 )
+from app.services.document_versions import document_payloads
 from app.services.data_integrity import ANALYST_REVIEW_RECORD_KEYS, quality_summary
 from app.services.location_intelligence import build_location_bundle
 
@@ -96,11 +99,13 @@ class CompareRequest(BaseModel):
     deal_ids: list[int] = Field(..., min_length=1, max_length=8)
 
 
-def _deal_to_dict(deal: Deal, developer_name: str = None, *, accepted_only=False) -> dict:
+def _deal_to_dict(deal: Deal, developer_name: str = None, *, accepted_only=False, reading_documents=None) -> dict:
     metrics = dict(deal.metrics or {})
     metrics.pop("_review_draft", None)
     metrics.pop("_credit_review_attempt", None)
-    analysis = analysis_for_deal(deal)
+    metrics.pop("_review_findings", None)
+    metrics.pop("_return_crosscheck", None)
+    analysis = analysis_for_deal(deal, reading_documents=reading_documents)
     if accepted_only:
         metrics = dict(analysis["accepted_metrics"])
     scores = effective_scores(deal)
@@ -143,15 +148,35 @@ async def list_deals(
 ):
     """List deals. Trashed (soft-deleted) rows are excluded unless
     `?trash=true` is passed - handy for a future 'Trash' view."""
-    q = select(Deal).options(selectinload(Deal.developer)).order_by(Deal.created_at.desc())
-    if trash:
-        q = q.where(Deal.deleted_at.is_not(None))
-    else:
-        q = q.where(Deal.deleted_at.is_(None))
+    visible = Deal.deleted_at.is_not(None) if trash else Deal.deleted_at.is_(None)
+    q = select(Deal).options(selectinload(Deal.developer)).where(visible).order_by(Deal.created_at.desc())
     result = await db.execute(q)
     deals = result.scalars().all()
+    if not deals:
+        return []
+
+    # Only project the flags used for reading diagnostics. The original text
+    # is needed for source review and detail requests, which load it separately.
+    text = func.coalesce(DealDocument.extracted_text, "")
+    reading_rows = await db.execute(
+        select(
+            DealDocument.id, DealDocument.deal_id, DealDocument.filename, DealDocument.file_path,
+            DealDocument.file_sha256, DealDocument.source_role, DealDocument.superseded_by_id,
+            DealDocument.version_note, DealDocument.doc_type, DealDocument.page_count,
+            DealDocument.upload_date, DealDocument.extraction_quality,
+            (text != "").label("has_text"),
+            text.contains("[formula has no cached value]").label("has_uncached_formulas"),
+        )
+        .join(Deal, Deal.id == DealDocument.deal_id)
+        .where(visible)
+        .order_by(DealDocument.id)
+    )
+    documents_by_deal = defaultdict(list)
+    for document in reading_rows:
+        documents_by_deal[document.deal_id].append(document)
     return [
-        _deal_to_dict(d, d.developer.name if d.developer else "")
+        _deal_to_dict(d, d.developer.name if d.developer else "",
+                      reading_documents=document_payloads(documents_by_deal.get(d.id, ())))
         for d in deals
     ]
 
@@ -199,7 +224,6 @@ async def get_deal(deal_id: int, db: AsyncSession = Depends(get_db)):
         raise HTTPException(status_code=404, detail="Deal not found")
 
     data = _deal_to_dict(deal, deal.developer.name if deal.developer else "")
-    from app.services.document_versions import document_payloads
     data["documents"] = document_payloads(deal.documents)
     # Quality summary of the metrics (counts of verified / extracted / conflicting / locked)
     if deal.metrics:
@@ -754,6 +778,7 @@ async def export_comparison(data: CompareRequest, db: AsyncSession = Depends(get
     projections = []
     debt_measures = []
     sale_returns = []
+    cash_flow_checks = []
     for deal in deals:
         analysis = analyses[deal.id]
         for fact in optional_sale_returns(analysis):
@@ -766,6 +791,18 @@ async def export_comparison(data: CompareRequest, db: AsyncSession = Depends(get
                     deal.project_name, projection["year"], projection["cash_on_cash_pct"],
                     schedule_context(schedule), projection.get("note"), schedule.get("assumptions"),
                     schedule_source(schedule, projection),
+                ))
+        check = analysis.get("return_crosscheck")
+        if check:
+            context = cash_flow_check_context(check)
+            periods = check["rows"] if check["status"] == "current" else [{}]
+            for period in periods:
+                evidence = [*(period.get("evidence") or []), *(period.get("event_evidence") or [])]
+                cash_flow_checks.append((
+                    deal.project_name, "Checked" if check["status"] == "current" else "Source changed",
+                    context, check["annual_irr_pct"], check["cash_flow_multiple"], period.get("label"),
+                    period.get("amount"), period.get("flow_scope_label"), period.get("date_label"),
+                    check["calculation_basis"], source_reference(evidence or check["evidence"]),
                 ))
         for measure in (analysis.get("financing") or {}).get("measures", []):
             if measure.get("state") == "checked":
@@ -785,6 +822,11 @@ async def export_comparison(data: CompareRequest, db: AsyncSession = Depends(get
         _write_comparison_sheet(wb.create_sheet("Construction Financing"), (
             "Deal", "Metric", "Amount", "Currency", "Note", "Source",
         ), debt_measures, (28, 36, 17, 12, 52, 38))
+    if cash_flow_checks:
+        _write_comparison_sheet(wb.create_sheet("PDF Cash Flow Checks"), (
+            "Deal", "Status", "Context", "Annual-period IRR (%)", "Cash-flow multiple", "Period", "Cash flow",
+            "Flow context", "Source date", "Calculation", "Evidence",
+        ), cash_flow_checks, (28, 18, 56, 24, 19, 13, 18, 32, 22, 62, 40))
 
     # Save to bytes
     buffer = io.BytesIO()

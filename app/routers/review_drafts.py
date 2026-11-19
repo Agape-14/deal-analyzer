@@ -1,11 +1,18 @@
 """Download and approve a document review through the authenticated deal API."""
+import copy
+
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from pydantic import BaseModel, Field, ValidationError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.auth import current_user
 from app.database import get_db
 from app.routers.analysis import get_deal
 from app.routers.field_edits import _refresh_integrity
+from app.services.analysis_store import document_manifest
+from app.services.data_integrity import now_iso
+from app.services.return_crosscheck import CROSSCHECK_KEY, checked_return_crosscheck
+from app.services.review_findings import FINDINGS_KEY, apply_findings, project_findings
 from app.services.review_jobs import public_pipeline
 from app.services.review_drafts import (
     ATTEMPT_KEY, DRAFT_KEY, MAX_RESULT_BYTES, ReviewError, ReviewResult, apply_rows, codex_packet,
@@ -67,6 +74,8 @@ class ReviewApproval(BaseModel):
     expected_revision: int
     paths: list[str] = Field(default_factory=list, max_length=200)
     coverage_groups: list[str] = Field(default_factory=list, max_length=4)
+    finding_ids: list[str] = Field(default_factory=list, max_length=20)
+    apply_return_crosscheck: bool = False
 
 
 @router.post("/{deal_id}/review/approve")
@@ -80,26 +89,73 @@ async def approve_draft(deal_id: int, approval: ReviewApproval, db: AsyncSession
         raise HTTPException(409, "This draft is no longer current. Refresh the review before applying values.")
     paths = set(approval.paths)
     coverage_groups = set(approval.coverage_groups)
-    if not paths and not coverage_groups:
-        raise HTTPException(422, "Select values or group assessments to apply.")
+    finding_ids = set(approval.finding_ids)
+    if not (paths or coverage_groups or finding_ids or approval.apply_return_crosscheck):
+        raise HTTPException(422, "Select values, findings or checks to apply.")
     rows = [row for row in draft["rows"] if not row["issue"] and row["path"] in paths]
     if len(rows) != len(paths):
         raise HTTPException(422, "Some selected values have unresolved source checks.")
     coverage = [row for row in draft["coverage"] if not row["issue"] and row["group"] in coverage_groups]
     if len(coverage) != len(coverage_groups):
         raise HTTPException(422, "Some selected group assessments have unresolved source checks.")
+    finding_rows = [row for row in draft["findings"] if not row["issue"] and row["id"] in finding_ids]
+    if len(finding_rows) != len(finding_ids):
+        raise HTTPException(422, "Some selected findings have unresolved source checks.")
     record = deal.metrics[DRAFT_KEY]
     result = ReviewResult.model_validate(record["result"])
-    _refresh_integrity(deal, apply_rows(deal, docs, rows, coverage))
+    metrics = apply_rows(deal, docs, rows, coverage)
+    try:
+        apply_findings(metrics, finding_rows)
+        if approval.apply_return_crosscheck:
+            if result.return_crosscheck is None or not (draft["return_crosscheck"] or {}).get("value"):
+                raise ValueError("The selected return check has unresolved source checks.")
+            metrics[CROSSCHECK_KEY] = checked_return_crosscheck(result.return_crosscheck, docs, document_manifest(docs))
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from None
+    _refresh_integrity(deal, metrics)
     metrics = deal.metrics
     new_package_id = package_identity(deal, docs)
     remaining = [fact for fact in result.facts if fact.path not in paths]
     remaining_coverage = [row for row in result.coverage if row.group not in coverage_groups]
-    if remaining or remaining_coverage:
-        updated = ReviewResult(package_id=new_package_id, facts=remaining, coverage=remaining_coverage)
+    remaining_findings = [
+        item for item, row in zip(result.findings, draft["findings"]) if row["id"] not in finding_ids
+    ]
+    remaining_check = result.return_crosscheck if not approval.apply_return_crosscheck else None
+    if remaining or remaining_coverage or remaining_findings or remaining_check:
+        updated = result.model_copy(update={"package_id": new_package_id, "facts": remaining,
+            "coverage": remaining_coverage, "findings": remaining_findings, "return_crosscheck": remaining_check})
         metrics[DRAFT_KEY] = draft_record(updated, record["provider"], record.get("usage"))
     attempt = metrics.get(ATTEMPT_KEY) or {}
     if attempt.get("completed") and attempt.get("package_id") == result.package_id:
         metrics[ATTEMPT_KEY] = {**attempt, "package_id": new_package_id}
     await db.commit()
-    return {**_public_draft(deal, docs), "applied": len(rows), "coverage_applied": len(coverage)}
+    return {**_public_draft(deal, docs), "applied": len(rows), "coverage_applied": len(coverage),
+            "findings_applied": len(finding_rows), "return_crosscheck_applied": approval.apply_return_crosscheck}
+
+
+class FindingDecision(BaseModel):
+    expected_revision: int = Field(ge=1)
+    decision: str = Field(min_length=3, max_length=1000)
+
+
+@router.post("/{deal_id}/review/findings/{finding_id}/resolve")
+async def resolve_finding(deal_id: int, finding_id: str, data: FindingDecision, request: Request,
+                          db: AsyncSession = Depends(get_db)):
+    deal = await get_deal(deal_id, db)
+    if deal.revision != data.expected_revision:
+        raise HTTPException(409, "The deal changed. Reload before saving a decision.")
+    decision = data.decision.strip()
+    if len(decision) < 3:
+        raise HTTPException(422, "Describe your decision and its basis.")
+    manifest = document_manifest(await load_documents(db, deal.id))
+    metrics = copy.deepcopy(deal.metrics or {})
+    before = next((item for item in project_findings(metrics, manifest) if item["id"] == finding_id), None)
+    if before is None:
+        raise HTTPException(404, "Source finding not found.")
+    if before["status"] == "needs_review":
+        raise HTTPException(409, "Recheck the finding against the current source version before saving a decision.")
+    actor = (current_user(request) or {}).get("u") or "Analyst"
+    metrics[FINDINGS_KEY][finding_id]["decision"] = {"text": decision, "at": now_iso(), "by": actor}
+    deal.metrics = metrics
+    await db.commit()
+    return {"revision": deal.revision, "findings": project_findings(deal.metrics, manifest)}
