@@ -12,7 +12,7 @@ export function ReviewQueueEmptyState() {
           <div className="text-[10px] uppercase tracking-[0.14em] text-muted-foreground">Admin Review Center</div>
           <h3 className="text-base font-semibold tracking-tight">No admin review items open</h3>
           <p className="mt-0.5 text-xs text-muted-foreground">
-            Every flagged value has been corrected, confirmed, or marked unsure for this deal.
+            No unresolved questions are listed here. Score readiness and investment cautions are shown separately.
           </p>
         </div>
       </div>
@@ -33,7 +33,7 @@ export function ReviewQueueHeader({ count }: { count: number }) {
             {count} item{count === 1 ? " needs" : "s need"} review
           </h3>
           <p className="mt-1 text-sm leading-relaxed text-muted-foreground">
-            Work top to bottom. Check the source when needed, correct any bad value, then confirm it or mark it unsure.
+            Check the cited evidence for these exceptions. Correct or confirm a value when supported; unsure items remain open.
           </p>
         </div>
       </div>

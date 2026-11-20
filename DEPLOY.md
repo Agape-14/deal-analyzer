@@ -18,7 +18,11 @@ needs a public domain.
    - Railway auto-detects `railway.json` at the root, which references
      `nixpacks.toml` for Python 3.11 + Tesseract + Poppler.
    - Variables to set:
-     - `ANTHROPIC_API_KEY` — for AI scoring / chat.
+     - `PAID_REVIEW_ENABLED=0` — keep the legacy Anthropic review paused.
+     - `DEAL_REVIEW_PROVIDER=codex` — start with **Review with Codex** in Documents. Select **GPT-6 Astra** with **Extra High** reasoning in Codex when available. The user imports the cited result and approves the proposed values.
+     - For optional API reviews, set `DEAL_REVIEW_PROVIDER=openai` and `OPENAI_API_KEY` on the API service. Use a project key from the organization linked to the included credits. Codex remains the first option, and **Review options** contains the manual API action.
+     - `DEAL_REVIEW_MAX_USD=10` — adjustable per-request budget for GPT-6 Astra at Extra High reasoning. Set a positive whole dollar amount. The app counts input tokens first and accounts for long-context rates. The default is $10, with no silent truncation or lower-model fallback.
+     - `DEAL_REVIEW_AUTO_AFTER_UPLOAD=0` — uploads are read locally for the Codex packet. Set to `1` only if you want to queue OpenAI reviews automatically once that provider is configured.
      - `DB_DIR=/data` — where SQLite lives; see volume step.
        Uploaded PDFs also go here (`/data/uploads/`) by default, so
        they survive redeploys. Override with `UPLOADS_DIR` if you

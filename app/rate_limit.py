@@ -14,7 +14,8 @@ Policies are registered in `POLICIES` below and keyed by bucket name.
 Each request consumes one token; a missing / over-capacity bucket
 returns HTTP 429 with a Retry-After header.
 
-Keyed by (bucket, user) — or (bucket, client_ip) when auth is off.
+Keyed by (bucket, user) for signed-in operations, or (bucket, client_ip)
+for sign-in attempts and anonymous requests.
 Keeps one user's burst from impacting another user's quota.
 """
 
@@ -26,6 +27,7 @@ from dataclasses import dataclass
 from typing import Callable
 
 from fastapi import HTTPException, Request, Response
+from app.auth import current_user
 
 
 @dataclass
@@ -94,16 +96,15 @@ class InMemoryLimiter:
 _STORE = InMemoryLimiter()
 
 
-def _client_key(request: Request) -> str:
+def _client_key(request: Request, *, use_session: bool) -> str:
     """Identify the caller for bucket keying.
 
     Prefer the session user when we have one (so a shared IP doesn't
     collide). Fall back to the first forwarded IP, then client.host.
     """
-    session = getattr(request, "session", None) or {}
-    user = (session.get("kenyon_user") or {}).get("u") if isinstance(session, dict) else None
+    user = current_user(request) if use_session else None
     if user:
-        return f"u:{user}"
+        return f"u:{user['u']}"
     fwd = request.headers.get("x-forwarded-for") or ""
     if fwd:
         return "ip:" + fwd.split(",")[0].strip()
@@ -118,7 +119,7 @@ def limit(bucket: str) -> Callable:
     policy = POLICIES[bucket]
 
     async def _dep(request: Request, response: Response) -> None:
-        key = _client_key(request)
+        key = _client_key(request, use_session=bucket != "auth")
         allowed, retry = await _STORE.allow(bucket, key, policy)
         # Always expose the live quota state so the UI can show "X/Y used"
         # without a second call. Browser tools also show this on 429.

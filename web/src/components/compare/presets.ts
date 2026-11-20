@@ -50,17 +50,18 @@ export interface Preset {
 
 export const ALL_ROWS: MetricRow[] = [
   // Returns
-  { key: "target_irr", path: "metrics.target_returns.target_irr", label: "Target IRR", format: "percent", direction: "higher", group: "Returns" },
+  { key: "target_irr", path: "metrics._canonical_returns.target_irr", label: "Target IRR", format: "percent", direction: "higher", group: "Returns" },
   { key: "net_irr", path: "metrics.target_returns.net_irr", label: "Net IRR", format: "percent", direction: "higher", group: "Returns" },
   { key: "gross_irr", path: "metrics.target_returns.gross_irr", label: "Gross IRR", format: "percent", direction: "higher", group: "Returns" },
-  { key: "equity_multiple", path: "metrics.target_returns.target_equity_multiple", label: "Equity Multiple", format: "multiple", direction: "higher", group: "Returns" },
+  { key: "equity_multiple", path: "metrics._canonical_returns.target_equity_multiple", label: "Equity Multiple", format: "multiple", direction: "higher", group: "Returns" },
   { key: "net_eq_multiple", path: "metrics.target_returns.net_equity_multiple", label: "Net Equity Multiple", format: "multiple", direction: "higher", group: "Returns" },
-  { key: "cash_on_cash", path: "metrics.target_returns.target_cash_on_cash", label: "Cash-on-Cash", format: "percent", direction: "higher", group: "Returns" },
+  { key: "cash_on_cash", path: "metrics._canonical_returns.cash_on_cash", label: "Cash-on-Cash", format: "percent", direction: "higher", group: "Returns" },
   { key: "distribution_yield", path: "metrics.target_returns.distribution_yield", label: "Distribution Yield", format: "percent", direction: "higher", group: "Returns" },
   { key: "projected_profit", path: "metrics.target_returns.projected_profit", label: "Projected Profit", format: "money", direction: "higher", group: "Returns" },
 
   // Structure & leverage
-  { key: "ltv", path: "metrics.deal_structure.ltv", label: "LTV", format: "percent", direction: "lower", group: "Structure & leverage", hint: "Lower = more conservative" },
+  { key: "ltv", path: "metrics.deal_structure.ltv", label: "Loan-to-value", format: "percent", direction: "lower", group: "Structure & leverage" },
+  { key: "loan_to_cost", path: "metrics.deal_structure.loan_to_cost", label: "Loan-to-cost", format: "percent", direction: "lower", group: "Structure & leverage" },
   { key: "debt_amount", path: "metrics.deal_structure.debt_amount", label: "Debt Amount", format: "money", direction: "none", group: "Structure & leverage" },
   { key: "interest_rate", path: "metrics.deal_structure.interest_rate", label: "Interest Rate", format: "percent", direction: "lower", group: "Structure & leverage" },
   { key: "preferred_return", path: "metrics.deal_structure.preferred_return", label: "Preferred Return", format: "percent", direction: "higher", group: "Structure & leverage" },
@@ -77,6 +78,7 @@ export const ALL_ROWS: MetricRow[] = [
 
   // Financials
   { key: "stabilized_noi", path: "metrics.financial_projections.stabilized_noi", label: "Stabilized NOI", format: "money", direction: "higher", group: "Financials" },
+  { key: "untrended_noi", path: "metrics.financial_projections.untrended_noi", label: "Untrended NOI", format: "money", direction: "higher", group: "Financials" },
   { key: "entry_cap_rate", path: "metrics.financial_projections.entry_cap_rate", label: "Entry Cap Rate", format: "percent", direction: "higher", group: "Financials" },
   { key: "exit_cap_rate", path: "metrics.financial_projections.exit_cap_rate", label: "Exit Cap Rate", format: "percent", direction: "none", group: "Financials", hint: "Higher = more conservative underwriting" },
   { key: "rent_growth", path: "metrics.financial_projections.rent_growth_assumption", label: "Rent Growth", format: "percent", direction: "none", group: "Financials" },

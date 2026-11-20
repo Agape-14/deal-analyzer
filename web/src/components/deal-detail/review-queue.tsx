@@ -145,10 +145,11 @@ const MATH_CONFIGS: Array<{ test: (name: string) => boolean; area: ReviewArea; p
 
 export function ReviewQueue({ deal }: { deal: DealDetail }) {
   const items = buildReviewItems(deal);
-
-  if (items.length === 0) return <ReviewQueueEmptyState />;
+  const cautions = (deal.metrics?.validation_flags ?? []).filter((flag) => !isDataIssue(flag) && ["red", "yellow"].includes(String(flag.severity)));
 
   return (
+    <div className="space-y-4">
+    {items.length === 0 ? <ReviewQueueEmptyState /> : (
     <Card className="border-border/80 bg-card p-5 shadow-sm md:p-6">
       <ReviewQueueHeader count={items.length} />
       <div className="mt-4 space-y-2.5">
@@ -157,7 +158,22 @@ export function ReviewQueue({ deal }: { deal: DealDetail }) {
         ))}
       </div>
     </Card>
+    )}
+    {cautions.length > 0 && (
+      <details className="rounded-xl border border-border bg-card p-5">
+        <summary className="cursor-pointer text-sm font-semibold">Investment risks and assumptions ({cautions.length})</summary>
+        <p className="mt-2 text-xs text-muted-foreground">These cautions inform your decision. They do not require a confirmation click.</p>
+        <ul className="mt-3 space-y-3 text-sm">
+          {cautions.map((flag, index) => <li key={index}><strong>{flag.category}:</strong> {flag.message}</li>)}
+        </ul>
+      </details>
+    )}
+    </div>
   );
+}
+
+function isDataIssue(flag: ValidationFlag): boolean {
+  return /data integrity|data conflict|staleness/i.test(flag.category ?? "");
 }
 
 function ReviewRow({ dealId, item, index }: { dealId: number; item: ReviewItem; index: number }) {
@@ -258,7 +274,7 @@ function ResolveButton({
         note: action === "unsure" ? "Marked unsure from the admin review queue. Do not treat this item as verified." : "Confirmed from the admin review queue.",
       });
       toast.success(action === "unsure" ? "Marked unsure" : "Review item cleared", {
-        description: action === "unsure" ? "The item is removed from the checklist and kept in the audit trail as uncertain." : "The item was confirmed and removed from Needs review.",
+        description: action === "unsure" ? "Uncertainty is recorded. This item remains open until evidence resolves it." : "The item was confirmed and removed from Needs review.",
       });
       window.location.reload();
     } catch (error) {
@@ -368,7 +384,7 @@ export function buildReviewItems(deal: DealDetail): ReviewItem[] {
   const flags = Array.isArray(metrics.validation_flags) ? metrics.validation_flags : [];
   const items = [
     ...mathItems(gate, metrics, provenance),
-    ...flagItems(flags, metrics, provenance),
+    ...flagItems(flags.filter(isDataIssue), metrics, provenance),
     ...criticalFieldItems(gate, metrics, provenance),
     ...sourceItems(metrics, provenance),
   ];
@@ -428,7 +444,7 @@ function flagItems(flags: ValidationFlag[], metrics: Metrics, provenance: Record
 function criticalFieldItems(gate: ReviewGate | undefined, metrics: Metrics, provenance: Record<string, FieldProvenance>): ReviewItem[] {
   const fields = Array.isArray(gate?.critical_fields) ? gate.critical_fields : [];
   return fields
-    .filter((field) => !field.verified && field.severity !== "ok")
+    .filter((field) => field.severity !== "ok")
     .map((field, index) => {
       const path = field.actual_path || field.path;
       const input = reviewInput(path, metrics, provenance);
@@ -525,7 +541,7 @@ function isReviewResolved(metrics: Metrics, key: string): boolean {
 }
 
 function isResolvedEntry(value: unknown): boolean {
-  return value === true || Boolean(value && typeof value === "object" && (value as Record<string, unknown>).resolved === true);
+  return value === true || Boolean(value && typeof value === "object" && (value as Record<string, unknown>).resolved === true && (value as Record<string, unknown>).action !== "unsure");
 }
 
 function mathCheckLooksResolved(check: MathCheck, metrics: Metrics): boolean {
@@ -615,7 +631,7 @@ function sourceDetail(source: FieldProvenance): string {
 
 function whyThisMatters(item: ReviewItem): string {
   if (item.kind === "math") return "A failed calculation can make the score and comparison unreliable.";
-  if (item.kind === "source") return "The score should only rely on values tied to a source, confirmed by admin, or marked unsure.";
+  if (item.kind === "source") return "The score can rely on source-checked or confirmed values. Uncertain values still need evidence.";
   if (item.area === "Returns") return "Return assumptions drive the headline score and investor comparison.";
   if (item.area === "Debt") return "Debt assumptions affect leverage, DSCR, and downside risk.";
   if (item.area === "Sponsor") return "Sponsor alignment affects execution trust and risk scoring.";

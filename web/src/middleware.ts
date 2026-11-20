@@ -13,7 +13,7 @@ import { NextResponse, type NextRequest } from "next/server";
  * login page turns real upload/auth failures into vague browser errors.
  */
 
-const PUBLIC_PAGES = ["/login", "/legacy"];
+const PUBLIC_PAGES = ["/login"];
 const PUBLIC_PREFIXES = [
   "/_next/",
   "/favicon.ico",
@@ -22,8 +22,17 @@ const PUBLIC_PREFIXES = [
   "/static/",
 ];
 
+function appOrigin(req: NextRequest): string {
+  const host = req.headers.get("host");
+  // The incoming URL may include the reverse proxy's internal listener port.
+  return host ? `${req.nextUrl.protocol}//${host}` : req.nextUrl.origin;
+}
+
 export function middleware(req: NextRequest) {
   const { pathname } = req.nextUrl;
+  if (pathname === "/legacy" || pathname.startsWith("/legacy/")) {
+    return NextResponse.redirect(new URL("/", appOrigin(req)));
+  }
   if (
     PUBLIC_PAGES.includes(pathname) ||
     PUBLIC_PREFIXES.some((p) => pathname.startsWith(p))
@@ -40,8 +49,7 @@ export function middleware(req: NextRequest) {
     return NextResponse.next();
   }
 
-  const url = req.nextUrl.clone();
-  url.pathname = "/login";
+  const url = new URL("/login", appOrigin(req));
   url.searchParams.set("next", pathname + (req.nextUrl.search || ""));
   return NextResponse.redirect(url);
 }
@@ -49,6 +57,6 @@ export function middleware(req: NextRequest) {
 export const config = {
   // Match application pages only. API and upload paths return JSON errors.
   matcher: [
-    "/((?!_next/static|_next/image|favicon.ico|login|api|document-upload|legacy|static).*)",
+    "/((?!_next/static|_next/image|favicon.ico|login|api|document-upload|static).*)",
   ],
 };

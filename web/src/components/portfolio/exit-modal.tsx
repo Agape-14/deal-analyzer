@@ -39,9 +39,10 @@ export function ExitModal({
   }, [open, investment]);
 
   const amount = Number(form.exit_amount) || 0;
+  const recordedSale = investment?.distributions.filter(d => ["sale_proceeds", "exit_proceeds"].includes(d.dist_type)).reduce((sum, d) => sum + d.amount, 0) ?? 0;
   const implied =
     investment && investment.amount_invested > 0
-      ? (amount + investment.total_distributions) / investment.amount_invested
+      ? (Math.max(amount, recordedSale) + investment.total_distributions - recordedSale) / investment.amount_invested
       : null;
 
   async function submit(e: React.FormEvent) {
@@ -91,10 +92,12 @@ export function ExitModal({
           </div>
 
           <div className="p-5 space-y-4">
+            <p className="text-xs text-muted-foreground">Enter total exit proceeds, including any sale distributions already recorded. Those payments count once. Other operating distributions remain additional.</p>
+            {amount < recordedSale && <p className="text-xs text-warning">Recorded sale payments exceed this amount. The cash total retains the recorded payments; reconcile the distribution history.</p>}
             <div className="grid grid-cols-2 gap-4">
               <div className="space-y-2">
                 <Label>Exit amount</Label>
-                <Input
+                <Input aria-label="Exit amount"
                   autoFocus
                   type="number"
                   min={0}

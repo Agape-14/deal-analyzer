@@ -10,6 +10,12 @@ import type { WaterfallResponse } from "@/lib/types";
  * tier sets the scale; smaller tiers shrink proportionally.
  */
 export function WaterfallChart({ data }: { data: WaterfallResponse }) {
+  if (data.status === "unavailable") return (
+    <Card elevated className="p-6">
+      <h3 className="text-base font-semibold">Distribution waterfall</h3>
+      <p className="mt-2 text-sm text-muted-foreground" role="status">{data.message}</p>
+    </Card>
+  );
   const maxTotal = Math.max(1, ...data.tiers.map((t) => t.total ?? 0));
 
   return (
@@ -18,7 +24,7 @@ export function WaterfallChart({ data }: { data: WaterfallResponse }) {
         <div>
           <h3 className="text-base font-semibold tracking-tight">Distribution waterfall</h3>
           <p className="text-xs text-muted-foreground mt-0.5">
-            Tiered LP/GP splits from return of capital through promote tiers.
+            {data.message ?? "Illustrative LP/GP allocation. Source terms require confirmation."}
           </p>
         </div>
         <div className="flex items-center gap-5 text-right flex-wrap">

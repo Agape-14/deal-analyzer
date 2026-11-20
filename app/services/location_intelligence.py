@@ -62,7 +62,7 @@ async def _nominatim_throttle() -> None:
 
 
 async def geocode(query: str) -> dict | None:
-    """Geocode a free-form string ("Sunset Apartments, Austin, TX") via Nominatim.
+    """Geocode an address ("100 Example Road, Austin, TX") via Nominatim.
 
     Returns {lat, lng, display_name, bbox} or None if no match.
     """
@@ -176,6 +176,7 @@ async def fetch_amenities(
     radius_m: int = 1600,   # ~1 mile default
     categories: list[str] | None = None,
     per_category_cap: int = 80,
+    errors: dict[str, str] | None = None,
 ) -> dict[str, list[dict]]:
     """Fetch POIs per category from Overpass, centered at (lat,lng).
 
@@ -200,7 +201,9 @@ async def fetch_amenities(
         async with sem:
             try:
                 elements = await overpass_query(body)
-            except httpx.HTTPError:
+            except (httpx.HTTPError, ValueError):
+                if errors is not None:
+                    errors[cat] = "Provider unavailable; nearby places have not been checked."
                 return
         points: list[dict] = []
         for el in elements:
@@ -318,26 +321,35 @@ async def fetch_hud_fmr(zip_code: str) -> dict | None:
 
 # ---------- Top-level composer ---------- #
 
-async def build_location_bundle(
-    deal,
-    radius_m: int = 1600,
-    force_refresh: bool = False,
-) -> dict:
-    """
-    Compose the full 'Location' payload for a deal. Designed to be safe to
-    call on every page load; fetches upstream only when there's no cached
-    result or `force_refresh` is true.
-    """
-    cached = deal.location_data if not force_refresh else None
-    # Use cached data if it's from the last 7 days and radius matches.
-    if isinstance(cached, dict) and cached.get("radius_m") == radius_m:
-        fetched_at = cached.get("fetched_at") or 0
-        age = time.time() - float(fetched_at or 0)
-        if age < 7 * 86400 and cached.get("categories"):
-            return cached
+def get_cached_location_bundle(deal) -> dict:
+    """Read the last stored location or the current manual pin without I/O."""
+    cached = deal.location_data
+    lat, lng = deal.lat, deal.lng
+    if (
+        lat is not None
+        and lng is not None
+        and isinstance(cached, dict)
+        and cached.get("fetched_at")
+        and (cached.get("lat"), cached.get("lng")) == (lat, lng)
+    ):
+        return cached
+    display = _compose_address(deal) if lat is not None and lng is not None else ""
+    return {
+        "lat": lat,
+        "lng": lng,
+        "radius_m": 1609,
+        "categories": {},
+        "fmr": None,
+        "display_name": display or None,
+        "fetched_at": 0,
+    }
+
+
+async def build_location_bundle(deal, radius_m: int = 1600) -> dict:
+    """Fetch current location data after an analyst explicitly requests it."""
 
     # Need coords — try stored first, then geocode.
-    lat, lng = (deal.lat or None), (deal.lng or None)
+    lat, lng = deal.lat, deal.lng
     display = None
     if lat is None or lng is None:
         query = _compose_address(deal)
@@ -350,14 +362,15 @@ async def build_location_bundle(
                 "categories": {},
                 "fmr": None,
                 "display_name": None,
-                "fetched_at": time.time(),
+                "fetched_at": 0,
                 "error": "Could not geocode address. Set city/state or manually place the marker.",
             }
         lat, lng = geo["lat"], geo["lng"]
         display = geo["display_name"]
 
     # Kick off Overpass + HUD in parallel
-    amenities_task = fetch_amenities(lat, lng, radius_m)
+    category_errors: dict[str, str] = {}
+    amenities_task = fetch_amenities(lat, lng, radius_m, errors=category_errors)
     fmr_task = _fmr_from_deal(deal)
     categories, fmr = await asyncio.gather(amenities_task, fmr_task)
 
@@ -366,6 +379,8 @@ async def build_location_bundle(
         "lng": lng,
         "radius_m": radius_m,
         "categories": categories,
+        "category_errors": category_errors,
+        "coverage_version": 1,
         "fmr": fmr,
         "display_name": display or _compose_address(deal),
         "fetched_at": time.time(),
@@ -382,8 +397,8 @@ async def _fmr_from_deal(deal) -> dict | None:
 
 
 def _compose_address(deal) -> str:
-    bits = [deal.project_name, deal.location, deal.city, deal.state]
-    return ", ".join(b for b in bits if b)
+    address = [part.strip() for part in (deal.location, deal.city, deal.state) if part and part.strip()]
+    return ", ".join(address)
 
 
 def _guess_zip(deal) -> str | None:

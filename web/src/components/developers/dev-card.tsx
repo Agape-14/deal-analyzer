@@ -24,8 +24,7 @@ export function DeveloperCard({
   const avgScore = scored.length
     ? scored.reduce((a, d) => a + (d.overall_score ?? 0), 0) / scored.length
     : null;
-  const irrs = ownDeals.map((d) => d.target_irr).filter((x): x is number => typeof x === "number");
-  const avgIrr = irrs.length ? irrs.reduce((a, b) => a + b, 0) / irrs.length : null;
+  const withReturns = ownDeals.filter(d => d.target_irr != null || d.target_cash_on_cash != null).length;
 
   const statusCounts = ownDeals.reduce<Record<string, number>>((m, d) => {
     m[d.status] = (m[d.status] ?? 0) + 1;
@@ -77,7 +76,7 @@ export function DeveloperCard({
           <div className="mt-5 grid grid-cols-3 gap-3">
             <Stat label="Deals" value={String(developer.deal_count ?? ownDeals.length)} />
             <Stat label="Avg score" value={avgScore != null ? avgScore.toFixed(1) : "—"} />
-            <Stat label="Avg target IRR" value={fmtPct(avgIrr)} />
+            <Stat label="With supported returns" value={`${withReturns}/${ownDeals.length}`} />
           </div>
 
           {/* Status breakdown */}

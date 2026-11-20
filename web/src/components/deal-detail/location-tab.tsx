@@ -1,6 +1,7 @@
 "use client";
 
 import * as React from "react";
+import { useCurrentUser } from "@/lib/auth-client";
 import Map, {
   Layer,
   Marker,
@@ -30,7 +31,6 @@ import {
   Moon,
   Crosshair,
   Maximize2,
-  Check,
   X as CloseIcon,
 } from "lucide-react";
 import { toast } from "sonner";
@@ -40,6 +40,7 @@ import { Button } from "@/components/ui/button";
 import { api } from "@/lib/api";
 import { cn, fmtDate, fmtMoney } from "@/lib/utils";
 import type { LocationBundle, Poi, PoiCategory } from "@/lib/types";
+import { PublicContext } from "./public-context";
 
 /* ================== Map styles (all free, no API key) ================== */
 
@@ -132,7 +133,7 @@ const CATEGORY_ORDER: PoiCategory[] = [
   "apartments", "restaurants", "grocery", "transit", "schools", "healthcare", "parks", "employers",
 ];
 
-const RADII_M = [800, 1609, 3219, 8047]; // 0.5, 1, 2, 5 mi
+const RADII_M = [800, 1609, 3219, 8000]; // 0.5, 1, 2, 5 mi
 const MI_LABEL = (m: number) => {
   const mi = m / 1609.34;
   return mi < 1 ? `${mi.toFixed(1)} mi` : `${Math.round(mi)} mi`;
@@ -153,12 +154,14 @@ export function LocationTab({
   proformaRent?: number | null;
   unitMix?: string | null;
 }) {
+  const { isAnalyst } = useCurrentUser();
   const mapRef = React.useRef<MapRef | null>(null);
   const [styleKey, setStyleKey] = React.useState<StyleKey>("satellite");
-  const [radiusM, setRadiusM] = React.useState<number>(1609);
   const [bundle, setBundle] = React.useState<LocationBundle | null>(null);
   const [loading, setLoading] = React.useState(true);
   const [refreshing, setRefreshing] = React.useState(false);
+  const [savingPin, setSavingPin] = React.useState(false);
+  const [mapError, setMapError] = React.useState(false);
   const [enabled, setEnabled] = React.useState<Set<PoiCategory>>(
     new Set(["apartments", "transit", "grocery"]),
   );
@@ -168,37 +171,32 @@ export function LocationTab({
   // doesn't nail the exact parcel.
   const [pinMode, setPinMode] = React.useState(false);
 
-  // Initial fetch
   React.useEffect(() => {
+    let active = true;
+    setBundle(null);
     setLoading(true);
     api
-      .get<LocationBundle>(`/api/deals/${dealId}/location?radius_m=${radiusM}`)
-      .then((b) => setBundle(b))
+      .get<LocationBundle>(`/api/deals/${dealId}/location`)
+      .then((b) => { if (active) setBundle(b); })
       .catch((e) => {
-        toast.error("Couldn't load location", {
-          description: (e as { detail?: string })?.detail,
-        });
+        if (active) {
+          toast.error("Couldn't load location", {
+            description: (e as { detail?: string })?.detail,
+          });
+        }
       })
-      .finally(() => setLoading(false));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+      .finally(() => { if (active) setLoading(false); });
+    return () => { active = false; };
   }, [dealId]);
 
-  // Refresh when radius changes (but not on first render)
-  const firstRender = React.useRef(true);
-  React.useEffect(() => {
-    if (firstRender.current) {
-      firstRender.current = false;
-      return;
-    }
-    void refetch();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [radiusM]);
+  const radiusM = bundle?.radius_m ?? 1609;
 
-  async function refetch(force = false) {
+  async function refreshLocation(radius = radiusM) {
+    if (!isAnalyst || refreshing || savingPin) return;
     setRefreshing(true);
     try {
-      const b = await api.get<LocationBundle>(
-        `/api/deals/${dealId}/location?radius_m=${radiusM}${force ? "&refresh=true" : ""}`,
+      const b = await api.post<LocationBundle>(
+        `/api/deals/${dealId}/location/refresh?radius_m=${radius}`,
       );
       setBundle(b);
     } catch (e) {
@@ -212,13 +210,6 @@ export function LocationTab({
   const lng = bundle?.lng ?? initialLng ?? null;
   const hasCoords = typeof lat === "number" && typeof lng === "number";
 
-  const fmr2br = bundle?.fmr?.rents?.br2 ?? null;
-  const fmrComparison = React.useMemo(() => {
-    if (!fmr2br || !proformaRent || proformaRent <= 0) return null;
-    const delta = ((proformaRent - fmr2br) / fmr2br) * 100;
-    return { fmr2br, proformaRent, delta };
-  }, [fmr2br, proformaRent]);
-
   function toggleCategory(c: PoiCategory) {
     setEnabled((prev) => {
       const next = new Set(prev);
@@ -228,27 +219,32 @@ export function LocationTab({
     });
   }
 
-  /**
-   * Handle a map click while in pin-drop mode: POST the new coords,
-   * exit pin mode, and re-query POIs centered on the new point.
-   */
+  async function savePin(lat: number, lng: number) {
+    await api.post(`/api/deals/${dealId}/location/manual`, { lat, lng });
+    setBundle({
+      lat,
+      lng,
+      radius_m: radiusM,
+      categories: {},
+      fmr: null,
+      display_name: null,
+      fetched_at: 0,
+    });
+    toast.success("Location updated");
+  }
+
   async function handlePinDrop(e: { lngLat: { lng: number; lat: number } }) {
-    if (!pinMode) return;
-    const { lat: newLat, lng: newLng } = e.lngLat;
+    if (!isAnalyst || !pinMode || refreshing || savingPin) return;
     setPinMode(false);
+    setSavingPin(true);
     try {
-      await api.post(`/api/deals/${dealId}/location/manual`, {
-        lat: newLat,
-        lng: newLng,
-      });
-      toast.success("Location updated", {
-        description: `Pinned at ${newLat.toFixed(5)}, ${newLng.toFixed(5)}.`,
-      });
-      await refetch(true);
+      await savePin(e.lngLat.lat, e.lngLat.lng);
     } catch (err) {
       toast.error("Couldn't save location", {
         description: (err as { detail?: string })?.detail,
       });
+    } finally {
+      setSavingPin(false);
     }
   }
 
@@ -282,43 +278,34 @@ export function LocationTab({
     );
   }
 
-  // If the bundle changes and we still have no POIs in any category, auto-widen
-  // the radius once on behalf of the user. Saves the "why is this map empty?"
-  // moment on suburban deals.
-  const autoWidenedRef = React.useRef(false);
-  React.useEffect(() => {
-    if (!bundle || autoWidenedRef.current) return;
-    const anyPois = Object.values(bundle.categories ?? {}).some((v) => (v?.length ?? 0) > 0);
-    if (!anyPois && radiusM < 3219 && hasCoords) {
-      autoWidenedRef.current = true;
-      toast.message("No POIs at 1mi — widening to 2mi.");
-      setRadiusM(3219);
-    }
-  }, [bundle, radiusM, hasCoords]);
-
   return (
-    <div className="grid grid-cols-1 lg:grid-cols-[1fr_320px] gap-4 lg:h-[calc(100vh-280px)] lg:min-h-[600px]">
+    <div className="space-y-4"><PublicContext dealId={dealId} /><div className="grid grid-cols-1 lg:grid-cols-[1fr_320px] gap-4 lg:min-h-[600px]">
       {/* ============== MAP ============== */}
       <Card elevated className="p-0 overflow-hidden relative h-[60vh] lg:h-auto min-h-[400px]">
-        {loading && !bundle ? (
-          <LoadingProgress />
+        {loading ? (
+          <LoadingProgress message="Loading saved location…" />
         ) : !hasCoords ? (
-          <GeocodeFailure bundle={bundle} onManual={() => toast.info("Open the side panel to manually set coordinates")} />
+          refreshing ? (
+            <LoadingProgress message="Looking up location and nearby places…" />
+          ) : (
+            <GeocodeFailure bundle={bundle} onSave={savePin} onRefresh={refreshLocation} />
+          )
         ) : (
           <>
             <Map
               ref={mapRef}
               initialViewState={{ longitude: lng, latitude: lat, zoom: 14 }}
               mapStyle={STYLES[styleKey].spec}
-              attributionControl={true}
+              attributionControl={{ compact: true }}
               style={{ width: "100%", height: "100%" }}
               cursor={pinMode ? "crosshair" : undefined}
               onClick={pinMode ? handlePinDrop : undefined}
+              onError={() => setMapError(true)}
             >
               <NavigationControl position="top-right" showCompass={false} />
 
               {/* Radius ring */}
-              <Source
+              {Boolean(bundle?.fetched_at) && <Source
                 id="radius"
                 type="geojson"
                 data={circleGeoJson(lat, lng, radiusM)}
@@ -340,7 +327,7 @@ export function LocationTab({
                     "line-dasharray": [3, 2],
                   }}
                 />
-              </Source>
+              </Source>}
 
               {/* Primary property marker */}
               <Marker longitude={lng} latitude={lat} anchor="bottom">
@@ -388,6 +375,7 @@ export function LocationTab({
                 </Popup>
               )}
             </Map>
+            {mapError && <div role="alert" className="absolute bottom-10 left-3 right-3 z-10 rounded-lg border bg-card/95 p-2 text-xs">Some map tiles could not load. Area statistics and saved coordinates remain available. <a className="underline" href={`https://www.openstreetmap.org/?mlat=${lat}&mlon=${lng}#map=14/${lat}/${lng}`} target="_blank" rel="noreferrer">Open this location on a map</a></div>}
 
             {/* Style switcher + radius control overlaid top-left */}
             <div className="absolute top-3 left-3 flex flex-col gap-2">
@@ -411,11 +399,13 @@ export function LocationTab({
                   );
                 })}
               </div>
-              <div className="inline-flex rounded-lg border border-border/80 bg-card/90 backdrop-blur-md p-1 shadow-lg">
+              {isAnalyst && <div className="inline-flex rounded-lg border border-border/80 bg-card/90 backdrop-blur-md p-1 shadow-lg">
                 {RADII_M.map((m) => (
                   <button
                     key={m}
-                    onClick={() => setRadiusM(m)}
+                    onClick={() => void refreshLocation(m)}
+                    disabled={refreshing || savingPin || pinMode}
+                    title={`Look up nearby places within ${MI_LABEL(m)}`}
                     className={cn(
                       "px-2.5 h-7 rounded-md text-xs font-medium tabular-nums transition-colors",
                       radiusM === m ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:text-foreground",
@@ -424,7 +414,7 @@ export function LocationTab({
                     {MI_LABEL(m)}
                   </button>
                 ))}
-              </div>
+              </div>}
             </div>
 
             {/* Map action pills, top-right */}
@@ -433,19 +423,30 @@ export function LocationTab({
                 <Maximize2 className="h-3.5 w-3.5" />
                 <span className="hidden sm:inline">Fit view</span>
               </Button>
-              <Button
-                size="sm"
-                variant={pinMode ? "default" : "secondary"}
-                onClick={() => setPinMode((p) => !p)}
-                title={pinMode ? "Cancel pin mode" : "Click anywhere on the map to re-place the property"}
-              >
-                {pinMode ? <CloseIcon className="h-3.5 w-3.5" /> : <Crosshair className="h-3.5 w-3.5" />}
-                <span className="hidden sm:inline">{pinMode ? "Cancel" : "Re-pin"}</span>
-              </Button>
-              <Button size="sm" variant="secondary" onClick={() => refetch(true)} disabled={refreshing}>
-                {refreshing ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />}
-                <span className="hidden sm:inline">Refresh</span>
-              </Button>
+              {isAnalyst && (
+                <>
+                  <Button
+                    size="sm"
+                    variant={pinMode ? "default" : "secondary"}
+                    onClick={() => setPinMode((p) => !p)}
+                    disabled={refreshing || savingPin}
+                    title={pinMode ? "Cancel pin mode" : "Click anywhere on the map to re-place the property"}
+                  >
+                    {pinMode ? <CloseIcon className="h-3.5 w-3.5" /> : <Crosshair className="h-3.5 w-3.5" />}
+                    <span className="hidden sm:inline">{pinMode ? "Cancel" : "Re-pin"}</span>
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="secondary"
+                    onClick={() => void refreshLocation()}
+                    disabled={refreshing || savingPin || pinMode}
+                    aria-label="Refresh location"
+                  >
+                    {refreshing ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />}
+                    <span className="hidden sm:inline">Refresh</span>
+                  </Button>
+                </>
+              )}
             </div>
 
             {/* Pin-mode coach banner */}
@@ -469,6 +470,12 @@ export function LocationTab({
 
       {/* ============== SIDE PANEL ============== */}
       <div className="flex flex-col gap-4 min-h-0">
+        {!!Object.keys(bundle?.category_errors ?? {}).length && (
+          <p role="status" className="rounded-lg border border-warning/30 bg-warning/10 p-3 text-xs text-warning">
+            Nearby places are incomplete for {Object.keys(bundle?.category_errors ?? {}).join(", ")}. The map provider did not respond.
+            {isAnalyst && " Refresh location to try again."}
+          </p>
+        )}
         <Card elevated className="p-4">
           <div className="flex items-center gap-2 mb-3">
             <Layers className="h-4 w-4 text-muted-foreground" />
@@ -508,52 +515,28 @@ export function LocationTab({
           </div>
         </Card>
 
-        {/* Rent comparison */}
+        {/* Rent context */}
         <Card elevated className="p-4">
           <h3 className="text-sm font-semibold mb-2">Rent context</h3>
-          {fmr2br ? (
+          {bundle?.fmr && Object.values(bundle.fmr.rents).some(value => typeof value === "number") ? (
             <>
               <div className="text-[11px] text-muted-foreground">
-                HUD Fair Market Rent · {bundle?.fmr?.metro ?? bundle?.fmr?.county ?? "zip " + bundle?.fmr?.zip}
+                HUD Fair Market Rent · monthly gross rent · {bundle?.fmr?.metro ?? bundle?.fmr?.county ?? "zip " + bundle?.fmr?.zip}
                 {bundle?.fmr?.year && <> · {bundle.fmr.year}</>}
               </div>
               <div className="mt-3 grid grid-cols-2 gap-2 text-xs tabular-nums">
                 <FmrRow label="Studio" value={bundle?.fmr?.rents?.studio} />
                 <FmrRow label="1 BR" value={bundle?.fmr?.rents?.br1} />
-                <FmrRow label="2 BR" value={bundle?.fmr?.rents?.br2} highlight />
+                <FmrRow label="2 BR" value={bundle?.fmr?.rents?.br2} />
                 <FmrRow label="3 BR" value={bundle?.fmr?.rents?.br3} />
+                <FmrRow label="4 BR" value={bundle?.fmr?.rents?.br4} />
               </div>
-              {fmrComparison && (
-                <div
-                  className={cn(
-                    "mt-3 p-2.5 rounded-md text-xs ring-1",
-                    fmrComparison.delta > 25
-                      ? "bg-destructive/10 text-destructive ring-destructive/30"
-                      : fmrComparison.delta > 10
-                        ? "bg-warning/10 text-warning ring-warning/30"
-                        : "bg-success/10 text-success ring-success/30",
-                  )}
-                >
-                  <div className="font-medium">
-                    Proforma rent {fmtMoney(proformaRent!)} vs FMR {fmtMoney(fmr2br)}
-                  </div>
-                  <div className="mt-0.5 text-[10px] opacity-90">
-                    {fmrComparison.delta > 0 ? "+" : ""}
-                    {fmrComparison.delta.toFixed(1)}%{" "}
-                    {fmrComparison.delta > 25
-                      ? "above market — aggressive"
-                      : fmrComparison.delta > 10
-                        ? "above market — verify"
-                        : "within market range"}
-                  </div>
-                </div>
-              )}
+              <p className="mt-3 text-xs text-muted-foreground">HUD FMR is a 40th-percentile gross-rent benchmark, including most tenant-paid utilities. It is not a matched asking-rent comparable. Bedroom count, geography and fiscal year must match before using this context.</p>
+              <a className="mt-2 block text-xs underline" href="https://www.huduser.gov/portal/datasets/fmr.html" target="_blank" rel="noreferrer">Source and methodology</a>
             </>
           ) : (
             <div className="text-xs text-muted-foreground">
-              Zip-level rent averages are free from HUD. Set{" "}
-              <code className="font-mono bg-muted/60 px-1 py-0.5 rounded text-[10px]">HUD_API_TOKEN</code>{" "}
-              (register free at huduser.gov) to enable.
+              Rent benchmarks are currently unavailable. They are optional context and do not block document review.
             </div>
           )}
         </Card>
@@ -564,7 +547,7 @@ export function LocationTab({
               Resolved location
             </div>
             <div className="text-xs leading-relaxed">{bundle.display_name}</div>
-            {bundle.fetched_at && (
+            {bundle.fetched_at > 0 && (
               <div className="text-[10px] text-muted-foreground mt-2">
                 Updated {fmtDate(new Date(bundle.fetched_at * 1000).toISOString())}
               </div>
@@ -573,11 +556,11 @@ export function LocationTab({
         )}
 
         <div className="text-[10px] text-muted-foreground leading-relaxed mt-auto">
-          Map tiles © CARTO / Esri · POI data © OpenStreetMap contributors. All
-          free / unauthenticated sources.
+          Map tiles © CARTO / Esri · POI data © OpenStreetMap contributors.
+          Nearby places are context, not verified rental comparables.
         </div>
       </div>
-    </div>
+    </div></div>
   );
 }
 
@@ -590,7 +573,7 @@ function totalPois(bundle: LocationBundle): number {
   );
 }
 
-function circleGeoJson(lat: number, lng: number, radiusM: number) {
+function circleGeoJson(lat: number, lng: number, radiusM: number): { type: "Feature"; properties: Record<string, never>; geometry: { type: "Polygon"; coordinates: number[][][] } } {
   // ~64-segment polygon approximating a circle, in WGS84 lat/lng.
   const pts: number[][] = [];
   const R = 6371000;
@@ -610,11 +593,12 @@ function circleGeoJson(lat: number, lng: number, radiusM: number) {
       );
     pts.push([(lng2 * 180) / Math.PI, (lat2 * 180) / Math.PI]);
   }
+  pts[pts.length - 1] = [...pts[0]];
   return {
     type: "Feature",
     properties: {},
     geometry: { type: "Polygon", coordinates: [pts] },
-  } as const;
+  };
 }
 
 function PoiPin({ category, name }: { category: PoiCategory; name: string }) {
@@ -698,39 +682,19 @@ function FmrRow({ label, value, highlight }: { label: string; value?: number | n
       )}
     >
       <span className="text-muted-foreground">{label}</span>
-      <span className="font-semibold tabular-nums">{value ? fmtMoney(value) : "—"}</span>
+      <span className="font-semibold tabular-nums">{value != null ? fmtMoney(value, { compact: false }) : "—"}</span>
     </div>
   );
 }
 
-function LoadingProgress() {
-  // Overpass queries can take 10-30s on cold cache. Show something
-  // informative (what we're fetching, which sources) instead of a bare spinner.
-  const [elapsed, setElapsed] = React.useState(0);
-  React.useEffect(() => {
-    const t = window.setInterval(() => setElapsed((x) => x + 1), 1000);
-    return () => window.clearInterval(t);
-  }, []);
-
-  const steps = [
-    { at: 0,  label: "Geocoding address…" },
-    { at: 3,  label: "Querying OpenStreetMap for nearby POIs…" },
-    { at: 15, label: "Checking HUD for rent context…" },
-    { at: 25, label: "Still working — Overpass can be slow on cold cache." },
-  ];
-  const active = [...steps].reverse().find((s) => elapsed >= s.at) ?? steps[0];
-
+function LoadingProgress({ message }: { message: string }) {
   return (
     <div className="h-full grid place-items-center">
       <div className="text-center max-w-xs">
         <div className="mx-auto mb-4 h-10 w-10 rounded-full bg-primary/10 ring-1 ring-primary/30 grid place-items-center">
           <Loader2 className="h-5 w-5 animate-spin text-primary" />
         </div>
-        <div className="text-sm font-medium mb-1">Loading location data</div>
-        <div className="text-xs text-muted-foreground leading-relaxed">{active.label}</div>
-        <div className="text-[10px] text-muted-foreground/70 mt-2 tabular-nums">
-          {elapsed}s · cached for 7 days after
-        </div>
+        <div role="status" className="text-sm font-medium">{message}</div>
       </div>
     </div>
   );
@@ -738,27 +702,38 @@ function LoadingProgress() {
 
 function GeocodeFailure({
   bundle,
-  onManual,
+  onSave,
+  onRefresh,
 }: {
   bundle: LocationBundle | null;
-  onManual: () => void;
+  onSave: (lat: number, lng: number) => Promise<void>;
+  onRefresh: () => Promise<void>;
 }) {
+  const { isAnalyst } = useCurrentUser();
+  const [lat, setLat] = React.useState("");
+  const [lng, setLng] = React.useState("");
+  const [saving, setSaving] = React.useState(false);
+  const [error, setError] = React.useState("");
+  async function save(event: React.FormEvent) {
+    event.preventDefault(); setSaving(true); setError("");
+    try { await onSave(Number(lat), Number(lng)); }
+    catch (e) { setError((e as { detail?: string }).detail ?? "Location could not be saved. Please retry."); }
+    finally { setSaving(false); }
+  }
   return (
     <div className="h-full grid place-items-center p-10 text-center">
       <div className="max-w-sm">
         <div className="inline-flex h-11 w-11 rounded-xl bg-warning/10 ring-1 ring-warning/30 grid place-items-center mb-3">
           <AlertCircle className="h-5 w-5 text-warning" />
         </div>
-        <h3 className="text-base font-semibold tracking-tight">Couldn&apos;t place this deal on the map</h3>
+        <h3 className="text-base font-semibold tracking-tight">No saved map location</h3>
         <p className="text-sm text-muted-foreground mt-2 leading-relaxed">
-          {bundle?.error ||
-            "Add a street address, city, and state to the deal — geocoding happens automatically."}
+          {bundle?.error || (isAnalyst
+            ? "Set the address on the deal, then look up the location or enter coordinates below."
+            : "A map pin will appear after an analyst saves the location.")}
         </p>
-        <div className="text-[11px] text-muted-foreground mt-5 leading-relaxed">
-          Once the map appears, click <strong>Re-pin</strong> in the top-right to
-          click-place the exact property location. Future refreshes will re-query
-          from that point.
-        </div>
+        {isAnalyst && <Button className="mt-4" onClick={() => void onRefresh()} disabled={saving}>Look up location</Button>}
+        {isAnalyst && <form onSubmit={save} className="mt-5 space-y-3 text-left"><p className="text-xs text-muted-foreground">If you know the property's coordinates, place it directly.</p><div className="grid grid-cols-2 gap-3"><label className="text-xs">Latitude<input type="number" step="any" min={-90} max={90} required value={lat} onChange={e => setLat(e.target.value)} className="mt-1 w-full rounded border bg-background p-2" /></label><label className="text-xs">Longitude<input type="number" step="any" min={-180} max={180} required value={lng} onChange={e => setLng(e.target.value)} className="mt-1 w-full rounded border bg-background p-2" /></label></div>{error && <p role="alert" className="text-xs text-destructive">{error}</p>}<Button type="submit" disabled={saving}>{saving ? "Saving…" : "Save location"}</Button></form>}
       </div>
     </div>
   );

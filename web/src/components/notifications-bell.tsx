@@ -37,6 +37,7 @@ export function NotificationsBell() {
   const [unread, setUnread] = React.useState(0);
   const [items, setItems] = React.useState<Notification[] | null>(null);
   const [loading, setLoading] = React.useState(false);
+  const [error, setError] = React.useState(false);
 
   // Background poll for unread count
   React.useEffect(() => {
@@ -64,6 +65,7 @@ export function NotificationsBell() {
   // Load list on open
   async function loadItems() {
     setLoading(true);
+    setError(false);
     try {
       const r = await fetch("/api/notifications?limit=30", { credentials: "include" });
       if (!r.ok) throw new Error(String(r.status));
@@ -71,15 +73,15 @@ export function NotificationsBell() {
       setItems(d.items);
       setUnread(d.unread);
     } catch {
-      setItems([]);
+      setError(true);
     } finally {
       setLoading(false);
     }
   }
 
   React.useEffect(() => {
-    if (open && items === null) void loadItems();
-  }, [open, items]);
+    if (open) void loadItems();
+  }, [open]);
 
   async function markAll() {
     try {
@@ -164,9 +166,10 @@ export function NotificationsBell() {
             </div>
 
             <div className="max-h-[60vh] overflow-y-auto">
+              {error && <p role="alert" className="p-4 text-xs text-warning">Notifications unavailable. {items ? "Showing the previous list." : ""} <button className="underline" onClick={loadItems}>Retry notifications</button></p>}
               {loading && items === null ? (
                 <div className="p-6 text-center text-xs text-muted-foreground">Loading…</div>
-              ) : !items || items.length === 0 ? (
+              ) : (!items || items.length === 0) && !error ? (
                 <div className="p-8 text-center">
                   <Sparkles className="h-5 w-5 text-muted-foreground mx-auto mb-2" />
                   <div className="text-sm font-medium">You're all caught up</div>
@@ -176,7 +179,7 @@ export function NotificationsBell() {
                 </div>
               ) : (
                 <ul className="divide-y divide-border/50">
-                  {items.map((n) => (
+                  {items?.map((n) => (
                     <NotificationRow key={n.id} n={n} onMarkRead={markOne} />
                   ))}
                 </ul>

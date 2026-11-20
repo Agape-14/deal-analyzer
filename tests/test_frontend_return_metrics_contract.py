@@ -17,10 +17,5 @@ def test_deal_ui_uses_shared_headline_return_helper():
 
         assert "getHeadlineReturnMetrics" in source
 
-
-def test_headline_return_helper_keeps_hold_cash_yield_separate_from_irr():
-    helper = (ROOT / "web" / "src" / "lib" / "return-metrics.ts").read_text(encoding="utf-8")
-
-    assert "isHoldReturnStrategy" in helper
-    assert 'primaryReturnLabel = headlineIrr !== null ? "Target IRR" : "Cash-on-Cash"' in helper
-    assert "isHoldStrategy ? null" in helper
+# Return selection behavior is exercised by web/tests/return-metrics.test.cjs.
+# Avoid whitespace-dependent assertions against TypeScript source text.

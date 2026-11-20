@@ -1,0 +1,55 @@
+name: Dependency candidate
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  candidate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Resolve candidate dependencies without changing the accepted lock
+        run: |
+          sed '/^-c /d' requirements.txt > "$RUNNER_TEMP/candidate-requirements.txt"
+          python -m pip install -r "$RUNNER_TEMP/candidate-requirements.txt"
+          python -m pip freeze > candidate-lock.txt
+      - run: python -m pytest --junitxml=candidate-results.xml
+        env:
+          AUTH_DISABLED: "1"
+      - run: python scripts/evaluate_analysis.py --output candidate-benchmark.json
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: dependency-candidate-review-required
+          path: |
+            candidate-lock.txt
+            candidate-results.xml
+            candidate-benchmark.json
+  frontend-candidate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - run: npm update --package-lock-only --ignore-scripts
+      - run: npm ci
+      - run: npm run test
+      - run: npm run build
+      - run: npm audit --audit-level=high --json > candidate-audit.json
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: frontend-dependency-candidate-review-required
+          path: |
+            web/package.json
+            web/package-lock.json
+            web/candidate-audit.json

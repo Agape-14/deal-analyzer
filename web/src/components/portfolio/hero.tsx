@@ -18,7 +18,7 @@ export function PortfolioHero({ analytics }: { analytics: PortfolioAnalytics }) 
   const hasIrr = typeof s.overall_irr_pct === "number" && Number.isFinite(s.overall_irr_pct);
 
   // Show DPI (distributions only) as a contextual chip on Multiple
-  const dpi = s.total_invested > 0 ? s.total_distributions / s.total_invested : 0;
+  const dpi = s.total_invested > 0 ? s.total_returned / s.total_invested : 0;
 
   return (
     <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
@@ -36,18 +36,16 @@ export function PortfolioHero({ analytics }: { analytics: PortfolioAnalytics }) 
         accent="success"
       />
       <Kpi
-        label="Net Position"
+        label="Cash balance"
         value={net}
         format="money"
-        accent={net >= 0 ? "success" : net < 0 ? "destructive" : undefined}
-        sublabel={net >= 0 ? "In the green" : "Still in J-curve"}
-        delta={{ value: net, format: "money" }}
+        sublabel="Returned less invested; excludes residual value"
       />
       <Kpi
-        label="Overall Multiple"
+        label="Cash returned multiple"
         value={s.overall_multiple}
         format="multiple"
-        sublabel={hasIrr ? `IRR ${fmtPct(s.overall_irr_pct, 1)}` : "IRR —"}
+        sublabel={hasIrr ? `Total-value IRR ${fmtPct(s.overall_irr_pct, 1)} · TVPI ${fmtMultiple(s.tvpi)}` : `Total-value IRR unavailable · ${s.valued_position_count ?? 0}/${s.active_position_count ?? 0} active valuations`}
         accent={s.overall_multiple >= 1 ? "primary" : undefined}
       />
     </div>

@@ -11,6 +11,14 @@ BAD_STATUSES = {"wrong", "missing", "unverifiable", "stale", "math_failed"}
 REVIEWED_STATUSES = {"manual", "confirmed", "calculated"}
 HOLD_STRATEGIES = {"hold", "long_term_hold", "hold_with_sale_option"}
 SALE_STRATEGIES = {"sale", "merchant_build", "sale_after_stabilization"}
+HOLD_CASH_YIELD_PATHS = (
+    "target_returns.hold_scenario.cash_on_cash_return",
+    "target_returns.hold_scenario.target_cash_on_cash",
+    "target_returns.target_cash_on_cash",
+    "target_returns.cash_on_cash_return",
+    "target_returns.hold_scenario.distribution_yield",
+    "target_returns.distribution_yield",
+)
 
 
 def get_path(data: Dict[str, Any] | None, path: str) -> Any:
@@ -27,7 +35,7 @@ def present(value: Any) -> bool:
         return False
     if isinstance(value, str):
         return bool(value.strip())
-    return value != []
+    return value not in ([], {})
 
 
 def bad_source(provenance: Optional[Dict[str, Any]]) -> bool:
@@ -67,7 +75,9 @@ def pick_metric_detail(metrics: Dict[str, Any] | None, paths: Iterable[str]) -> 
         return None
 
     clean = [candidate for candidate in candidates if not bad_source(candidate.get("provenance"))]
-    pool = clean or candidates
+    if not clean:
+        return None
+    pool = clean
     pool.sort(key=lambda candidate: _review_rank(candidate.get("provenance")), reverse=True)
     return pool[0]
 
@@ -127,17 +137,12 @@ def primary_strategy(metrics: Dict[str, Any] | None) -> str:
             "hold for cash flow",
             "business plan is to hold",
             "preferred plan is to hold",
-            "preferred plan",
-            "preferred strategy",
-            "base plan",
-            "base case",
-            "primary plan",
             "refi and hold",
             "refinance and hold",
         )
     )
 
-    if hold_is_stated and (sale_is_hypothetical or present(sale)):
+    if raw == "hold_with_sale_option" or (hold_is_stated and (sale_is_hypothetical or present(sale))):
         return "hold_with_sale_option"
     if raw in HOLD_STRATEGIES or hold_is_stated:
         return "hold"
@@ -145,8 +150,6 @@ def primary_strategy(metrics: Dict[str, Any] | None) -> str:
         return "sale"
     if sale_is_hypothetical and present(hold):
         return "hold_with_sale_option"
-    if raw:
-        return raw
     return "unknown"
 
 
@@ -193,19 +196,21 @@ def _hold_target_irr(metrics: Dict[str, Any] | None) -> Dict[str, Any] | None:
     sale = tr.get("sale_scenario") if isinstance(tr.get("sale_scenario"), dict) else {}
     sale_irr = sale.get("sale_irr")
 
+    contexts = metrics.get("_fact_context") or {}
+    explicit = [path for path in ("target_returns.net_irr", "target_returns.target_irr")
+                if (contexts.get(path) or {}).get("scenario") == "hold"]
     picked = pick_metric_detail(
         metrics,
         (
-            "target_returns.net_irr",
             "target_returns.hold_scenario.net_irr",
             "target_returns.hold_scenario.target_irr",
-            "target_returns.target_irr",
+            *explicit,
         ),
     )
     if not picked:
         return None
 
-    if picked.get("path") == "target_returns.target_irr" and sale_irr is not None and _same_number(
+    if picked.get("path") in {"target_returns.target_irr", "target_returns.net_irr"} and sale_irr is not None and _same_number(
         picked.get("value"),
         sale_irr,
     ):
@@ -218,26 +223,21 @@ def canonical_return_summary(metrics: Dict[str, Any] | None) -> Dict[str, Any]:
     strategy = primary_strategy(metrics)
 
     if strategy in {"hold", "hold_with_sale_option"}:
+        contexts = (metrics or {}).get("_fact_context") or {}
+        hold_multiple_paths = [path for path in ("target_returns.target_equity_multiple", "target_returns.net_equity_multiple")
+                               if (contexts.get(path) or {}).get("scenario") == "hold"]
         return _summary_from_picks(
             strategy,
             _hold_target_irr(metrics),
             pick_metric_detail(
                 metrics,
                 (
-                    "target_returns.target_equity_multiple",
-                    "target_returns.net_equity_multiple",
-                    "target_returns.sale_scenario.sale_equity_multiple",
+                    "target_returns.hold_scenario.target_equity_multiple",
+                    "target_returns.hold_scenario.net_equity_multiple",
+                    *hold_multiple_paths,
                 ),
             ),
-            pick_metric_detail(
-                metrics,
-                (
-                    "target_returns.hold_scenario.cash_on_cash_return",
-                    "target_returns.target_cash_on_cash",
-                    "target_returns.hold_scenario.distribution_yield",
-                    "target_returns.distribution_yield",
-                ),
-            ),
+            pick_metric_detail(metrics, HOLD_CASH_YIELD_PATHS),
         )
 
     if strategy == "sale":

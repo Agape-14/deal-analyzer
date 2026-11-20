@@ -1,30 +1,59 @@
-"""PDF extraction service.
-
-Extracts text (with OCR fallback for scanned pages), tables, and images from
-PDFs uploaded for deal analysis. Image extraction is best-effort — images are
-saved next to the source PDF in an `images/` subdirectory and referenced by
-relative path so downstream callers (AI extractor) can attach them as vision
-inputs.
-"""
+"""Read text and tables from deal PDFs, using bounded OCR for scanned pages."""
 
 from __future__ import annotations
 
 import io
-import os
+import math
+import re
+from collections import Counter
 from dataclasses import dataclass, field
+from decimal import Decimal, InvalidOperation
+from time import monotonic
 
 import fitz  # PyMuPDF
+
+from app.services.document_read_limits import DocumentReadLimit, check_input_size
 
 # Minimum number of non-whitespace characters a page must have before we
 # consider its text layer "real." Anything shorter triggers OCR.
 MIN_TEXT_CHARS = 40
+SPARSE_TEXT_CHARS = 800
+LARGE_IMAGE_PAGE_FRACTION = 0.30
 
-# Render DPI for OCR and image extraction. Higher = better quality, slower.
 OCR_DPI = 200
-IMAGE_DPI = 150
+OCR_TIMEOUT_SECONDS = 12
+MAX_PDF_PAGES = 300
+MAX_PDF_PAGE_TEXT_CHARS = 128_000
+MAX_PDF_TEXT_CHARS = 2_000_000
+MAX_OCR_SIDE_PIXELS = 10_000
+MAX_OCR_RENDER_PIXELS = 12_000_000
+MAX_PDF_OCR_PIXELS = 360_000_000
+MAX_PDF_OCR_SECONDS = 120
 
-# Cap per-page OCR time by limiting image count per page, etc.
-MAX_IMAGES_PER_PAGE = 10
+# Keep table-finder output and numeric diagnostics within their document budgets.
+MAX_PDF_TABLES = 32
+MAX_TABLE_ROWS = 120
+MAX_TABLE_COLUMNS = 20
+MAX_TABLE_SCAN_CELLS = 100_000
+MAX_PDF_TABLE_CELLS = 2000
+MAX_CELL_CHARS = 400
+MAX_TABLE_TEXT_CHARS = 40000
+MAX_TABLE_REVIEW_CHARS = 8000
+MAX_PDF_REVIEW_CHARS = 40000
+MAX_NUMERIC_CHECKS_PER_PAGE = 12
+MAX_PDF_NUMERIC_CHECKS = 48
+MAX_NUMERIC_DIAGNOSTICS = 80
+MAX_DIAGNOSTIC_TEXT_CHARS = 20000
+MAX_NATIVE_GLYPHS_PER_PAGE = 50000
+MAX_TEXT_RECOVERIES = 128
+MAX_RECOVERY_TEXT_CHARS = 16000
+_TABLE_REVIEW_MARKER = "\n\n--- Extracted PDF table rows ---\n"
+
+_NUMBER = re.compile(r"(?<![\w.])(?:\(\s*)?[-+−]?\s*[$€£]?\s*\d[\d,.]*(?:\s*[%x×])?(?:\s*\))?(?!\w)", re.I)
+_PROPORTION_LABEL = re.compile(
+    r"vacancy|occupancy|cap(?:italization)?\s*rate|interest|expense.*ratio|%.*(?:total|egi|gpi|receipts)|"
+    r"loan.*(?:cost|value)|\b(?:ltv|ltc)\b", re.I,
+)
 
 
 @dataclass
@@ -38,12 +67,13 @@ class PdfExtractionResult:
     images: list[dict] = field(default_factory=list)
     # Per-page extraction diagnostics so the UI can surface "page 3 had
     # no usable text" instead of silently dropping that page's data.
-    #   source: "text" | "ocr" | "empty"
+    #   source: "text" | "ocr" | "ocr_weak" | "ocr_image" | "image_text_unread" | "empty"
     #   chars:  non-whitespace character count
     page_diagnostics: list[dict] = field(default_factory=list)
     # Aggregate quality score 0..100 based on page coverage. 100 = every
     # page yielded reasonable text; 0 = all pages empty.
     quality_score: int = 100
+    numeric_diagnostics: list[dict] = field(default_factory=list)
 
     def to_dict(self) -> dict:
         return {
@@ -51,6 +81,7 @@ class PdfExtractionResult:
             "page_count": self.page_count,
             "ocr_page_count": self.ocr_page_count,
             "tables": self.tables,
+            "numeric_diagnostics": self.numeric_diagnostics,
             "images": self.images,
             "page_diagnostics": self.page_diagnostics,
             "quality_score": self.quality_score,
@@ -68,31 +99,370 @@ def _ocr_page(page: "fitz.Page") -> str:
     try:
         pix = page.get_pixmap(dpi=OCR_DPI)
         img = Image.open(io.BytesIO(pix.tobytes("png")))
-        return pytesseract.image_to_string(img) or ""
+        return pytesseract.image_to_string(img, timeout=OCR_TIMEOUT_SECONDS) or ""
     except Exception:
         return ""
 
 
-def _extract_tables(page: "fitz.Page", page_num: int) -> list[dict]:
+def _read_budget():
+    return {"tables": 0, "cells": 0, "text_chars": 0, "review_chars": 0, "numeric_checks": 0,
+            "diagnostics": 0, "diagnostic_chars": 0, "page_checks": {},
+            "recoveries": 0, "recovery_chars": 0,
+            "review_pages": set(), "truncated_pages": set(), "unchecked_pages": set(),
+            "ocr_pixels": 0, "ocr_seconds": 0.0, "ocr_limited_pages": set()}
+
+
+def _read_ocr(area, page_num, budget, render):
+    # Account for rounding the origin and end of the clip out to pixel edges.
+    scale = OCR_DPI / 72
+    side = max(area.width, area.height) * scale
+    if (area.is_empty or not math.isfinite(side) or side + 2 > MAX_OCR_SIDE_PIXELS
+            or budget["ocr_seconds"] >= MAX_PDF_OCR_SECONDS):
+        budget["ocr_limited_pages"].add(page_num)
+        return ""
+    pixels = (math.ceil(area.width * scale) + 2) * (math.ceil(area.height * scale) + 2)
+    if pixels > MAX_OCR_RENDER_PIXELS or budget["ocr_pixels"] + pixels > MAX_PDF_OCR_PIXELS:
+        budget["ocr_limited_pages"].add(page_num)
+        return ""
+    budget["ocr_pixels"] += pixels
+    started = monotonic()
+    try:
+        return render()
+    finally:
+        budget["ocr_seconds"] += monotonic() - started
+
+
+def _bbox(value):
+    try:
+        box = fitz.Rect(value)
+        values = [float(value) for value in box]
+        if not all(math.isfinite(value) for value in values) or box.is_empty:
+            return None
+        return [round(value, 2) for value in values]
+    except (TypeError, ValueError, AssertionError):
+        return None
+
+
+def _number_value(token):
+    text = re.sub(r"[\s$€£%x×()]", "", token.casefold()).replace("−", "-")
+    if not re.fullmatch(r"[-+]?\d+(?:,\d{3})*(?:\.\d+)?", text):
+        return None
+    try:
+        value = Decimal(text.replace(",", ""))
+        return -value if token.strip().startswith("(") and token.strip().endswith(")") else value
+    except InvalidOperation:
+        return None
+
+
+def _table_candidates(page):
+    """Prefer physical grid lines, retaining separate unruled layout tables.
+
+    The layout finder can introduce whitespace columns inside a ruled grid.
+    Consume each finder before calling the next: native Table.extract() may
+    depend on the finder's current character state.
+    """
+    try:
+        strict = page.find_tables(strategy="lines_strict", use_layout=False)
+        ruled = getattr(strict, "tables", None) or []
+    except Exception:
+        ruled = []
+    ruled_boxes = []
+    for table in ruled:
+        box = _bbox(getattr(table, "bbox", None))
+        if box:
+            ruled_boxes.append(fitz.Rect(box))
+        yield table
+    try:
+        layout = page.find_tables()
+    except Exception:
+        return
+    for table in getattr(layout, "tables", None) or []:
+        box = _bbox(getattr(table, "bbox", None))
+        if box:
+            rect = fitz.Rect(box)
+            if any((rect & ruled_box).get_area() >= min(rect.get_area(), ruled_box.get_area()) * 0.5
+                   for ruled_box in ruled_boxes):
+                continue
+        yield table
+
+
+def _native_glyphs(page):
+    """Read only positioned text characters, excluding embedded image bytes."""
+    try:
+        data = page.get_text("rawdict", flags=fitz.TEXTFLAGS_RAWDICT & ~fitz.TEXT_PRESERVE_IMAGES)
+        if not isinstance(data, dict):
+            return []
+        glyphs = []
+        for block in data.get("blocks", []):
+            for line in block.get("lines", []):
+                direction = line.get("dir", (1, 0))
+                if len(direction) != 2 or abs(direction[0] - 1) > 0.01 or abs(direction[1]) > 0.01:
+                    continue
+                for span in line.get("spans", []):
+                    for char in span.get("chars", []):
+                        value = char.get("c", "")
+                        if not value or value.isspace():
+                            continue
+                        x, y = map(float, char["origin"])
+                        if not math.isfinite(x) or not math.isfinite(y):
+                            continue
+                        glyphs.append((x, y, value))
+                        if len(glyphs) > MAX_NATIVE_GLYPHS_PER_PAGE:
+                            return []
+        return glyphs
+    except Exception:
+        return []
+
+
+def _positioned_numeric_cell(text, box, glyphs):
+    """Recover reading order only; never add, remove, or replace a glyph.
+
+    A detached comma/decimal can be emitted as a second text line even though
+    its PDF baseline matches the digits. Require a single horizontal baseline,
+    the exact same non-whitespace characters, and one valid numeric token.
+    """
+    if (not box or not re.fullmatch(r"[\d\s,.()$€£%x×+−-]+", text, re.I)
+            or not re.search(r"[,.]", text)):
+        return None
+    compact = "".join(text.split())
+    selected = [(x, y, char) for x, y, char in glyphs if box[0] <= x < box[2] and box[1] <= y < box[3]]
+    if not selected or max(item[1] for item in selected) - min(item[1] for item in selected) > 0.5:
+        return None
+    positioned = "".join(item[2] for item in sorted(selected, key=lambda item: item[0]))
+    if (positioned == compact or Counter(positioned) != Counter(compact)
+            or not _NUMBER.fullmatch(positioned) or _number_value(positioned) is None):
+        return None
+    return positioned
+
+
+def _numeric_issue(native_token, other_token):
+    if native_token.strip() == other_token.strip():
+        return None
+    native, other = _number_value(native_token), _number_value(other_token)
+    if native is not None and other is not None and native == other:
+        return None
+    native_digits = re.sub(r"\D", "", native_token)
+    other_digits = re.sub(r"\D", "", other_token)
+    if native_digits == other_digits and ("," in native_token or "," in other_token):
+        return "numeric_grouping_disagreement"
+    if native is not None and other is not None and native and other:
+        ratio = abs(native / other)
+        if ratio in {Decimal("0.001"), Decimal("0.01"), Decimal("0.1"), Decimal(10), Decimal(100), Decimal(1000)}:
+            return "possible_dropped_decimal"
+    return "numeric_text_disagreement"
+
+
+def _suspect_number(token, labels):
+    grouped = re.sub(r"[\s$€£()%]", "", token)
+    money_context = re.search(r"cost|expense|budget|debt|loan|income|revenue|rent|price|proceeds|cash|total|per.unit", labels, re.I)
+    if ("." in grouped and re.fullmatch(r"[-+]?[1-9]\d{0,2}(?:[,.]\d{3}){2,}", grouped)
+            and (money_context or re.search(r"[$€£(]", token))):
+        return "ambiguous_numeric_grouping"
+    number = _number_value(token)
+    if number is not None and ("%" in token or "%" in labels) and abs(number) > 100 and _PROPORTION_LABEL.search(labels):
+        return "unverified_suspect_percentage"
+    if number is not None and abs(number) > 20 and re.search(r"\bdscr\b|debt.service.coverage", labels, re.I):
+        return "unverified_suspect_ratio"
+    return None
+
+
+def _ocr_region(page, box):
+    try:
+        import pytesseract
+        from PIL import Image
+
+        pix = page.get_pixmap(dpi=OCR_DPI, clip=fitz.Rect(box))
+        img = Image.open(io.BytesIO(pix.tobytes("png")))
+        return (pytesseract.image_to_string(img, config="--psm 6", timeout=OCR_TIMEOUT_SECONDS) or "").strip()
+    except Exception:
+        return ""
+
+
+def _add_diagnostic(diagnostic, budget, output):
+    size = len(diagnostic["source_row"]) + len(diagnostic.get("corroborating_token") or "")
+    if budget["diagnostics"] >= MAX_NUMERIC_DIAGNOSTICS or budget["diagnostic_chars"] + size > MAX_DIAGNOSTIC_TEXT_CHARS:
+        budget["unchecked_pages"].add(diagnostic["page"])
+        return
+    output.append(diagnostic)
+    budget["diagnostics"] += 1
+    budget["diagnostic_chars"] += size
+
+
+def _table_numeric_diagnostics(page, table, found_table, words, budget):
+    output = []
+    checks = budget["page_checks"].get(table["page"], 0)
+    review_rows = {row["row"]: row["text"] for row in table["review_rows"]}
+    geometry = getattr(found_table, "rows", []) or []
+    for row_index, row in enumerate(table["rows"], 1):
+        if row_index not in review_rows:
+            continue
+        for column, text in enumerate(row, 1):
+            tokens = _NUMBER.findall(text or "")
+            if column == 1 or len(tokens) != 1:
+                continue
+            token = tokens[0].strip()
+            labels = table["row_labels"][row_index - 1] + " " + table["column_labels"][column - 1]
+            suspect = _suspect_number(token, labels)
+            cells = getattr(geometry[row_index - 1], "cells", []) if row_index <= len(geometry) else []
+            box = _bbox(cells[column - 1]) if column <= len(cells) else None
+            positioned = []
+            if box:
+                positioned = [word for word in words
+                              if box[0] <= (word[0] + word[2]) / 2 <= box[2]
+                              and box[1] <= (word[1] + word[3]) / 2 <= box[3]]
+                positioned.sort(key=lambda word: (word[5:] if len(word) >= 8 else (word[1], word[0])))
+            native_words = _NUMBER.findall(" ".join(str(word[4]) for word in positioned))
+            conflict = _numeric_issue(token, native_words[0]) if len(native_words) == 1 else None
+            if not suspect and not conflict:
+                continue
+            diagnostic = {
+                "code": conflict or suspect, "page": table["page"], "table_index": table["table_index"],
+                "row": row_index, "column": column, "row_label": table["row_labels"][row_index - 1],
+                "column_label": table["column_labels"][column - 1], "native_token": token,
+                "reading_source": "native_pdf_table",
+                "source_row": review_rows[row_index], "cell_bbox": box,
+                "corroborating_token": native_words[0].strip() if conflict else None,
+                "corroborating_source": "positioned_native_text" if conflict else None,
+            }
+            if box and checks < MAX_NUMERIC_CHECKS_PER_PAGE and budget["numeric_checks"] < MAX_PDF_NUMERIC_CHECKS:
+                checks += 1
+                budget["page_checks"][table["page"]] = checks
+                budget["numeric_checks"] += 1
+                area = fitz.Rect(box)
+                ocr_tokens = _NUMBER.findall(
+                    _read_ocr(area, table["page"], budget, lambda: _ocr_region(page, box))
+                )
+                if len(ocr_tokens) == 1:
+                    ocr_token = ocr_tokens[0].strip()
+                    ocr_issue = _numeric_issue(token, ocr_token)
+                    if ocr_issue:
+                        diagnostic.update(code=ocr_issue, corroborating_token=ocr_token,
+                                          corroborating_source="rendered_cell_ocr")
+                    elif not conflict and suspect != "ambiguous_numeric_grouping":
+                        continue
+            elif box:
+                budget["unchecked_pages"].add(table["page"])
+            _add_diagnostic(diagnostic, budget, output)
+    return output
+
+
+def _ocr_numeric_diagnostics(text, page_text, page_num, budget):
+    diagnostics = []
+    for row, line in enumerate(text.splitlines(), 1):
+        if not line.strip() or line not in page_text or len(line) > 1000:
+            continue
+        for token in _NUMBER.findall(line):
+            code = _suspect_number(token, line)
+            if not code:
+                continue
+            _add_diagnostic({
+                "code": code, "page": page_num, "table_index": None, "row": row, "column": None,
+                "row_label": line[:line.find(token)].strip()[:120], "column_label": "",
+                "native_token": token.strip(), "source_row": line, "cell_bbox": None,
+                "reading_source": "rendered_page_ocr",
+                "corroborating_token": None, "corroborating_source": None,
+            }, budget, diagnostics)
+    return diagnostics
+
+
+def _extract_tables(page: "fitz.Page", page_num: int, budget=None) -> list[dict]:
     """Extract tables from a page using PyMuPDF's table finder.
 
     Returns a list of {page, rows, markdown} dicts. Failures are swallowed —
     table extraction is best-effort and must not block text extraction.
     """
     results: list[dict] = []
-    try:
-        tf = page.find_tables()
-    except Exception:
+    budget = budget if budget is not None else _read_budget()
+    if budget["tables"] >= MAX_PDF_TABLES or budget["cells"] >= MAX_PDF_TABLE_CELLS:
+        budget["truncated_pages"].add(page_num)
         return results
-
-    tables = getattr(tf, "tables", None) or []
-    for idx, tbl in enumerate(tables, 1):
+    try:
+        words = page.get_text("words") or []
+    except Exception:
+        words = []
+    glyphs = None
+    for idx, tbl in enumerate(_table_candidates(page), 1):
+        if budget["tables"] >= MAX_PDF_TABLES or budget["cells"] >= MAX_PDF_TABLE_CELLS:
+            budget["truncated_pages"].add(page_num)
+            break
+        if (getattr(tbl, "row_count", 0) or 0) * (getattr(tbl, "col_count", 0) or 0) > MAX_TABLE_SCAN_CELLS:
+            budget["truncated_pages"].add(page_num)
+            continue
         try:
             rows = tbl.extract()
         except Exception:
             continue
         if not rows:
             continue
+        original_rows = len(rows)
+        original_columns = max(len(row) for row in rows)
+        if not original_columns:
+            continue
+        bounded_rows = []
+        recoveries = []
+        geometry = getattr(tbl, "rows", []) or []
+        truncated = original_rows > MAX_TABLE_ROWS or original_columns > MAX_TABLE_COLUMNS
+        for row_index, row in enumerate(rows[:MAX_TABLE_ROWS], 1):
+            if not row:
+                bounded_rows.append([])
+                continue
+            bounded = []
+            for column, value in enumerate(row[:MAX_TABLE_COLUMNS], 1):
+                if budget["cells"] >= MAX_PDF_TABLE_CELLS:
+                    truncated = True
+                    break
+                text = None if value is None else str(value)
+                if text is not None and (len(text) > MAX_CELL_CHARS or budget["text_chars"] + len(text) > MAX_TABLE_TEXT_CHARS):
+                    marker = "[cell text omitted]"
+                    text = marker if budget["text_chars"] + len(marker) <= MAX_TABLE_TEXT_CHARS else None
+                    truncated = True
+                elif text is not None and re.search(r"[,.]", text) and not _NUMBER.fullmatch(text.strip()):
+                    if glyphs is None:
+                        glyphs = _native_glyphs(page)
+                    cells = getattr(geometry[row_index - 1], "cells", []) if row_index <= len(geometry) else []
+                    box = _bbox(cells[column - 1]) if column <= len(cells) else None
+                    positioned = _positioned_numeric_cell(text, box, glyphs)
+                    if positioned:
+                        size = len(text) + len(positioned)
+                        if (budget["recoveries"] < MAX_TEXT_RECOVERIES
+                                and budget["recovery_chars"] + size <= MAX_RECOVERY_TEXT_CHARS):
+                            recoveries.append({"row": row_index, "column": column, "original_text": text,
+                                               "positioned_text": positioned, "source": "native_glyph_positions"})
+                            budget["recoveries"] += 1
+                            budget["recovery_chars"] += size
+                            text = positioned
+                        else:
+                            truncated = True
+                if text is not None:
+                    budget["text_chars"] += len(text)
+                bounded.append(text)
+                budget["cells"] += 1
+            if not bounded:
+                break
+            bounded_rows.append(bounded)
+        rows = bounded_rows
+        column_count = max(len(row) for row in rows)
+        header = getattr(tbl, "header", None)
+        names = getattr(header, "names", []) or []
+        column_labels = [str(names[index] or "")[:100] if index < len(names) else "" for index in range(column_count)]
+        row_labels = [str(row[0] or "")[:120] if row else "" for row in rows]
+        truncated = truncated or any(len(str(name or "")) > 100 for name in names[:column_count])
+        truncated = truncated or any(row and len(str(row[0] or "")) > 120 for row in rows)
+        review_rows = []
+        review_size = 0
+        for row_index, row in enumerate(rows, 1):
+            cells = [f"{column_labels[column - 1] or f'Column {column}'}={' '.join(str(value or '').split())}"
+                     for column, value in enumerate(row, 1)]
+            line = f"Table {idx} row {row_index} | " + " | ".join(cells)
+            size = len(line) + 1
+            overhead = len(_TABLE_REVIEW_MARKER) if page_num not in budget["review_pages"] else 0
+            if review_size + size > MAX_TABLE_REVIEW_CHARS or budget["review_chars"] + size + overhead > MAX_PDF_REVIEW_CHARS:
+                truncated = True
+                break
+            review_rows.append({"row": row_index, "text": line})
+            review_size += size
+            budget["review_chars"] += size + overhead
+            budget["review_pages"].add(page_num)
         # Render as markdown for easy inclusion in AI prompts.
         md_lines: list[str] = []
         for row_idx, row in enumerate(rows):
@@ -100,119 +470,133 @@ def _extract_tables(page: "fitz.Page", page_num: int) -> list[dict]:
             md_lines.append("| " + " | ".join(cells) + " |")
             if row_idx == 0:
                 md_lines.append("|" + "|".join("---" for _ in cells) + "|")
-        results.append({
+        table = {
             "page": page_num,
             "table_index": idx,
             "rows": rows,
             "markdown": "\n".join(md_lines),
-        })
+            "bbox": _bbox(getattr(tbl, "bbox", None)),
+            "column_labels": column_labels,
+            "row_labels": row_labels,
+            "header_external": bool(getattr(header, "external", False)),
+            "review_rows": review_rows,
+            "original_row_count": original_rows,
+            "original_column_count": original_columns,
+            "truncated": truncated,
+            "text_recoveries": recoveries,
+        }
+        table["numeric_diagnostics"] = _table_numeric_diagnostics(page, table, tbl, words, budget)
+        results.append(table)
+        budget["tables"] += 1
+        if truncated:
+            budget["truncated_pages"].add(page_num)
     return results
 
 
-def _extract_images(
-    doc: "fitz.Document",
-    page: "fitz.Page",
-    page_num: int,
-    output_dir: str,
-) -> list[dict]:
-    """Extract embedded images from a page and write them to disk.
-
-    Returns metadata for each saved image. Skips tiny images (likely logos /
-    icons / bullets) and caps the count per page.
-    """
-    results: list[dict] = []
+def _has_large_image(page: "fitz.Page") -> bool:
     try:
-        img_list = page.get_images(full=True)
+        page_area = page.rect.get_area()
+        images = page.get_image_info() or []
     except Exception:
-        return results
-
-    os.makedirs(output_dir, exist_ok=True)
-    for img_idx, img_info in enumerate(img_list[:MAX_IMAGES_PER_PAGE], 1):
-        xref = img_info[0]
+        return False
+    if page_area <= 0:
+        return False
+    for image in images:
         try:
-            base = doc.extract_image(xref)
-        except Exception:
+            image_area = (fitz.Rect(image["bbox"]) & page.rect).get_area()
+        except (KeyError, TypeError, ValueError, AssertionError):
             continue
-        if not base:
-            continue
-        img_bytes = base.get("image")
-        ext = base.get("ext", "png")
-        width = base.get("width", 0)
-        height = base.get("height", 0)
+        if image_area >= page_area * LARGE_IMAGE_PAGE_FRACTION:
+            return True
+    return False
 
-        # Skip trivially small images.
-        if width < 80 or height < 80:
-            continue
-        if not img_bytes:
-            continue
 
-        fname = f"page{page_num:03d}_img{img_idx:02d}.{ext}"
-        fpath = os.path.join(output_dir, fname)
-        try:
-            with open(fpath, "wb") as fh:
-                fh.write(img_bytes)
-        except OSError:
-            continue
-
-        results.append({
-            "page": page_num,
-            "index": img_idx,
-            "path": fpath,
-            "width": width,
-            "height": height,
-            "ext": ext,
-        })
-    return results
+def _merge_page_text(native_text: str, ocr_text: str) -> str:
+    normalized_ocr = " ".join(ocr_text.split()).casefold()
+    native_lines = [" ".join(line.split()).casefold() for line in native_text.splitlines() if line.strip()]
+    if normalized_ocr in " ".join(native_text.split()).casefold():
+        return native_text
+    if all(line in normalized_ocr for line in native_lines):
+        return ocr_text
+    return native_text + "\n\n" + ocr_text
 
 
 def extract_pdf(file_path: str) -> PdfExtractionResult:
-    """Full extraction: text (with OCR fallback), tables, and images.
-
-    The primary consumer is the deal extractor. Keeping this function as the
-    single entry point makes it easy to tune (e.g., skip tables for large
-    docs, or disable image extraction for non-PDF files)."""
-    result = PdfExtractionResult()
-
+    """Read native text and tables, with OCR for relevant images in place."""
     if not file_path.lower().endswith(".pdf"):
-        return result
+        return PdfExtractionResult()
 
+    check_input_size(file_path)
     try:
         doc = fitz.open(file_path)
     except Exception as e:
-        result.text = f"[Failed to open PDF: {e}]"
-        return result
+        return PdfExtractionResult(text=f"[Failed to open PDF: {e}]", quality_score=0)
+    with doc:
+        return _read_pdf(doc)
 
-    result.page_count = len(doc)
 
-    images_dir = os.path.join(os.path.dirname(file_path), "images")
-
+def _read_pdf(doc):
+    result = PdfExtractionResult(page_count=len(doc))
+    if result.page_count > MAX_PDF_PAGES:
+        raise DocumentReadLimit(f"The PDF exceeds the {MAX_PDF_PAGES}-page reading limit. Split it into smaller PDFs.")
     text_parts: list[str] = []
+    text_chars = 0
+    budget = _read_budget()
     for page_num, page in enumerate(doc, 1):
         page_text = (page.get_text() or "").strip()
+        if len(page_text) > MAX_PDF_PAGE_TEXT_CHARS or text_chars + len(page_text) > MAX_PDF_TEXT_CHARS:
+            raise DocumentReadLimit("The PDF exceeds the text reading limit. Split it into smaller PDFs.")
+        native_text = page_text
         source = "text" if len(page_text) >= MIN_TEXT_CHARS else "empty"
+        image_needs_reading = len(page_text) < SPARSE_TEXT_CHARS and _has_large_image(page)
+        ocr_text = ""
 
-        # OCR fallback for pages with no / near-no text layer.
-        if len(page_text) < MIN_TEXT_CHARS:
-            ocr_text = _ocr_page(page).strip()
-            if len(ocr_text) > len(page_text):
-                page_text = ocr_text
+        # A native heading can sit above an image containing the actual budget.
+        if len(page_text) < MIN_TEXT_CHARS or image_needs_reading:
+            ocr_text = _read_ocr(page.rect, page_num, budget, lambda: _ocr_page(page)).strip()
+            if len(ocr_text) > MAX_PDF_PAGE_TEXT_CHARS:
+                raise DocumentReadLimit("The PDF exceeds the text reading limit. Split it into smaller PDFs.")
+            page_text = _merge_page_text(page_text, ocr_text)
+            normalized_page = " ".join(page_text.split()).casefold()
+            normalized_native = " ".join(native_text.split()).casefold()
+            added_text = normalized_page != normalized_native
+            if added_text:
                 result.ocr_page_count += 1
                 source = "ocr" if len(ocr_text) >= MIN_TEXT_CHARS else "ocr_weak"
+            if image_needs_reading:
+                image_chars = len(normalized_page) - len(normalized_native)
+                source = "ocr_image" if image_chars >= MIN_TEXT_CHARS else "image_text_unread"
 
+        page_tables = _extract_tables(page, page_num, budget)
+        page_diagnostics = []
+        for table in page_tables:
+            page_diagnostics.extend(table.pop("numeric_diagnostics", []))
+        page_diagnostics.extend(_ocr_numeric_diagnostics(ocr_text, page_text, page_num, budget))
+        review_text = "\n".join(row["text"] for table in page_tables for row in table["review_rows"])
+        read_chars = len(page_text)
+        if review_text:
+            page_text += _TABLE_REVIEW_MARKER + review_text
         if page_text:
-            text_parts.append(f"--- Page {page_num} ---\n{page_text}")
+            page_block = f"--- Page {page_num} ---\n{page_text}"
+            text_chars += len(page_block) + 2
+            if text_chars > MAX_PDF_TEXT_CHARS:
+                raise DocumentReadLimit("The PDF exceeds the text reading limit. Split it into smaller PDFs.")
+            text_parts.append(page_block)
         else:
             source = "empty"
 
         result.page_diagnostics.append(
-            {"page": page_num, "source": source, "chars": len(page_text)}
+            {"page": page_num, "source": source, "chars": read_chars, "table_review_chars": len(review_text),
+             "image_text_unread": image_needs_reading and source == "image_text_unread",
+             "table_count": len(page_tables), "table_details_truncated": page_num in budget["truncated_pages"],
+             "numeric_diagnostics_count": len(page_diagnostics),
+             "numeric_checks_truncated": page_num in budget["unchecked_pages"],
+             "ocr_reading_limit": page_num in budget["ocr_limited_pages"]}
         )
 
-        # Best-effort tables and images. Failures are silently skipped.
-        result.tables.extend(_extract_tables(page, page_num))
-        result.images.extend(_extract_images(doc, page, page_num, images_dir))
+        result.tables.extend(page_tables)
+        result.numeric_diagnostics.extend(page_diagnostics)
 
-    doc.close()
     result.text = "\n\n".join(text_parts)
 
     # Quality score: fraction of pages that produced >= MIN_TEXT_CHARS.
@@ -223,7 +607,7 @@ def extract_pdf(file_path: str) -> PdfExtractionResult:
         for d in result.page_diagnostics:
             w = 2.0 if d["page"] <= 5 else 1.0
             total += w
-            if d["chars"] >= MIN_TEXT_CHARS:
+            if d["chars"] >= MIN_TEXT_CHARS and not d.get("image_text_unread"):
                 good += w
         result.quality_score = int(round((good / total) * 100)) if total else 0
     return result

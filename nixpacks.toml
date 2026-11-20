@@ -1,7 +1,7 @@
 # Nixpacks config for the FastAPI service on Railway.
 # Pins Python + system deps (Tesseract for OCR, poppler for PDF image extraction).
 [phases.setup]
-nixPkgs = ["python311", "tesseract", "poppler_utils", "gcc"]
+nixPkgs = ["python312", "tesseract", "poppler_utils", "gcc"]
 
 [phases.install]
 # Create a venv to sidestep PEP 668 (the Nix-store Python is

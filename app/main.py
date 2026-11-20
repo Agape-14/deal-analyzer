@@ -1,10 +1,11 @@
 import sys
 import os
 import logging
+import asyncio
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
-from fastapi import FastAPI, Request as FastRequest
+from fastapi import Depends, FastAPI, HTTPException, Request as FastRequest
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from fastapi.requests import Request
@@ -13,7 +14,7 @@ from starlette.middleware.sessions import SessionMiddleware
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.middleware.gzip import GZipMiddleware
 from app.security_headers import SecurityHeadersMiddleware
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 from app.database import init_db
 from app.routers import (
     developers,
@@ -30,15 +31,27 @@ from app.routers import (
 )
 from app.config import describe_models, environment_status
 from app.auth import (
-    auth_enabled,
-    current_user,
+    SESSION_TTL_DAYS,
+    authenticate_request,
+    authentication_check,
+    deployment_auth_required,
     describe_auth,
     is_public_path,
+    is_analyst,
+    require_auth,
     session_secret,
 )
 from app.rate_limit import describe_policies
 from app.services.json_parser_guard import install_deal_verifier_json_guard
 from app.services.pipeline_runner import start_pipeline_runner, stop_pipeline_runner
+from app.routers import analysis as analysis_router
+from app.routers import financing_measures as financing_measures_router
+from app.routers import review_drafts as review_drafts_router
+from app.routers import return_schedules as return_schedules_router
+from sqlalchemy.orm.exc import StaleDataError
+from app.services.review_jobs import start_review_worker, stop_review_worker
+from app.services.operational_readiness import readiness_report
+from app.services.document_cleanup import document_cleanup_worker
 
 
 # ----------------------------- logging setup ----------------------------- #
@@ -60,6 +73,9 @@ install_deal_verifier_json_guard()
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    auth_check = authentication_check()
+    if auth_check["status"] == "error":
+        raise RuntimeError(f"Authentication configuration is invalid ({auth_check['code']})")
     await init_db()
     # Surface environment configuration at boot so operators don't discover
     # missing keys by user bug reports.
@@ -77,14 +93,48 @@ async def lifespan(app: FastAPI):
         log.info("[auth] enabled for user '%s' roles=%s", auth.get("username"), auth.get("roles"))
     else:
         log.warning("[auth] %s", auth.get("message"))
-    pipeline_task = start_pipeline_runner()
+    workers_enabled = os.getenv("REVIEW_WORKERS_ENABLED", "1").lower() not in {"0", "false", "no"}
+    pipeline_task = start_pipeline_runner() if workers_enabled else None
+    review_task = start_review_worker() if workers_enabled else None
+    cleanup_task = asyncio.create_task(document_cleanup_worker(deal_uploads.UPLOAD_DIR))
+    backfill_task = None
+    if os.getenv("KENYON_SOURCE_REPLAY"):
+        from scripts.release_review_backfill import start_source_replay
+        backfill_task = start_source_replay()
+    elif os.getenv("KENYON_REVIEW_REPAIR"):
+        from scripts.release_review_backfill import start_review_repair
+        backfill_task = start_review_repair()
+    elif os.getenv("KENYON_REVIEW_BACKFILL_PLAN"):
+        from scripts.release_review_backfill import start_review_backfill
+        backfill_task = start_review_backfill()
     try:
         yield
     finally:
-        await stop_pipeline_runner(pipeline_task)
+        cleanup_task.cancel()
+        with suppress(asyncio.CancelledError):
+            await cleanup_task
+        if backfill_task and not backfill_task.done():
+            backfill_task.cancel()
+            with suppress(asyncio.CancelledError):
+                await backfill_task
+        if review_task:
+            await stop_review_worker(review_task)
+        if pipeline_task:
+            await stop_pipeline_runner(pipeline_task)
 
 
 app = FastAPI(title="Kenyon Investment Dashboard", version="1.0.0", lifespan=lifespan)
+
+
+@app.exception_handler(StaleDataError)
+async def stale_analysis_handler(request, exc):
+    return JSONResponse(status_code=409, content={"detail": "The deal changed during this operation. Reload and retry; no older result was saved."})
+
+
+app.include_router(analysis_router.router, prefix="/api/deals", tags=["analysis"])
+app.include_router(financing_measures_router.router, prefix="/api/deals", tags=["analysis"])
+app.include_router(review_drafts_router.router, prefix="/api/deals", tags=["review"])
+app.include_router(return_schedules_router.router, prefix="/api/deals", tags=["analysis"])
 
 
 class EnforceAuthMiddleware(BaseHTTPMiddleware):
@@ -92,7 +142,7 @@ class EnforceAuthMiddleware(BaseHTTPMiddleware):
 
     Runs *after* SessionMiddleware so `request.session` is populated.
     Public paths (healthz, auth, static, legacy, root) pass through
-    untouched. If auth is globally disabled this is a no-op.
+    untouched. Auth bypass is available only in local development.
     """
 
     VIEWER_BLOCKED_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
@@ -102,18 +152,24 @@ class EnforceAuthMiddleware(BaseHTTPMiddleware):
     }
 
     async def dispatch(self, request: FastRequest, call_next):
-        if not auth_enabled():
-            return await call_next(request)
-
         path = request.url.path or "/"
-        if not path.startswith("/api/") or is_public_path(path):
+        if (path != "/api" and not path.startswith("/api/")) or is_public_path(path):
             return await call_next(request)
 
-        user = current_user(request)
+        check = authentication_check()
+        if check["status"] == "error":
+            return JSONResponse({"detail": "Authentication unavailable"}, status_code=503)
+        if check["code"] == "local_auth_disabled":
+            return await call_next(request)
+
+        try:
+            user = await authenticate_request(request)
+        except HTTPException as error:
+            return JSONResponse({"detail": error.detail}, status_code=error.status_code)
         if not user:
             return JSONResponse({"detail": "Not authenticated"}, status_code=401)
 
-        role = str(user.get("r") or "admin").lower()
+        role = user["r"]
         method = request.method.upper()
         if role == "viewer" and method in self.VIEWER_BLOCKED_METHODS and path not in self.VIEWER_READONLY_POSTS:
             return JSONResponse({"detail": "Viewer accounts are read-only"}, status_code=403)
@@ -121,13 +177,10 @@ class EnforceAuthMiddleware(BaseHTTPMiddleware):
         return await call_next(request)
 
 
-# Cookie Secure flag: on in production (Railway sets RAILWAY_ENVIRONMENT;
-# any deploy with HTTPS should have it). Override with SESSION_HTTPS_ONLY=0
-# for local HTTP development.
-_session_https_only = os.getenv(
-    "SESSION_HTTPS_ONLY",
-    "1" if os.getenv("RAILWAY_ENVIRONMENT") or os.getenv("PRODUCTION") else "0",
-).strip().lower() in ("1", "true", "yes")
+# Deployments always use Secure cookies. Local HTTPS can opt in.
+_session_https_only = deployment_auth_required() or os.getenv("SESSION_HTTPS_ONLY", "").strip().lower() in (
+    "1", "true", "yes",
+)
 
 # Middleware ordering note: `add_middleware` registers in reverse — the
 # LAST one added is the OUTERMOST layer (first to see the request). So
@@ -143,7 +196,7 @@ app.add_middleware(
     SessionMiddleware,
     secret_key=session_secret(),
     session_cookie="kenyon_session",
-    max_age=60 * 60 * 24 * 30,          # 30 days
+    max_age=SESSION_TTL_DAYS * 86400,
     same_site="lax",
     https_only=_session_https_only,
 )
@@ -213,7 +266,8 @@ async def healthz():
     """
     env = environment_status()
     auth = describe_auth()
-    degraded = any(not info.get("configured", True) for info in env.values() if "configured" in info)
+    degraded = any(not info.get("configured", True) for name, info in env.items()
+                   if name != "anthropic" or not {"openai", "codex"}.intersection(env))
     # Auth being off isn't a crash but it's a real security concern — surface
     # it on healthz so the banner can warn even on an otherwise clean deploy.
     if not auth.get("enabled"):
@@ -225,17 +279,36 @@ async def healthz():
         "auth": auth,
         "rate_limits": describe_policies(),
     }
+    from app.version import release_identity
+    body["release"] = release_identity()
+    body["provider_readiness"] = "Configuration only; credits and semantic accuracy are not verified by this probe."
     return JSONResponse(body, headers={"Cache-Control": "private, max-age=10"})
+
+
+@app.get("/api/healthz/ready", include_in_schema=False)
+async def deployment_readiness():
+    """Minimal deployment probe; detailed operational checks require an admin."""
+    report = await readiness_report()
+    return JSONResponse({"status": "ready" if report["deploy_ready"] else "not_ready"},
+                        status_code=200 if report["deploy_ready"] else 503,
+                        headers={"Cache-Control": "no-store"})
+
+
+@app.get("/api/admin/readiness", include_in_schema=False)
+async def operational_readiness(user: dict = Depends(require_auth)):
+    if not is_analyst(user):
+        raise HTTPException(status_code=403, detail="Admin access is required")
+    report = await readiness_report()
+    return JSONResponse(report, status_code=200 if report["deploy_ready"] else 503,
+                        headers={"Cache-Control": "no-store"})
 
 
 @app.get("/")
 async def root_redirect():
-    """FastAPI now serves the legacy UI at /legacy. The new Next.js app (at
-    web/) is expected to sit in front in production. During local FastAPI-only
-    runs we redirect / → /legacy so the legacy UI is still reachable."""
+    """The application UI is served by Next.js; direct API visits show retirement information."""
     return RedirectResponse(url="/legacy")
 
 
 @app.get("/legacy")
 async def legacy_index(request: Request):
-    return templates.TemplateResponse(request, "index.html")
+    return JSONResponse({"detail": "This screen has been retired. Open the main app for the current reviewed analysis."}, status_code=410)

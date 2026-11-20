@@ -154,6 +154,10 @@ async def purge_developer(dev_id: int, db: AsyncSession = Depends(get_db)):
             status_code=409,
             detail="Developer must be in the trash before it can be purged.",
         )
+    from app.models import Investment
+    linked = await db.scalar(select(Investment.id).where(Investment.developer_id == dev_id).limit(1))
+    if linked is not None:
+        raise HTTPException(409, "This sponsor has investment records, including any archived positions. Restore the sponsor or resolve those records before permanent deletion.")
     await db.delete(dev)
     await db.commit()
     return {"message": "Purged"}

@@ -3,16 +3,10 @@
 import * as React from "react";
 import { Dialog, DialogContent, DialogTitle, DialogDescription } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
-import { Download, ExternalLink, Eye, Table } from "lucide-react";
+import { ChevronLeft, ChevronRight, Download, ExternalLink, Eye, Table } from "lucide-react";
 import type { DealDocument } from "@/lib/types";
 
-/**
- * Inline PDF viewer modal. Uses the browser's native PDF rendering
- * (via `<iframe>`), which means no extra client bundle weight (pdf.js
- * is several hundred KB) and works on every evergreen browser +
- * mobile Safari. Spreadsheets are shown as extracted/downloadable files
- * because browsers do not render XLSX inline reliably.
- */
+/** Preview PDF pages in browsers without a built-in PDF viewer. */
 export function PdfPreviewDialog({
   doc,
   open,
@@ -43,13 +37,13 @@ export function PdfPreviewDialog({
           </div>
           <div className="flex items-center gap-2 shrink-0">
             <Button size="sm" variant="ghost" asChild>
-              <a href={url} target="_blank" rel="noreferrer" title="Open in new tab">
+              <a href={url} target="_blank" rel="noreferrer" title="Open in new tab" aria-label="Open original in new tab">
                 <ExternalLink className="h-3.5 w-3.5" />
                 <span className="hidden sm:inline">Open</span>
               </a>
             </Button>
             <Button size="sm" variant="ghost" asChild>
-              <a href={url} download={doc.filename} title="Download">
+              <a href={url} download={doc.filename} title="Download" aria-label="Download">
                 <Download className="h-3.5 w-3.5" />
                 <span className="hidden sm:inline">Download</span>
               </a>
@@ -61,18 +55,7 @@ export function PdfPreviewDialog({
         </div>
 
         {isPdf ? (
-          <div className="flex-1 bg-black/30 min-h-0">
-            {/* Browser-native PDF viewer. `#toolbar=1` shows Chrome's
-                page nav + download; other browsers ignore unknown hashes. */}
-            <iframe
-              src={`${url}#toolbar=1&view=FitH`}
-              title={doc.filename}
-              className="w-full h-full border-0"
-            />
-            <div className="sr-only">
-              <a href={url}>Open {doc.filename}</a>
-            </div>
-          </div>
+          open && <PdfPages key={doc.id} doc={doc} />
         ) : (
           <div className="flex-1 min-h-0 grid place-items-center bg-muted/20 p-8 text-center">
             <div>
@@ -88,6 +71,50 @@ export function PdfPreviewDialog({
         )}
       </DialogContent>
     </Dialog>
+  );
+}
+
+function PdfPages({ doc }: { doc: DealDocument }) {
+  const [page, setPage] = React.useState(1);
+  const pages = Math.max(1, doc.page_count);
+  return (
+    <>
+      <div className="flex shrink-0 items-center justify-center gap-3 border-b border-border/70 px-3 py-2">
+        <Button size="sm" variant="outline" aria-label="Previous page" disabled={page === 1} onClick={() => setPage(current => Math.max(1, current - 1))}>
+          <ChevronLeft className="h-4 w-4" />
+        </Button>
+        <span aria-live="polite" className="text-sm tabular-nums">Page {page} of {pages}</span>
+        <Button size="sm" variant="outline" aria-label="Next page" disabled={page >= pages} onClick={() => setPage(current => Math.min(pages, current + 1))}>
+          <ChevronRight className="h-4 w-4" />
+        </Button>
+      </div>
+      <PdfPageImage key={page} docId={doc.id} page={page} />
+    </>
+  );
+}
+
+function PdfPageImage({ docId, page }: { docId: number; page: number }) {
+  const [status, setStatus] = React.useState<"loading" | "ready" | "failed">("loading");
+  return (
+    <div className="min-h-0 flex-1 overflow-auto bg-muted/60 p-2 sm:p-4">
+      {status === "loading" && <p role="status" className="p-4 text-center text-sm text-muted-foreground">Loading page…</p>}
+      {status === "failed" ? (
+        <p role="alert" className="p-4 text-center text-sm">This page couldn’t be previewed. Open or download the original above.</p>
+      ) : (
+        // The same-origin API renders and authenticates each private page.
+        // eslint-disable-next-line @next/next/no-img-element
+        <img
+          src={`/api/deals/documents/${docId}/preview/${page}`}
+          alt={`PDF page ${page}`}
+          className={status === "ready" ? "mx-auto block h-auto max-w-full bg-white shadow" : "invisible"}
+          onLoad={(event) => {
+            if (event.currentTarget.parentElement) event.currentTarget.parentElement.scrollTop = 0;
+            setStatus("ready");
+          }}
+          onError={() => setStatus("failed")}
+        />
+      )}
+    </div>
   );
 }
 

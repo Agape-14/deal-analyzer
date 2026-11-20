@@ -2,7 +2,7 @@
 
 import * as React from "react";
 import { useRouter, usePathname } from "next/navigation";
-import { Loader2, Plus, FileSpreadsheet, AlertCircle, GitCompareArrows } from "lucide-react";
+import { Loader2, Plus, FileSpreadsheet, AlertCircle, GitCompareArrows, RefreshCw } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -14,6 +14,9 @@ import { DealPicker } from "./deal-picker";
 import { DealHeaderRow } from "./deal-header-row";
 import { MetricsTable, type CompareMode } from "./metrics-table";
 import { CustomPresetDrawer, readCustomPreset } from "./custom-preset-drawer";
+import { ReturnScheduleTable } from "@/components/deal-detail/return-schedule-panel";
+import { ReturnCrosscheckDetails } from "@/components/deal-detail/return-crosscheck";
+import { OptionalSaleReturns } from "@/components/deal-detail/return-context-panel";
 
 const VALID_MODES: CompareMode[] = ["values", "winners", "deltas", "normalized"];
 
@@ -25,8 +28,8 @@ const VALID_MODES: CompareMode[] = ["values", "winners", "deltas", "normalized"]
  *   ?baseline=1      — baseline deal for delta mode
  *
  * Fetching the detailed compare data uses /api/deals/compare which returns
- * full DealDetail objects (metrics + scores). We keep a tiny in-memory cache
- * keyed by the comma-sorted id list so flipping between presets is instant.
+ * full DealDetail objects (metrics + scores). Changing the selection reloads
+ * its latest saved revisions.
  */
 export function CompareClient({ deals }: { deals: DealSummary[] }) {
   const router = useRouter();
@@ -58,7 +61,7 @@ export function CompareClient({ deals }: { deals: DealSummary[] }) {
     [idsParam],
   );
   const preset = searchParams.get("preset") ?? "exec";
-  const mode = (searchParams.get("mode") as CompareMode) ?? "winners";
+  const mode = (searchParams.get("mode") as CompareMode) ?? "values";
   const baselineParam = searchParams.get("baseline");
   const baselineId = baselineParam ? Number(baselineParam) : null;
 
@@ -68,9 +71,11 @@ export function CompareClient({ deals }: { deals: DealSummary[] }) {
   const [details, setDetails] = React.useState<DealDetail[] | null>(null);
   const [loading, setLoading] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
-  const [overallWins, setOverallWins] = React.useState<Record<number, number>>({});
+  const [retryCount, setRetryCount] = React.useState(0);
+  const [exporting, setExporting] = React.useState(false);
+  const exportRequest = React.useRef<AbortController | null>(null);
 
-  const cacheRef = React.useRef(new Map<string, DealDetail[]>());
+  React.useEffect(() => () => exportRequest.current?.abort(), [idsParam]);
 
   // Load custom preset once on mount
   React.useEffect(() => {
@@ -80,30 +85,34 @@ export function CompareClient({ deals }: { deals: DealSummary[] }) {
 
   // Fetch detailed compare whenever the selected-ids set changes
   React.useEffect(() => {
-    if (selectedIds.length < 2) {
-      setDetails(null);
-      return;
-    }
-    const key = [...selectedIds].sort((a, b) => a - b).join(",");
-    const cached = cacheRef.current.get(key);
-    if (cached) {
-      // Re-order to match the ids in the URL (user-visible order)
-      setDetails(reorder(cached, selectedIds));
-      return;
-    }
-    setLoading(true);
+    setDetails(null);
     setError(null);
+    setLoading(false);
+    if (selectedIds.length < 2) {
+      return;
+    }
+    const controller = new AbortController();
+    let active = true;
+    setLoading(true);
     api
-      .post<{ deals: DealDetail[] }>("/api/deals/compare", { deal_ids: selectedIds })
+      .post<{ deals: DealDetail[] }>("/api/deals/compare", { deal_ids: selectedIds }, {
+        timeoutMs: 15_000,
+        signal: controller.signal,
+      })
       .then((res) => {
-        cacheRef.current.set(key, res.deals);
+        if (!active) return;
         setDetails(reorder(res.deals, selectedIds));
       })
       .catch((e) => {
+        if (!active) return;
         setError((e as { detail?: string })?.detail ?? "Couldn't load compare data");
       })
-      .finally(() => setLoading(false));
-  }, [idsParam]); // eslint-disable-line react-hooks/exhaustive-deps
+      .finally(() => { if (active) setLoading(false); });
+    return () => {
+      active = false;
+      controller.abort();
+    };
+  }, [selectedIds, retryCount]);
 
   const rows: MetricRow[] = React.useMemo(() => {
     if (preset === "custom") {
@@ -135,26 +144,46 @@ export function CompareClient({ deals }: { deals: DealSummary[] }) {
     });
   }
 
-  function exportExcel() {
-    if (selectedIds.length < 2) return;
-    // Open in new tab so the browser handles the download. Backend endpoint
-    // streams an .xlsx with color-coded best/worst per metric.
-    fetch("/api/deals/compare/export", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ deal_ids: selectedIds }),
-    })
-      .then(async (r) => {
-        if (!r.ok) throw new Error(`HTTP ${r.status}`);
-        const blob = await r.blob();
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement("a");
-        a.href = url;
-        a.download = `compare-${selectedIds.join("-")}.xlsx`;
-        a.click();
-        URL.revokeObjectURL(url);
-      })
-      .catch((e) => toast.error("Export failed", { description: (e as Error).message }));
+  async function exportExcel() {
+    if (selectedIds.length < 2 || exportRequest.current) return;
+    const controller = new AbortController();
+    exportRequest.current = controller;
+    setExporting(true);
+    let timedOut = false;
+    const timer = setTimeout(() => {
+      timedOut = true;
+      controller.abort();
+    }, 30_000);
+    try {
+      const response = await fetch("/api/deals/compare/export", {
+        method: "POST",
+        credentials: "same-origin",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ deal_ids: selectedIds }),
+        signal: controller.signal,
+      });
+      if (response.status === 401 || response.redirected) throw new Error("Sign in again to download the comparison.");
+      if (!response.ok || !response.headers.get("content-type")?.includes("spreadsheetml.sheet")) {
+        throw new Error("The workbook could not be prepared. Use Export Excel to retry.");
+      }
+      const url = URL.createObjectURL(await response.blob());
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = `compare-${selectedIds.join("-")}.xlsx`;
+      document.body.append(link);
+      link.click();
+      link.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+    } catch (error) {
+      if (timedOut) toast.error("Export timed out", { description: "Use Export Excel to retry." });
+      else if (!controller.signal.aborted) toast.error("Export failed", {
+        description: error instanceof Error ? error.message : "Use Export Excel to retry.",
+      });
+    } finally {
+      clearTimeout(timer);
+      exportRequest.current = null;
+      setExporting(false);
+    }
   }
 
   const cols = selectedIds.length;
@@ -195,13 +224,13 @@ export function CompareClient({ deals }: { deals: DealSummary[] }) {
   return (
     <div>
       {/* Toolbar */}
-      <div className="mb-5">
+      <details className="mb-4 rounded-lg border p-3"><summary className="cursor-pointer text-sm font-medium">Comparison options · {preset} · {modeValid ? mode : "values"}</summary><div className="mt-3">
         <CompareToolbar
           preset={preset}
           onPreset={(k) => setParams({ preset: k === "exec" ? null : k })}
-          mode={modeValid ? mode : "winners"}
+          mode={modeValid ? mode : "values"}
           onMode={(m) => {
-            setParams({ mode: m === "winners" ? null : m, baseline: m === "deltas" ? String(baselineId ?? selectedIds[0]) : null });
+            setParams({ mode: m === "values" ? null : m, baseline: m === "deltas" ? String(baselineId ?? selectedIds[0]) : null });
           }}
           baseline={baselineId ?? selectedIds[0]}
           onBaseline={(id) => setParams({ baseline: id ? String(id) : null })}
@@ -209,7 +238,7 @@ export function CompareClient({ deals }: { deals: DealSummary[] }) {
           hasCustom={customKeys.length > 0}
           onOpenCustom={() => setCustomOpen(true)}
         />
-      </div>
+      </div></details>
 
       {/* Actions bar — add deal + export */}
       <div className="flex items-center justify-between mb-5">
@@ -218,9 +247,9 @@ export function CompareClient({ deals }: { deals: DealSummary[] }) {
             <Plus className="h-4 w-4" />
             Change selection
           </Button>
-          <Button size="sm" variant="outline" onClick={exportExcel}>
+          <Button size="sm" variant="outline" onClick={exportExcel} disabled={exporting} aria-busy={exporting}>
             <FileSpreadsheet className="h-4 w-4" />
-            Export Excel
+            {exporting ? "Preparing Excel…" : "Export Excel"}
           </Button>
         </div>
         <span className="text-xs text-muted-foreground">
@@ -236,16 +265,22 @@ export function CompareClient({ deals }: { deals: DealSummary[] }) {
       )}
 
       {error && (
-        <Card elevated className="p-8 text-center">
+        <Card elevated className="p-8 text-center" role="alert">
           <AlertCircle className="h-5 w-5 text-destructive mx-auto mb-2" />
           <div className="text-sm font-medium text-destructive">Couldn&apos;t load comparison</div>
           <div className="text-xs text-muted-foreground mt-1">{error}</div>
+          <Button className="mt-4" variant="outline" onClick={() => setRetryCount((count) => count + 1)}>
+            <RefreshCw className="h-4 w-4" />
+            Try again
+          </Button>
         </Card>
       )}
 
-      {details && !loading && (
+      {details && !loading && !error && (
         <>
-          <DealHeaderRow deals={details} overallWins={overallWins} onRemove={removeDeal} cols={cols} />
+          <p className="mb-3 text-xs text-muted-foreground">Read supported values side by side. On small screens, compare two deals and swipe each row horizontally. Baseline: {details.find(d => d.id === (baselineId ?? selectedIds[0]))?.project_name ?? "first deal"}.</p>
+          {selectedIds.length > 2 && <Button className="mb-3 sm:hidden" size="sm" variant="outline" onClick={() => setParams({ ids: selectedIds.slice(0, 2).join(","), baseline: String(baselineId && selectedIds.slice(0, 2).includes(baselineId) ? baselineId : selectedIds[0]) })}>Focus on first two deals</Button>}
+          <DealHeaderRow deals={details} onRemove={removeDeal} cols={cols} />
           {rows.length === 0 ? (
             <Card elevated className="p-10 text-center text-sm text-muted-foreground">
               No metrics selected. Build your own preset or pick a preset above.
@@ -254,11 +289,39 @@ export function CompareClient({ deals }: { deals: DealSummary[] }) {
             <MetricsTable
               deals={details}
               rows={rows}
-              mode={modeValid ? mode : "winners"}
+              mode={modeValid ? mode : "values"}
               baselineId={mode === "deltas" ? baselineId ?? selectedIds[0] : null}
-              onWins={setOverallWins}
               cols={cols}
             />
+          )}
+          <div className="mt-6 grid gap-4">{details.map(deal => <OptionalSaleReturns key={deal.id} analysis={deal.analysis} dealName={deal.project_name} />)}</div>
+          {details.some(deal => deal.analysis?.return_schedule) && (
+            <section className="mt-6 grid gap-4" aria-label="Year-by-year return projections">
+              <h2 className="text-base font-semibold">Year-by-year return projections</h2>
+              {details.map(deal => {
+                const schedule = deal.analysis?.return_schedule;
+                return schedule ? (
+                  <Card key={deal.id} className="space-y-3 p-4">
+                    <h3 className="text-sm font-semibold">{deal.project_name}</h3>
+                    <ReturnScheduleTable schedule={schedule} />
+                  </Card>
+                ) : null;
+              })}
+            </section>
+          )}
+          {details.some(deal => deal.analysis?.return_crosscheck) && (
+            <section className="mt-6 grid gap-4" aria-label="PDF cash-flow checks">
+              <h2 className="text-base font-semibold">PDF cash-flow checks</h2>
+              {details.map(deal => {
+                const check = deal.analysis?.return_crosscheck;
+                return check ? (
+                  <Card key={deal.id} className="space-y-3 p-4">
+                    <h3 className="text-sm font-semibold">{deal.project_name}</h3>
+                    <ReturnCrosscheckDetails check={check} />
+                  </Card>
+                ) : null;
+              })}
+            </section>
           )}
         </>
       )}

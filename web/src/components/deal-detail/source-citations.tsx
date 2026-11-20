@@ -7,6 +7,7 @@ import { Card } from "@/components/ui/card";
 import { FieldReviewAction } from "@/components/deal-detail/field-review-action";
 import { cn, fmtDate, fmtMoney, fmtMultiple, fmtPct } from "@/lib/utils";
 import type { CanonicalReturnSummary, DealDetail, FieldProvenance } from "@/lib/types";
+import { FactEvidence, factValue } from "./accepted-summary";
 
 type CitationFormat = "pct" | "multiple" | "money" | "years" | "integer" | "text";
 type CitationField = { path: string; label: string; format: CitationFormat };
@@ -76,6 +77,16 @@ export function SourceCitations({ deal }: { deal: DealDetail }) {
     window.addEventListener("hashchange", updateActiveCitation);
     return () => window.removeEventListener("hashchange", updateActiveCitation);
   }, []);
+
+  if (deal.analysis) return <Card elevated className="p-6">
+    <h3 className="text-base font-semibold">Source citations · revision {deal.analysis.version}</h3>
+    <p className="mt-1 text-xs text-muted-foreground">These are the same facts and states used by Summary. Reported and disputed values are shown here for investigation.</p>
+    <div className="mt-4 divide-y divide-border">{Object.values(deal.analysis.facts).map(fact => <div key={fact.path} id={sourceCitationId(fact.path)} className="py-4 scroll-mt-24">
+      <div className="flex flex-wrap justify-between gap-2"><span className="text-sm font-medium">{fact.label}</span><span className="text-sm tabular-nums">{factValue(fact, true)} · {fact.state === "manual" ? "analyst decision" : fact.state}</span></div>
+      {fact.reason && <p className="mt-1 text-xs text-muted-foreground">{fact.reason}</p>}
+      <FactEvidence fact={fact} />
+    </div>)}</div>
+  </Card>;
 
   const rows = CITATION_FIELDS.map((field) => citationRow(metrics, provenance, field)).filter(
     (row) => row.value != null || row.prov,

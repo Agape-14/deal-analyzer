@@ -70,7 +70,7 @@ export function DealCard({ deal }: { deal: DealSummary }) {
   const { isAnalyst } = useCurrentUser();
   const locationBits = [deal.city, deal.state].filter(Boolean).join(", ") || deal.location || "";
   const qualityGate = getQualityGate(deal.quality) || deal.scores?.data_quality;
-  const visibleScore = deal.overall_score ?? deal.scores?.provisional_overall ?? null;
+  const visibleScore = qualityGate?.can_score === true ? deal.overall_score : null;
   const { headlineMultiple, primaryReturnLabel, primaryReturnValue } = getHeadlineReturnMetrics(deal);
 
   return (
@@ -112,7 +112,7 @@ export function DealCard({ deal }: { deal: DealSummary }) {
             >
               {deal.status}
             </span>
-            {isAnalyst && <ScoreQualityBadge gate={qualityGate} size="sm" />}
+            {deal.analysis ? <span className="text-xs text-muted-foreground">{deal.analysis.questions.length ? `${deal.analysis.questions.length} questions` : "Evidence reviewed"}</span> : isAnalyst && <ScoreQualityBadge gate={qualityGate} size="sm" />}
           </div>
           <ArrowUpRight className="h-4 w-4 shrink-0 text-muted-foreground transition-transform group-hover:-translate-y-0.5 group-hover:translate-x-0.5 group-hover:text-foreground" />
         </div>

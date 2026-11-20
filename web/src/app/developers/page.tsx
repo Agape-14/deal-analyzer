@@ -1,3 +1,4 @@
+import { redirect } from "next/navigation";
 import { Plus } from "lucide-react";
 import { api } from "@/lib/api";
 import type { Developer, DealSummary } from "@/lib/types";
@@ -24,6 +25,7 @@ export default async function DevelopersPage() {
     developers = dev;
     deals = d;
   } catch (e) {
+    if ((e as { status?: number }).status === 401) redirect("/login");
     error = (e as { detail?: string })?.detail ?? "Failed to load developers";
   }
 

@@ -1,7 +1,13 @@
-"""Tests for the auth module — pure functions, no DB."""
+"""Authentication checks and session lifecycle with synthetic accounts."""
+
+from types import SimpleNamespace
+
+import pytest
+from httpx import ASGITransport, AsyncClient
+from starlette.requests import Request
 
 from app.auth import (
-    SESSION_KEY,
+    authentication_check,
     check_login,
     hash_password,
     is_public_path,
@@ -42,9 +48,164 @@ def test_check_login_enabled_requires_correct_creds(monkeypatch):
 def test_is_public_path_whitelist():
     assert is_public_path("/")
     assert is_public_path("/api/healthz")
+    assert is_public_path("/api/healthz/ready")
     assert is_public_path("/api/auth/login")
     assert is_public_path("/static/anything.js")
     assert is_public_path("/legacy")
     assert not is_public_path("/api/deals")
     assert not is_public_path("/api/deals/1")
     assert not is_public_path("/api/investments/")
+    assert not is_public_path("/api/auth/new-endpoint")
+    assert not is_public_path("/api/healthz/other")
+
+
+@pytest.mark.parametrize("environment", [
+    "RAILWAY_ENVIRONMENT",
+    "RAILWAY_ENVIRONMENT_NAME",
+    "RAILWAY_ENVIRONMENT_ID",
+    "RAILWAY_PROJECT_ID",
+    "RAILWAY_SERVICE_ID",
+    "RAILWAY_DEPLOYMENT_ID",
+    "APP_ENV",
+    "PRODUCTION",
+])
+def test_deployed_auth_cannot_be_disabled(monkeypatch, environment):
+    value = {"APP_ENV": "production", "PRODUCTION": "true"}.get(environment, "synthetic")
+    monkeypatch.setenv(environment, value)
+    monkeypatch.setenv("AUTH_DISABLED", "1")
+    assert authentication_check()["code"] == "deployment_auth_disabled"
+    assert not check_login("synthetic", "synthetic")
+
+
+def test_deployed_auth_requires_usable_config(monkeypatch):
+    monkeypatch.setenv("APP_ENV", "production")
+    monkeypatch.setenv("AUTH_DISABLED", "0")
+    for key in ("AUTH_PASSWORD", "AUTH_PASSWORD_HASH", "VIEWER_PASSWORD", "VIEWER_PASSWORD_HASH",
+                "TEAM_PASSWORD", "TEAM_PASSWORD_HASH", "AUTH_SECRET"):
+        monkeypatch.delenv(key, raising=False)
+    assert authentication_check()["code"] == "auth_credentials_missing"
+    monkeypatch.setenv("AUTH_PASSWORD_HASH", "malformed-test-hash")
+    assert authentication_check()["code"] == "auth_credentials_invalid"
+    monkeypatch.delenv("AUTH_PASSWORD_HASH")
+    monkeypatch.setenv("AUTH_PASSWORD", "synthetic-admin-password")
+    assert authentication_check()["code"] == "auth_secret_invalid"
+    monkeypatch.setenv("AUTH_SECRET", "synthetic-deployment-signing-secret")
+    assert authentication_check()["code"] == "auth_configured"
+
+
+@pytest.mark.asyncio
+async def test_credential_bound_session_expires(client, monkeypatch):
+    from app import auth
+
+    monkeypatch.setenv("AUTH_DISABLED", "0")
+    monkeypatch.setenv("AUTH_USERNAME", "synthetic-admin")
+    monkeypatch.setenv("AUTH_PASSWORD_HASH", hash_password("synthetic-admin-password"))
+    monkeypatch.setenv("AUTH_SECRET", "synthetic-deployment-signing-secret")
+    clock = SimpleNamespace(time=lambda: 100)
+    monkeypatch.setattr(auth, "time", clock)
+    identity = auth.login_identity("synthetic-admin", "synthetic-admin-password")
+    assert identity is not None
+    request = Request({"type": "http", "session": {}})
+    await auth.set_session(request, identity)
+    assert auth.current_user(request) is None
+    user = await auth.authenticate_request(request)
+    assert user is not None and user["r"] == "admin"
+    assert auth.current_user(request) == user
+    old_session = dict(request.session)
+    clock.time = lambda: user["exp"]
+    later = Request({"type": "http", "session": old_session})
+    assert await auth.authenticate_request(later) is None
+
+
+def _enable_synthetic_login(monkeypatch):
+    monkeypatch.setenv("AUTH_DISABLED", "0")
+    monkeypatch.setenv("AUTH_USERNAME", "synthetic-operator")
+    monkeypatch.setenv("AUTH_PASSWORD", "synthetic-logout-password")
+    monkeypatch.delenv("AUTH_PASSWORD_HASH", raising=False)
+    return {"username": "synthetic-operator", "password": "synthetic-logout-password"}
+
+
+@pytest.mark.asyncio
+async def test_logout_revokes_only_the_current_session(client, monkeypatch):
+    from app.main import app
+
+    credentials = _enable_synthetic_login(monkeypatch)
+    signed_in = await client.post("/api/auth/login", json=credentials)
+    assert signed_in.status_code == 200
+    closed_session = signed_in.cookies["kenyon_session"]
+    assert (await client.get("/api/deals")).status_code == 200
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as another:
+        second_login = await another.post("/api/auth/login", json=credentials)
+        assert second_login.status_code == 200
+        assert second_login.cookies["kenyon_session"] != closed_session
+        assert (await client.post("/api/auth/logout")).status_code == 200
+        assert "kenyon_session" not in client.cookies
+
+        client.cookies.set("kenyon_session", closed_session)
+        assert (await client.get("/api/deals")).status_code == 401
+        client.cookies.set("kenyon_session", closed_session)
+        assert (await client.get("/api/auth/me")).json() == {"authenticated": False}
+        assert (await another.get("/api/auth/me")).json()["authenticated"] is True
+
+
+@pytest.mark.asyncio
+async def test_auth_store_failure_does_not_grant_access_or_report_signout(client, monkeypatch):
+    from sqlalchemy.exc import SQLAlchemyError
+    from app import database
+
+    credentials = _enable_synthetic_login(monkeypatch)
+    assert (await client.post("/api/auth/login", json=credentials)).status_code == 200
+
+    class UnavailableStore:
+        def __call__(self):
+            raise SQLAlchemyError("synthetic unavailable store")
+
+        def begin(self):
+            raise SQLAlchemyError("synthetic unavailable store")
+
+    monkeypatch.setattr(database, "async_session", UnavailableStore())
+    assert (await client.get("/api/deals")).status_code == 503
+    assert (await client.post("/api/auth/logout")).status_code == 503
+    assert "kenyon_session" in client.cookies
+
+
+@pytest.mark.asyncio
+async def test_deployed_auth_failure_is_closed_with_or_without_lifespan(client, monkeypatch):
+    from app import main
+
+    monkeypatch.setenv("RAILWAY_SERVICE_ID", "synthetic-service")
+    with pytest.raises(RuntimeError, match="deployment_auth_disabled"):
+        async with main.lifespan(main.app):
+            pytest.fail("startup should reject invalid auth configuration")
+
+    assert (await client.get("/api/deals")).status_code == 503
+    assert (await client.get("/api/auth/me")).json() == {"authenticated": False}
+    login = await client.post("/api/auth/login", json={"username": "synthetic", "password": "synthetic"})
+    assert login.status_code == 503
+    ready = await client.get("/api/healthz/ready")
+    assert ready.status_code == 503 and ready.json() == {"status": "not_ready"}
+
+
+@pytest.mark.asyncio
+async def test_active_sessions_follow_credential_rotation_and_account_removal(client, monkeypatch):
+    monkeypatch.setenv("AUTH_DISABLED", "0")
+    monkeypatch.setenv("AUTH_USERNAME", "synthetic-operator")
+    monkeypatch.delenv("AUTH_PASSWORD_HASH", raising=False)
+    monkeypatch.setenv("AUTH_PASSWORD", "synthetic-original-password")
+    monkeypatch.setenv("TEAM_USERNAME", "synthetic-reviewer")
+    monkeypatch.setenv("TEAM_PASSWORD_HASH", hash_password("synthetic-viewer-password"))
+
+    async def login(username, password):
+        return await client.post("/api/auth/login", json={"username": username, "password": password})
+
+    assert (await login("synthetic-operator", "synthetic-original-password")).json()["role"] == "admin"
+    assert (await client.get("/api/auth/me")).json()["authenticated"] is True
+    monkeypatch.setenv("AUTH_PASSWORD", "synthetic-rotated-password")
+    assert (await client.get("/api/auth/me")).json() == {"authenticated": False}
+    assert (await login("synthetic-operator", "synthetic-original-password")).status_code == 401
+    assert (await login("synthetic-operator", "synthetic-rotated-password")).status_code == 200
+    assert (await login("synthetic-reviewer", "synthetic-viewer-password")).json()["role"] == "viewer"
+    assert (await client.get("/api/auth/me")).json()["role"] == "viewer"
+    monkeypatch.delenv("TEAM_PASSWORD_HASH")
+    assert (await client.get("/api/auth/me")).json() == {"authenticated": False}

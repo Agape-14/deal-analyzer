@@ -152,7 +152,7 @@ export function DeveloperDrawer() {
             </div>
             <div className="space-y-2">
               <Label>Notes</Label>
-              <textarea
+              <textarea aria-label="Sponsor notes"
                 rows={3}
                 value={form.notes}
                 onChange={(e) => setForm((f) => ({ ...f, notes: e.target.value }))}

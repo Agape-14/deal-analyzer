@@ -10,6 +10,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Card } from "@/components/ui/card";
 import { api } from "@/lib/api";
+import { loginDestination } from "@/lib/login-destination";
 
 /**
  * Login page. Pre-fills `username = "admin"` for the operator account,
@@ -20,7 +21,7 @@ import { api } from "@/lib/api";
 export default function LoginPage() {
   const router = useRouter();
   const search = useSearchParams();
-  const next = search?.get("next") || "/";
+  const next = loginDestination(search?.get("next"));
   const [username, setUsername] = React.useState("admin");
   const [password, setPassword] = React.useState("");
   const [submitting, setSubmitting] = React.useState(false);
@@ -50,7 +51,9 @@ export default function LoginPage() {
     try {
       await api.post("/api/auth/login", { username, password });
       toast.success("Welcome back");
-      router.replace(next);
+      // Root-level drawers and search cache the anonymous session. A full
+      // navigation refreshes them along with the new session cookie.
+      window.location.assign(next);
     } catch (err) {
       const d = (err as { detail?: string })?.detail ?? "Login failed";
       toast.error(d);
@@ -105,8 +108,9 @@ export default function LoginPage() {
 
             <form onSubmit={submit} className="space-y-4">
               <div className="space-y-2">
-                <Label>Username</Label>
+                <Label htmlFor="login-username">Username</Label>
                 <Input
+                  id="login-username"
                   value={username}
                   onChange={(e) => setUsername(e.target.value)}
                   autoComplete="username"
@@ -114,8 +118,9 @@ export default function LoginPage() {
                 />
               </div>
               <div className="space-y-2">
-                <Label>Password</Label>
+                <Label htmlFor="login-password">Password</Label>
                 <Input
+                  id="login-password"
                   type="password"
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}

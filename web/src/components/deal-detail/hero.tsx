@@ -10,6 +10,7 @@ import { BigScoreRing } from "@/components/deal-detail/score-ring";
 import { ScoreQualityBadge } from "@/components/deal-detail/score-quality-badge";
 import { FadeIn } from "@/components/motion";
 import { useCurrentUser } from "@/lib/auth-client";
+import { useCapabilities } from "@/lib/capabilities";
 import { api } from "@/lib/api";
 import { getHeadlineReturnMetrics } from "@/lib/return-metrics";
 import { cn, fmtMoney, fmtMultiple, fmtPct } from "@/lib/utils";
@@ -43,6 +44,7 @@ type QualityResponse = { summary?: DealQualitySummary; stale_flags?: unknown[]; 
 export function DealHero({ deal }: { deal: DealDetail }) {
   const router = useRouter();
   const { isAnalyst, loading } = useCurrentUser();
+  const { review, codexFirst } = useCapabilities();
   const metrics = deal.metrics ?? {};
   const [scoring, setScoring] = React.useState(false);
   const [pipelineRunning, setPipelineRunning] = React.useState(false);
@@ -53,16 +55,18 @@ export function DealHero({ deal }: { deal: DealDetail }) {
   );
   const mountedRef = React.useRef(true);
   const locationBits = [deal.city, deal.state].filter(Boolean).join(", ") || deal.location;
-  const visibleScore = deal.overall_score ?? deal.scores?.provisional_overall ?? null;
+  const visibleScore = deal.scores?.data_quality?.can_score === true ? deal.overall_score : null;
   const { headlineMultiple, primaryReturnLabel, primaryReturnValue } = getHeadlineReturnMetrics(deal);
   const gate = deal.scores?.data_quality;
-  const reviewSummary = dealReviewSummary(gate);
-  const viewerSummary = viewerScoreSummary(gate);
+  const reviewSummary = deal.analysis ? `${deal.analysis.questions.length} material question groups. Accepted facts and evidence are shared across Summary, comparison and exports.` : dealReviewSummary(gate);
+  const viewerSummary = deal.analysis ? `${deal.analysis.coverage.accepted} of ${deal.analysis.coverage.total} recognized facts accepted. Source checks and analyst decisions are labeled separately.` : viewerScoreSummary(gate);
+  const coverage = deal.analysis?.review_coverage;
+  const coverageGaps = coverage?.attention_count ?? 0;
   const reviewStatusName = normalizedPipelineStatus(pipelineStatus);
   const showAnalystTools = !loading && isAnalyst;
   const openAnalystTools = showAnalystTools && (pipelineRunning || reviewStatusName === "failed" || reviewStatusName === "running");
   const docsRead = readableDocumentCount(deal);
-  const totalDocs = deal.documents?.length ?? 0;
+  const totalDocs = (deal.documents ?? []).filter(doc => doc.included_in_review !== false).length;
 
   const setCurrentPipelineStep = React.useCallback((step: PipelineStep) => {
     pipelineStepRef.current = step;
@@ -70,6 +74,8 @@ export function DealHero({ deal }: { deal: DealDetail }) {
   }, []);
 
   React.useEffect(() => {
+    // Strict Mode runs setup, cleanup, then setup again in development.
+    mountedRef.current = true;
     return () => {
       mountedRef.current = false;
     };
@@ -93,10 +99,9 @@ export function DealHero({ deal }: { deal: DealDetail }) {
       });
       if (!mountedRef.current) return;
 
-      setPipelineStatus({ status: "complete", step: "score", message: "Document review complete. Values were extracted, source-checked, math-checked, and scored." });
-      toast.success("Document review complete", {
-        description: "Values were extracted, source-checked, math-checked, and scored.",
-      });
+      const message = "Values were extracted, source-checked, math-checked, and scored.";
+      setPipelineStatus({ status: "complete", step: "score", message });
+      toast.success("Document review complete", { description: message });
       router.refresh();
     } catch (e) {
       const detail = (e as { detail?: string; message?: string })?.detail ?? (e as Error)?.message;
@@ -145,10 +150,10 @@ export function DealHero({ deal }: { deal: DealDetail }) {
   return (
     <FadeIn>
       <section className="relative overflow-hidden rounded-2xl border border-border/80 bg-card/90 shadow-[0_24px_80px_-60px_rgba(15,23,42,0.8)]">
-        <div className="px-5 pt-5 md:px-6 md:pt-6">
+        <div className="px-4 pt-3 md:px-6 md:pt-4">
           <Link
             href="/"
-            className="inline-flex min-h-10 items-center gap-2 rounded-lg border border-border/80 bg-background px-3.5 py-2 text-sm font-semibold text-foreground shadow-sm transition-colors hover:border-primary/45 hover:bg-muted/70 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/50"
+            className="inline-flex min-h-8 items-center gap-2 text-xs font-medium text-muted-foreground hover:text-foreground"
             aria-label="Back to all deals"
           >
             <ArrowLeft className="h-4 w-4" />
@@ -156,7 +161,7 @@ export function DealHero({ deal }: { deal: DealDetail }) {
           </Link>
         </div>
 
-        <div className="grid gap-6 px-5 py-6 md:px-6 lg:grid-cols-[minmax(0,1fr)_340px] lg:items-start">
+        <div className="grid gap-3 px-4 py-3 md:px-6 lg:grid-cols-[minmax(0,1fr)_250px] lg:items-start">
           <div className="min-w-0 flex-1">
             <div className="flex items-center gap-2 text-[11px] uppercase tracking-[0.14em] text-muted-foreground mb-2">
               <span>{deal.property_type || "Investment"}</span>
@@ -171,9 +176,15 @@ export function DealHero({ deal }: { deal: DealDetail }) {
               </span>
             </div>
 
-            <h1 className="text-display-lg tracking-tight">{deal.project_name}</h1>
+            <h1 className="text-2xl md:text-3xl font-semibold tracking-tight break-words">{deal.project_name}</h1>
+            {deal.analysis && <div className="mt-2 flex items-center flex-wrap gap-2 text-xs"><span className="text-muted-foreground">Revision {deal.analysis.version} · {deal.analysis.questions.length ? `${deal.analysis.questions.length} material questions` : "No material questions recorded"}</span><Link className="underline font-medium text-primary" href={`/deals/${deal.id}?tab=${deal.analysis.questions.length ? "questions" : "overview#reviewed-facts"}`}>{deal.analysis.questions.length ? "Resolve next question" : "Inspect reviewed evidence"}</Link></div>}
+            {coverage && (coverageGaps > 0 || coverage.sources.status !== "read") && (
+              <Link href={`/deals/${deal.id}?tab=overview#reviewed-facts`} className="mt-2 inline-block text-xs font-medium text-warning underline underline-offset-2">
+                {coverageGaps ? `${coverageGaps} review ${coverageGaps === 1 ? "area needs" : "areas need"} attention` : "Check source reading"}
+              </Link>
+            )}
 
-            <div className="mt-3 flex flex-wrap items-center gap-x-5 gap-y-2 text-sm text-muted-foreground">
+            <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-muted-foreground">
               {locationBits && (
                 <span className="inline-flex items-center gap-1.5">
                   <MapPin className="h-4 w-4" />
@@ -188,7 +199,7 @@ export function DealHero({ deal }: { deal: DealDetail }) {
               )}
             </div>
 
-            <div className="mt-7 overflow-hidden rounded-xl border border-border/80 bg-background/70">
+            <div className="mt-3 overflow-hidden rounded-xl border border-border/80 bg-background/70">
               <div className="grid grid-cols-2 divide-x divide-y divide-border/70 md:grid-cols-4 md:divide-y-0">
                 <Metric label={primaryReturnLabel} value={fmtPct(primaryReturnValue)} />
                 <Metric label="Equity Multiple" value={fmtMultiple(headlineMultiple)} />
@@ -198,27 +209,34 @@ export function DealHero({ deal }: { deal: DealDetail }) {
             </div>
           </div>
 
-          <aside className="rounded-xl border border-border/80 bg-background/80 p-4 shadow-sm">
-            <div className="flex items-start justify-between gap-4">
+          <aside className="lg:rounded-xl lg:border lg:border-border/80 lg:bg-background/80 lg:p-3">
+            <div className="hidden lg:flex items-start justify-between gap-4">
               <div>
-                <div className="text-[10px] font-extrabold uppercase tracking-[0.14em] text-muted-foreground">Investment summary</div>
+                <div className="hidden lg:block text-[10px] font-extrabold uppercase tracking-[0.14em] text-muted-foreground">Investment summary</div>
                 <div className="mt-2">
-                  <ViewerTrustBadge gate={gate} />
+                  {deal.analysis ? <span className="text-xs font-medium">{deal.analysis.questions.length ? `${deal.analysis.questions.length} question${deal.analysis.questions.length === 1 ? " remains" : "s remain"}` : "No material questions recorded"}</span> : <ViewerTrustBadge gate={gate} />}
                 </div>
-                <p className="mt-3 text-xs leading-relaxed text-muted-foreground">{viewerSummary}</p>
+                <p className="hidden lg:block mt-3 text-xs leading-relaxed text-muted-foreground">{viewerSummary}</p>
+                {visibleScore == null && typeof deal.scores?.provisional_overall === "number" && <p className="mt-3 text-xs">
+                  Partial composite <strong>{deal.scores.provisional_overall.toFixed(1)}/10</strong>
+                  {deal.scores.coverage && <span className="text-muted-foreground"> · {deal.scores.coverage.supported_categories}/7 categories</span>}
+                </p>}
               </div>
-              <div className="shrink-0">
-                <BigScoreRing value={visibleScore} size={100} />
-              </div>
+              {visibleScore != null && <div className="shrink-0"><BigScoreRing value={visibleScore} size={72} /></div>}
             </div>
 
-            <div className="mt-4 grid gap-2">
-              <Button size="sm" variant="secondary" asChild className="justify-center">
-                <a href="#deal-summary">
+            <div className="lg:mt-3 grid grid-cols-2 lg:grid-cols-1 gap-2">
+              <Button size="sm" variant="secondary" asChild className="hidden lg:inline-flex justify-center">
+                <a href={`/deals/${deal.id}?tab=overview`}>
                   <FileText className="h-4 w-4" />
                   Deal summary
                 </a>
               </Button>
+              {showAnalystTools && codexFirst && totalDocs > 0 && (
+                <Button size="sm" asChild className="justify-center">
+                  <a href={`/deals/${deal.id}?tab=documents#codex-review`}>Review with Codex</a>
+                </Button>
+              )}
               <Button size="sm" variant="outline" asChild className="justify-center">
                 <a href={`/api/reports/deal/${deal.id}/pdf`} target="_blank" rel="noreferrer">
                   <FileDown className="h-4 w-4" />
@@ -229,7 +247,7 @@ export function DealHero({ deal }: { deal: DealDetail }) {
                 <details
                   id="analyst-tools"
                   open={openAnalystTools}
-                  className="group rounded-lg border border-border/80 bg-muted/25"
+                  className="group col-span-1 rounded-lg border border-border/80 bg-muted/25"
                 >
                   <summary className="flex cursor-pointer list-none items-center justify-between gap-3 px-3 py-2 text-xs font-semibold text-muted-foreground marker:hidden hover:text-foreground">
                     <span>Analyst tools</span>
@@ -238,14 +256,16 @@ export function DealHero({ deal }: { deal: DealDetail }) {
                   </summary>
                   <div className="space-y-3 border-t border-border/70 p-3">
                     <div>
-                      <ScoreQualityBadge gate={gate} />
+                      {deal.analysis ? <a href={`/deals/${deal.id}?tab=questions`} className="text-sm underline">Open material questions</a> : <ScoreQualityBadge gate={gate} />}
                       <p className="mt-2 text-xs leading-relaxed text-muted-foreground">{reviewSummary}</p>
                     </div>
                     <div className="grid gap-2">
-                      <Button size="sm" onClick={runPipeline} disabled={pipelineRunning || scoring} className="justify-center">
-                        {pipelineRunning ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
-                        {pipelineLabel}
-                      </Button>
+                      {!codexFirst && (
+                        <Button size="sm" onClick={runPipeline} disabled={pipelineRunning || scoring || review !== "configured"} className="justify-center">
+                          {pipelineRunning ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
+                          {pipelineLabel}
+                        </Button>
+                      )}
                       <Button size="sm" variant="secondary" onClick={runScore} disabled={scoring || pipelineRunning}>
                         {scoring ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
                         {scoring ? "Calculating..." : "Recalculate score"}
@@ -253,7 +273,7 @@ export function DealHero({ deal }: { deal: DealDetail }) {
                     </div>
                     <PipelineNotice status={pipelineStatus} running={pipelineRunning} />
                     <p className="text-[11px] leading-relaxed text-muted-foreground">
-                      Review documents re-reads every uploaded file. Recalculate score only uses values already saved from the last document review.
+                      Recalculate score uses saved accepted facts.
                     </p>
                   </div>
                 </details>
@@ -268,7 +288,7 @@ export function DealHero({ deal }: { deal: DealDetail }) {
 
 function Metric({ label, value }: { label: string; value: string }) {
   return (
-    <div className="min-w-0 px-4 py-3.5">
+    <div className="min-w-0 px-3 py-2.5">
       <div className="text-[10px] font-extrabold uppercase tracking-[0.12em] text-foreground/60">{label}</div>
       <div data-figure className="mt-1.5 truncate text-xl font-extrabold tabular-nums tracking-tight text-foreground">{value}</div>
     </div>
@@ -305,7 +325,7 @@ function reviewItemCount(gate: DataQualityGate): number {
 }
 
 function readableDocumentCount(deal: DealDetail): number {
-  return (deal.documents ?? []).filter((doc) => doc.has_text).length;
+  return (deal.documents ?? []).filter((doc) => doc.has_text && doc.included_in_review !== false).length;
 }
 
 function viewerScoreSummary(gate?: DataQualityGate): string {

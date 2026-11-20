@@ -1,7 +1,16 @@
-from sqlalchemy import Column, Integer, String, Text, Float, DateTime, ForeignKey, JSON, Date
+from sqlalchemy import BigInteger, Column, Integer, String, Text, Float, DateTime, ForeignKey, JSON, Date, UniqueConstraint
 from sqlalchemy.orm import relationship
 from datetime import datetime, timezone, date
 from app.database import Base
+
+
+class AuthSession(Base):
+    """Revocable login session. Only a digest of its browser identifier is stored."""
+
+    __tablename__ = "auth_sessions"
+
+    token_hash = Column(String(64), primary_key=True)
+    expires_at = Column(BigInteger, nullable=False, index=True)
 
 
 class Developer(Base):
@@ -27,6 +36,11 @@ class Deal(Base):
     __tablename__ = "deals"
 
     id = Column(Integer, primary_key=True, index=True)
+    intake_token = Column(String(64), nullable=True, unique=True)
+    revision = Column(Integer, nullable=False, default=1, server_default="1")
+    analysis_version = Column(Integer, nullable=False, default=0, server_default="0")
+    analysis_snapshot = Column(JSON, default=dict)
+    __mapper_args__ = {"version_id_col": revision}
     deleted_at = Column(DateTime, nullable=True, index=True)
     # `developer_id` is the join key for the developer-detail view and
     # gets an index so looking up "all deals under sponsor X" is fast.
@@ -55,6 +69,46 @@ class Deal(Base):
     chats = relationship("DealChat", back_populates="deal", cascade="all, delete-orphan")
     investments = relationship("Investment", back_populates="deal", cascade="all, delete-orphan")
     ai_usage_events = relationship("AIUsageEvent", back_populates="deal", cascade="all, delete-orphan")
+    analysis_history = relationship("AnalysisSnapshot", back_populates="deal", cascade="all, delete-orphan")
+    review_job = relationship("ReviewJob", back_populates="deal", cascade="all, delete-orphan", uselist=False, lazy="selectin")
+
+
+class ReviewJob(Base):
+    __tablename__ = "review_jobs"
+    deal_id = Column(Integer, ForeignKey("deals.id"), primary_key=True)
+    request_seq = Column(Integer, nullable=False, default=1)
+    mode = Column(String(20), nullable=False, default="review")
+    status = Column(String(20), nullable=False, default="queued", index=True)
+    attempts = Column(Integer, nullable=False, default=0)
+    auto_correct = Column(Integer, nullable=False, default=1)
+    lease_token = Column(String(64), nullable=True)
+    lease_until = Column(DateTime, nullable=True)
+    next_attempt_at = Column(DateTime, nullable=False)
+    updated_at = Column(DateTime, nullable=False)
+    error = Column(Text, nullable=True)
+    deal = relationship("Deal", back_populates="review_job")
+
+
+class AnalysisSnapshot(Base):
+    __tablename__ = "analysis_snapshots"
+    __table_args__ = (UniqueConstraint("deal_id", "version", name="uq_analysis_deal_version"),)
+    id = Column(Integer, primary_key=True)
+    deal_id = Column(Integer, ForeignKey("deals.id"), nullable=False, index=True)
+    version = Column(Integer, nullable=False)
+    input_hash = Column(String(64), nullable=False)
+    payload = Column(JSON, nullable=False)
+    input_metrics = Column(JSON, nullable=True)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    deal = relationship("Deal", back_populates="analysis_history")
+
+
+class DocumentFileCleanup(Base):
+    """Live-volume deletion intent saved with the owning record's deletion."""
+
+    __tablename__ = "document_file_cleanup"
+
+    relative_path = Column(String(1024), primary_key=True)
+    next_attempt_at = Column(DateTime, nullable=False, index=True)
 
 
 class DealDocument(Base):
@@ -70,6 +124,9 @@ class DealDocument(Base):
     # verification results without weakening the review quality.
     file_sha256 = Column(String(64), default="", index=True)
     content_fingerprint = Column(String(64), default="", index=True)
+    source_role = Column(String(20), default="active", nullable=False)
+    superseded_by_id = Column(Integer, nullable=True)
+    version_note = Column(Text, default="", nullable=False)
     doc_type = Column(String(50), default="other")
     extracted_text = Column(Text, default="")
     page_count = Column(Integer, default=0)
@@ -88,6 +145,10 @@ class DealChat(Base):
     deal_id = Column(Integer, ForeignKey("deals.id"), nullable=False, index=True)
     role = Column(String(20), nullable=False)
     content = Column(Text, nullable=False)
+    analysis_version = Column(Integer, nullable=True)
+    analysis_input_hash = Column(String(64), nullable=True)
+    answer_kind = Column(String(30), nullable=True)
+    references = Column(JSON, nullable=True)
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
 
     deal = relationship("Deal", back_populates="chats")
@@ -120,6 +181,7 @@ class Investment(Base):
     deal_id = Column(Integer, ForeignKey("deals.id"), nullable=True, index=True)
     project_name = Column(String(500), default="")  # Can track non-deal investments too
     sponsor_name = Column(String(255), default="")
+    developer_id = Column(Integer, ForeignKey("developers.id"), nullable=True, index=True)
     investment_date = Column(Date, nullable=True)
     amount_invested = Column(Float, default=0)
     shares = Column(Float, default=0)
@@ -127,15 +189,24 @@ class Investment(Base):
     preferred_return = Column(Float, nullable=True)  # %
     projected_irr = Column(Float, nullable=True)
     projected_equity_multiple = Column(Float, nullable=True)
+    projected_cash_on_cash = Column(Float, nullable=True)
     hold_period_years = Column(Float, nullable=True)
     status = Column(String(50), default="active")  # active, exited, defaulted, pending
     exit_date = Column(Date, nullable=True)
     exit_amount = Column(Float, nullable=True)
+    residual_value = Column(Float, nullable=True)
+    valuation_date = Column(Date, nullable=True)
+    source_analysis_version = Column(Integer, nullable=True)
+    source_analysis_input_hash = Column(String(64), nullable=True)
+    terms_context = Column(JSON, nullable=True)
+    forecast_snapshot = Column(JSON, nullable=True)
+    terms_overrides = Column(JSON, nullable=True)
     notes = Column(Text, default="")
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
 
     deal = relationship("Deal", back_populates="investments")
     distributions = relationship("Distribution", back_populates="investment", cascade="all, delete-orphan")
+    developer = relationship("Developer", lazy="selectin")
 
 
 class Notification(Base):
@@ -162,6 +233,7 @@ class Notification(Base):
 
 class Distribution(Base):
     __tablename__ = "distributions"
+    __table_args__ = (UniqueConstraint("investment_id", "request_id", name="uq_distributions_request"),)
 
     id = Column(Integer, primary_key=True, index=True)
     investment_id = Column(Integer, ForeignKey("investments.id"), nullable=False, index=True)
@@ -170,6 +242,11 @@ class Distribution(Base):
     dist_type = Column(String(50), default="cash_flow")  # cash_flow, return_of_capital, sale_proceeds, refinance
     period = Column(String(50), default="")  # Q1 2025, March 2025, etc.
     notes = Column(Text, default="")
+    deleted_at = Column(DateTime, nullable=True)
+    revision = Column(Integer, nullable=False, default=1, server_default="1")
+    request_id = Column(String(100), nullable=True)
+    request_fingerprint = Column(String(64), nullable=True)
+    history = Column(JSON, nullable=True)
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
 
     investment = relationship("Investment", back_populates="distributions")

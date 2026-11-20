@@ -12,12 +12,15 @@ PDF generation uses reportlab, Excel uses openpyxl, JSON/CSV use stdlib.
 """
 
 from __future__ import annotations
+from app.services.portfolio_analytics import additional_exit_proceeds, active_distributions
 
 import csv
 import io
 import json
 import zipfile
 from datetime import date, datetime, timezone
+from unicodedata import normalize
+from xml.sax.saxutils import escape
 
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
@@ -27,7 +30,15 @@ from sqlalchemy.orm import selectinload
 
 from app.database import get_db
 from app.models import Deal, Developer, Investment
+from app.permissions import require_analyst
 from app.services.portfolio_analytics import portfolio_analytics
+from app.services.canonical_metrics import canonical_return_summary
+from app.services.analysis import analysis_for_deal, effective_scores
+from app.services.financial_presentation import (
+    RETURN_LABELS, accepted_return_fact, operating_fact_context, optional_sale_returns, return_context, return_evidence,
+    cash_flow_check_context,
+    schedule_context, schedule_source, source_reference,
+)
 
 router = APIRouter()
 
@@ -74,6 +85,7 @@ def _pdf_style():
         textColor=colors.HexColor("#4361ee"),
         spaceBefore=12,
         spaceAfter=6,
+        keepWithNext=1,
     ))
     styles.add(ParagraphStyle(
         name="Small",
@@ -103,6 +115,19 @@ def _metric_table(pairs: list[tuple[str, str]]):
     return t
 
 
+def _pdf_return_value(display, fact, styles):
+    details = "<br/>".join(escape(part) for part in (display, return_context(fact), return_evidence(fact)) if part)
+    from reportlab.platypus import Paragraph
+    return Paragraph(details, styles["Small"])
+
+
+def _pdf_operating_value(display, fact, styles):
+    from reportlab.platypus import Paragraph
+    context = operating_fact_context(fact)
+    source = source_reference((fact or {}).get("evidence"))
+    return Paragraph("<br/>".join(escape(part) for part in (display, context, source) if part), styles["Small"])
+
+
 # ===== Deal PDF =====
 
 @router.get("/deal/{deal_id}/pdf")
@@ -114,16 +139,19 @@ async def deal_pdf_report(deal_id: int, db: AsyncSession = Depends(get_db)):
     result = await db.execute(
         select(Deal)
         .options(selectinload(Deal.developer), selectinload(Deal.documents))
-        .where(Deal.id == deal_id)
+        .where(Deal.id == deal_id, Deal.deleted_at.is_(None))
     )
     deal = result.scalar_one_or_none()
     if not deal:
         raise HTTPException(status_code=404, detail="Deal not found")
 
-    metrics = deal.metrics or {}
-    scores = deal.scores or {}
+    analysis = analysis_for_deal(deal)
+    metrics = analysis["accepted_metrics"]
+    scores = effective_scores(deal)
     ds = metrics.get("deal_structure", {}) or {}
     tr = metrics.get("target_returns", {}) or {}
+    returns = analysis["returns"]
+    financing = analysis.get("financing") or {}
     pd_ = metrics.get("project_details", {}) or {}
     fp = metrics.get("financial_projections", {}) or {}
     ml = metrics.get("market_location", {}) or {}
@@ -138,7 +166,7 @@ async def deal_pdf_report(deal_id: int, db: AsyncSession = Depends(get_db)):
     story = []
 
     # Header
-    story.append(Paragraph(deal.project_name, styles["BrandTitle"]))
+    story.append(Paragraph(escape(deal.project_name), styles["BrandTitle"]))
     subtitle_parts = [
         deal.developer.name if deal.developer else None,
         deal.city or ml.get("city"),
@@ -147,17 +175,21 @@ async def deal_pdf_report(deal_id: int, db: AsyncSession = Depends(get_db)):
     ]
     subtitle = " · ".join(p for p in subtitle_parts if p)
     if subtitle:
-        story.append(Paragraph(subtitle, styles["Small"]))
+        story.append(Paragraph(escape(subtitle), styles["Small"]))
     story.append(Paragraph(
         f"Generated {date.today().isoformat()} · Status: {deal.status or 'reviewing'}",
         styles["Small"],
     ))
     story.append(Spacer(1, 12))
+    story.append(Paragraph(f"Analysis revision {analysis['version']} · {len(analysis['questions'])} unresolved question groups. Unavailable facts are withheld.", styles["Small"]))
 
     # Scores
     story.append(Paragraph("Investment Scores", styles["SectionHeading"]))
     if scores:
-        rows = [("Overall", f"{scores.get('overall', '—')} / 10")]
+        rows = [("Overall", f"{scores['overall']} / 10" if scores.get("overall") is not None else "Not scored")]
+        if scores.get("overall") is None and scores.get("provisional_overall") is not None:
+            coverage = scores.get("coverage") or {}
+            rows.append(("Partial composite", f"{scores['provisional_overall']} / 10 · {coverage.get('supported_categories', 0)} of 7 categories"))
         for cat in ["returns", "market", "structure", "risk", "financials", "underwriting", "sponsor"]:
             c = scores.get(cat) or {}
             if c.get("score") is not None:
@@ -167,7 +199,7 @@ async def deal_pdf_report(deal_id: int, db: AsyncSession = Depends(get_db)):
         for cat in ["returns", "market", "structure", "risk", "financials", "underwriting", "sponsor"]:
             c = scores.get(cat) or {}
             if c.get("notes"):
-                story.append(Paragraph(f"<b>{cat.title()}:</b> {c['notes']}", styles["Small"]))
+                story.append(Paragraph(f"<b>{cat.title()}:</b> {escape(str(c['notes']))}", styles["Small"]))
     else:
         story.append(Paragraph("No scores computed yet.", styles["Small"]))
 
@@ -178,24 +210,86 @@ async def deal_pdf_report(deal_id: int, db: AsyncSession = Depends(get_db)):
         ("Minimum Investment", _fmt_money(ds.get("minimum_investment"))),
         ("Total Project Cost", _fmt_money(ds.get("total_project_cost"))),
         ("Total Equity", _fmt_money(ds.get("total_equity_required"))),
-        ("Debt Amount", _fmt_money(ds.get("debt_amount"))),
-        ("LTV", _fmt_pct(ds.get("ltv"))),
+        (Paragraph(escape(financing.get("debt_amount_label") or "Debt amount"), styles["Small"]), _fmt_money(ds.get("debt_amount"))),
+        ("Loan-to-value", _pdf_operating_value(_fmt_pct(ds.get("ltv")), analysis["facts"].get("deal_structure.ltv"), styles)),
+        ("Loan-to-cost", _pdf_operating_value(_fmt_pct(ds.get("loan_to_cost")), analysis["facts"].get("deal_structure.loan_to_cost"), styles)),
         ("Interest Rate", _fmt_pct(ds.get("interest_rate"))),
         ("Hold Period", f"{ds['hold_period_years']} years" if ds.get("hold_period_years") else "—"),
-        ("Preferred Return", _fmt_pct(ds.get("preferred_return"))),
+        ("Preferred Return", _pdf_return_value(_fmt_pct(ds["preferred_return"]), analysis["facts"].get("deal_structure.preferred_return"), styles)
+         if ds.get("preferred_return") is not None else "—"),
         ("GP Co-Invest", str(ds.get("gp_coinvest") or "—")),
         ("Asset Mgmt Fee", _fmt_pct(ds.get("fees_asset_mgmt"))),
     ]))
 
-    # Target returns
+    reviewed_financing = [item for item in financing.get("measures", []) if item.get("state") == "checked"]
+    if reviewed_financing:
+        story.append(Paragraph("Construction Financing", styles["SectionHeading"]))
+        for item in reviewed_financing:
+            story.append(Paragraph(f"<b>{escape(item['label'])}</b> · {_fmt_money(item['amount'])}", styles["BodyText"]))
+            reference = source_reference(item.get("evidence"))
+            note = " · ".join(part for part in (reference, item.get("note")) if part)
+            if note:
+                story.append(Paragraph(escape(note), styles["Small"]))
+
+    # Each accepted return carries its own context. Legacy facts can retain a
+    # source note even when no structured context was recorded.
     story.append(Paragraph("Target Returns", styles["SectionHeading"]))
-    story.append(_metric_table([
-        ("Target IRR", _fmt_pct(tr.get("target_irr"))),
-        ("Target Equity Multiple", f"{tr['target_equity_multiple']}x" if tr.get("target_equity_multiple") else "—"),
-        ("Cash-on-Cash", _fmt_pct(tr.get("target_cash_on_cash"))),
-        ("Avg Annual Return", _fmt_pct(tr.get("target_avg_annual_return"))),
-        ("Projected Profit", _fmt_money(tr.get("projected_profit"))),
-    ]))
+    return_rows = []
+    for key, label in RETURN_LABELS:
+        value = returns.get(key)
+        display = f"{value}x" if key == "target_equity_multiple" and value is not None else _fmt_pct(value)
+        if value is None:
+            return_rows.append((label, display))
+            continue
+        fact = accepted_return_fact(analysis, key)
+        return_rows.append((label, _pdf_return_value(display, fact, styles)))
+    return_rows.append(("Projected Profit", _fmt_money(tr.get("projected_profit"))))
+    story.append(_metric_table(return_rows))
+
+    sale_facts = optional_sale_returns(analysis)
+    if sale_facts:
+        story.append(Paragraph("Optional Sale Scenario", styles["SectionHeading"]))
+        rows = []
+        for fact in sale_facts:
+            value = f"{fact['value']}x" if fact["identity"]["unit"] == "multiple" else _fmt_pct(fact["value"])
+            rows.append((fact["label"], _pdf_return_value(value, fact, styles)))
+        story.append(_metric_table(rows))
+
+    schedule = analysis.get("return_schedule")
+    if schedule:
+        story.append(Paragraph("Projected Cash-on-Cash by Year", styles["SectionHeading"]))
+        for context in (schedule_context(schedule), schedule.get("assumptions"), schedule_source(schedule)):
+            if context:
+                story.append(Paragraph(escape(context), styles["Small"]))
+        rows = []
+        for period in schedule["rows"]:
+            value = _fmt_pct(period["cash_on_cash_pct"]) if period["cash_on_cash_pct"] is not None else "Not projected"
+            cell = f"Cell {period['source_cell']}" if period.get("source_cell") else None
+            details = " · ".join(part for part in (value, period.get("note"), cell) if part)
+            rows.append((f"Year {period['year']}", Paragraph(escape(details), styles["Small"])))
+        story.append(_metric_table(rows))
+
+    check = analysis.get("return_crosscheck")
+    if check:
+        story.append(Paragraph("PDF Cash-Flow Check", styles["SectionHeading"]))
+        story.append(Paragraph(escape(cash_flow_check_context(check)), styles["Small"]))
+        if check["status"] == "needs_review":
+            story.append(Paragraph("Source version changed. Recheck the calculation.", styles["Small"]))
+        else:
+            multiple = check["cash_flow_multiple"]
+            story.append(_metric_table([
+                ("Annual-period IRR", _fmt_pct(check["annual_irr_pct"])),
+                ("Cash-flow multiple", f"{multiple:.2f}x" if multiple is not None else "Unavailable"),
+            ]))
+            story.append(Paragraph(escape(check["calculation_basis"]), styles["Small"]))
+            rows = []
+            for period in check["rows"]:
+                reference = source_reference([*period["evidence"], *period["event_evidence"]])
+                details = " · ".join(part for part in (
+                    f"{check['currency']} {period['amount']:,.2f}", period["flow_scope_label"], period["date_label"], reference,
+                ) if part)
+                rows.append((period["label"], Paragraph(escape(details), styles["Small"])))
+            story.append(_metric_table(rows))
 
     # Project details
     story.append(Paragraph("Project Details", styles["SectionHeading"]))
@@ -208,10 +302,25 @@ async def deal_pdf_report(deal_id: int, db: AsyncSession = Depends(get_db)):
         ("Entitlement Status", pd_.get("entitlement_status") or "—"),
     ]))
 
+    cost_facts = [fact for path, fact in analysis["facts"].items() if path.startswith("construction_costs.")
+                  and fact["value"] is not None and fact["state"] in {"checked", "calculated", "manual"}]
+    if cost_facts:
+        story.append(Paragraph("Construction Costs", styles["SectionHeading"]))
+        rows = []
+        for fact in cost_facts:
+            display = _fmt_pct(fact["value"]) if fact["identity"]["unit"] == "percent" else _fmt_money(fact["value"])
+            details = [escape(display)]
+            for note in (source_reference(fact.get("evidence")), fact.get("reason")):
+                if note:
+                    details.append(escape(str(note)))
+            rows.append((fact["label"], Paragraph("<br/>".join(details), styles["Small"])))
+        story.append(_metric_table(rows))
+
     # Financial projections
     story.append(Paragraph("Financial Projections", styles["SectionHeading"]))
     story.append(_metric_table([
-        ("Stabilized NOI", _fmt_money(fp.get("stabilized_noi"))),
+        ("Stabilized NOI", _pdf_operating_value(_fmt_money(fp.get("stabilized_noi")), analysis["facts"].get("financial_projections.stabilized_noi"), styles)),
+        ("Untrended NOI", _pdf_operating_value(_fmt_money(fp.get("untrended_noi")), analysis["facts"].get("financial_projections.untrended_noi"), styles)),
         ("Entry Cap Rate", _fmt_pct(fp.get("entry_cap_rate"))),
         ("Exit Cap Rate", _fmt_pct(fp.get("exit_cap_rate"))),
         ("Avg Rent / Unit", _fmt_money(fp.get("avg_rent_per_unit"))),
@@ -223,7 +332,7 @@ async def deal_pdf_report(deal_id: int, db: AsyncSession = Depends(get_db)):
     if deal.notes:
         story.append(PageBreak())
         story.append(Paragraph("Notes", styles["SectionHeading"]))
-        story.append(Paragraph(deal.notes.replace("\n", "<br/>"), styles["BodyText"]))
+        story.append(Paragraph(escape(deal.notes).replace("\n", "<br/>"), styles["BodyText"]))
 
     # Documents
     if deal.documents:
@@ -231,7 +340,7 @@ async def deal_pdf_report(deal_id: int, db: AsyncSession = Depends(get_db)):
         story.append(Paragraph("Source Documents", styles["SectionHeading"]))
         for d in deal.documents:
             line = f"• {d.filename}  ({d.doc_type}, {d.page_count} pages)"
-            story.append(Paragraph(line, styles["Small"]))
+            story.append(Paragraph(escape(line), styles["Small"]))
 
     doc.build(story)
     buf.seek(0)
@@ -253,7 +362,7 @@ async def portfolio_excel_report(db: AsyncSession = Depends(get_db)):
     from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 
     result = await db.execute(
-        select(Investment).options(selectinload(Investment.distributions))
+        select(Investment).where(Investment.deleted_at.is_(None)).options(selectinload(Investment.distributions))
     )
     investments = result.scalars().all()
 
@@ -290,11 +399,14 @@ async def portfolio_excel_report(db: AsyncSession = Depends(get_db)):
         ("Total Investments", s["investment_count"]),
         ("Total Invested", s["total_invested"]),
         ("Total Distributions", s["total_distributions"]),
-        ("Total Exit Proceeds", s["total_exit_proceeds"]),
+        ("Additional exit cash", s["total_exit_proceeds"]),
         ("Total Returned", s["total_returned"]),
-        ("Net Profit", s["net_profit"]),
-        ("Overall Multiple", s["overall_multiple"]),
-        ("Portfolio IRR (%)", s["overall_irr_pct"]),
+        ("Cash returned less invested", s["net_profit"]),
+        ("Cash returned multiple / DPI", s["overall_multiple"]),
+        ("Total-value IRR (%)", s["overall_irr_pct"]),
+        ("TVPI (dated residual value required)", s["tvpi"]),
+        ("Residual value", s["residual_value"]),
+        ("Valuation date", s["valuation_date"]),
     ]
     for i, (label, val) in enumerate(rows, 3):
         ws.cell(row=i, column=1, value=label).font = Font(bold=True)
@@ -306,8 +418,8 @@ async def portfolio_excel_report(db: AsyncSession = Depends(get_db)):
     ws = wb.create_sheet("Investments")
     headers = [
         "ID", "Project", "Sponsor", "Class", "Status",
-        "Invest Date", "Invested", "Distributions", "Exit Amount", "Total Returned",
-        "Net Profit", "Multiple", "DPI", "IRR (%)", "Years Held",
+        "Invest Date", "Invested", "Distributions", "Additional exit cash", "Total Returned",
+        "Cash returned less invested", "Cash returned multiple", "DPI", "Total-value IRR (%)", "Years Held",
         "Projected IRR (%)", "Projected Multiple", "IRR vs Projected (pp)",
         "Pref Return (%)", "Hold Period (yrs)", "Notes",
     ]
@@ -322,7 +434,7 @@ async def portfolio_excel_report(db: AsyncSession = Depends(get_db)):
         ws.cell(row=idx, column=6, value=inv.investment_date)
         ws.cell(row=idx, column=7, value=inv.amount_invested)
         ws.cell(row=idx, column=8, value=perf.get("total_distributions"))
-        ws.cell(row=idx, column=9, value=perf.get("exit_amount"))
+        ws.cell(row=idx, column=9, value=perf.get("additional_exit_proceeds"))
         ws.cell(row=idx, column=10, value=perf.get("total_returned"))
         ws.cell(row=idx, column=11, value=perf.get("net_profit"))
         ws.cell(row=idx, column=12, value=perf.get("multiple"))
@@ -345,7 +457,7 @@ async def portfolio_excel_report(db: AsyncSession = Depends(get_db)):
     )
     r = 2
     for inv in investments:
-        for d in sorted(inv.distributions or [], key=lambda x: x.date or date.min):
+        for d in sorted(active_distributions(inv), key=lambda x: x.date or date.min):
             ws.cell(row=r, column=1, value=inv.id)
             ws.cell(row=r, column=2, value=inv.project_name)
             ws.cell(row=r, column=3, value=d.date)
@@ -367,6 +479,11 @@ async def portfolio_excel_report(db: AsyncSession = Depends(get_db)):
         ws.cell(row=i, column=5, value=row["multiple"])
         ws.cell(row=i, column=6, value=row["share_pct"])
 
+    for sheet in wb.worksheets:
+        for row in sheet.iter_rows():
+            for cell in row:
+                if isinstance(cell.value, str):
+                    cell.data_type = "s"
     buf = io.BytesIO()
     wb.save(buf)
     buf.seek(0)
@@ -391,7 +508,7 @@ async def portfolio_quarterly_pdf(db: AsyncSession = Depends(get_db)):
     from reportlab.lib import colors
 
     result = await db.execute(
-        select(Investment).options(selectinload(Investment.distributions))
+        select(Investment).where(Investment.deleted_at.is_(None)).options(selectinload(Investment.distributions))
     )
     investments = result.scalars().all()
     analytics = portfolio_analytics(investments)
@@ -400,15 +517,15 @@ async def portfolio_quarterly_pdf(db: AsyncSession = Depends(get_db)):
     # Bucket distributions & exits by quarter
     quarters: dict[str, dict] = {}
     for inv in investments:
-        for d in inv.distributions or []:
+        for d in active_distributions(inv):
             if d.date and d.amount:
                 q = _quarter_key(d.date)
                 b = quarters.setdefault(q, {"distributions": 0.0, "exit": 0.0, "new_invested": 0.0})
                 b["distributions"] += float(d.amount)
-        if inv.exit_date and inv.exit_amount:
+        if inv.exit_date and additional_exit_proceeds(inv):
             q = _quarter_key(inv.exit_date)
             b = quarters.setdefault(q, {"distributions": 0.0, "exit": 0.0, "new_invested": 0.0})
-            b["exit"] += float(inv.exit_amount)
+            b["exit"] += additional_exit_proceeds(inv)
         if inv.investment_date and inv.amount_invested:
             q = _quarter_key(inv.investment_date)
             b = quarters.setdefault(q, {"distributions": 0.0, "exit": 0.0, "new_invested": 0.0})
@@ -430,16 +547,18 @@ async def portfolio_quarterly_pdf(db: AsyncSession = Depends(get_db)):
         ("Total Investments", str(s["investment_count"])),
         ("Total Invested", _fmt_money(s["total_invested"])),
         ("Total Distributions", _fmt_money(s["total_distributions"])),
-        ("Total Exit Proceeds", _fmt_money(s["total_exit_proceeds"])),
+        ("Additional exit cash", _fmt_money(s["total_exit_proceeds"])),
         ("Total Returned", _fmt_money(s["total_returned"])),
-        ("Net Profit", _fmt_money(s["net_profit"])),
-        ("Overall Multiple", f"{s['overall_multiple']}x"),
-        ("Portfolio IRR", _fmt_pct(s["overall_irr_pct"])),
+        ("Cash returned less invested", _fmt_money(s["net_profit"])),
+        ("Cash returned multiple / DPI", f"{s['overall_multiple']}x"),
+        ("Total-value IRR", _fmt_pct(s["overall_irr_pct"])),
+        ("TVPI", "Unavailable" if s["tvpi"] is None else str(s["tvpi"])),
+        ("Residual value", "Unavailable" if s["residual_value"] is None else _fmt_money(s["residual_value"])),
     ]))
 
     story.append(Paragraph("Quarterly Cash Flows", styles["SectionHeading"]))
     if sorted_quarters:
-        table_data = [["Quarter", "New Invested", "Distributions", "Exit Proceeds", "Net Flow"]]
+        table_data = [["Quarter", "New Invested", "Distributions", "Additional exit cash", "Net Flow"]]
         for q, b in sorted_quarters:
             net = b["distributions"] + b["exit"] - b["new_invested"]
             table_data.append([
@@ -465,7 +584,7 @@ async def portfolio_quarterly_pdf(db: AsyncSession = Depends(get_db)):
         story.append(Paragraph("No dated cash flows yet.", styles["Small"]))
 
     # Top performers
-    story.append(Paragraph("Top Performers (by IRR)", styles["SectionHeading"]))
+    story.append(Paragraph("Realized Performers (by IRR)", styles["SectionHeading"]))
     top = analytics["top_performers"]
     if top:
         by_id = {inv.id: inv for inv in investments}
@@ -493,7 +612,7 @@ async def portfolio_quarterly_pdf(db: AsyncSession = Depends(get_db)):
         ]))
         story.append(tbl)
     else:
-        story.append(Paragraph("Need at least 2 dated cash flows per investment to compute IRR.", styles["Small"]))
+        story.append(Paragraph("Realized performance requires complete dated cash flows and a recorded exit. Active total-value IRR requires a dated residual value.", styles["Small"]))
 
     doc.build(story)
     buf.seek(0)
@@ -512,7 +631,7 @@ def _json_default(obj):
     raise TypeError(f"Not serializable: {type(obj)}")
 
 
-@router.get("/export/json")
+@router.get("/export/json", dependencies=[Depends(require_analyst)])
 async def export_all_json(db: AsyncSession = Depends(get_db)):
     """Bulk JSON dump of developers, deals, investments and distributions."""
     devs_r = await db.execute(select(Developer))
@@ -523,7 +642,7 @@ async def export_all_json(db: AsyncSession = Depends(get_db)):
         "created_at": d.created_at,
     } for d in devs_r.scalars().all()]
 
-    deals_r = await db.execute(select(Deal).options(selectinload(Deal.documents)))
+    deals_r = await db.execute(select(Deal).options(selectinload(Deal.documents)).where(Deal.deleted_at.is_(None)))
     deals = [{
         "id": d.id, "developer_id": d.developer_id, "project_name": d.project_name,
         "location": d.location, "city": d.city, "state": d.state,
@@ -536,20 +655,28 @@ async def export_all_json(db: AsyncSession = Depends(get_db)):
         } for doc in d.documents],
     } for d in deals_r.scalars().all()]
 
-    inv_r = await db.execute(select(Investment).options(selectinload(Investment.distributions)))
+    inv_r = await db.execute(select(Investment).where(Investment.deleted_at.is_(None)).options(selectinload(Investment.distributions)))
     investments = [{
         "id": i.id, "deal_id": i.deal_id, "project_name": i.project_name,
         "sponsor_name": i.sponsor_name, "investment_date": i.investment_date,
         "amount_invested": i.amount_invested, "shares": i.shares,
         "investment_class": i.investment_class, "preferred_return": i.preferred_return,
         "projected_irr": i.projected_irr, "projected_equity_multiple": i.projected_equity_multiple,
+        "projected_cash_on_cash": i.projected_cash_on_cash,
+        "forecast_snapshot": i.forecast_snapshot, "terms_overrides": i.terms_overrides,
+        "source_analysis_version": i.source_analysis_version, "source_analysis_input_hash": i.source_analysis_input_hash,
+        "terms_context": i.terms_context, "residual_value": i.residual_value, "valuation_date": i.valuation_date,
         "hold_period_years": i.hold_period_years, "status": i.status,
         "exit_date": i.exit_date, "exit_amount": i.exit_amount, "notes": i.notes,
         "created_at": i.created_at,
         "distributions": [{
             "id": d.id, "date": d.date, "amount": d.amount,
             "dist_type": d.dist_type, "period": d.period, "notes": d.notes,
-        } for d in i.distributions],
+        } for d in active_distributions(i)],
+        "distribution_ledger": [{"id": d.id, "date": d.date, "amount": d.amount,
+            "dist_type": d.dist_type, "period": d.period, "notes": d.notes,
+            "deleted_at": d.deleted_at, "revision": d.revision, "history": d.history or []}
+            for d in i.distributions],
     } for i in inv_r.scalars().all()]
 
     payload = {
@@ -566,14 +693,24 @@ async def export_all_json(db: AsyncSession = Depends(get_db)):
     )
 
 
-@router.get("/export/csv")
+def _csv_cell(value):
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        normalized = normalize("NFKC", value)
+        if normalized.startswith(("\t", "\r", "\n")) or normalized.lstrip("\ufeff \t\r\n").startswith(("=", "+", "-", "@")):
+            return "'" + value
+    return value
+
+
+@router.get("/export/csv", dependencies=[Depends(require_analyst)])
 async def export_all_csv(db: AsyncSession = Depends(get_db)):
     """Bulk CSV export as a zip (one CSV per table)."""
     devs_r = await db.execute(select(Developer))
     developers = devs_r.scalars().all()
-    deals_r = await db.execute(select(Deal))
+    deals_r = await db.execute(select(Deal).where(Deal.deleted_at.is_(None)))
     deals = deals_r.scalars().all()
-    inv_r = await db.execute(select(Investment).options(selectinload(Investment.distributions)))
+    inv_r = await db.execute(select(Investment).where(Investment.deleted_at.is_(None)).options(selectinload(Investment.distributions)))
     investments = inv_r.scalars().all()
 
     def _csv(rows: list[list], header: list[str]) -> bytes:
@@ -581,7 +718,7 @@ async def export_all_csv(db: AsyncSession = Depends(get_db)):
         w = csv.writer(out)
         w.writerow(header)
         for row in rows:
-            w.writerow([("" if v is None else v) for v in row])
+            w.writerow([_csv_cell(v) for v in row])
         return out.getvalue().encode("utf-8")
 
     dev_bytes = _csv(
@@ -610,7 +747,7 @@ async def export_all_csv(db: AsyncSession = Depends(get_db)):
     )
     dist_rows = []
     for i in investments:
-        for d in i.distributions or []:
+        for d in active_distributions(i):
             dist_rows.append([
                 d.id, i.id, i.project_name,
                 d.date.isoformat() if d.date else "",

@@ -26,14 +26,14 @@ export function PerformersStrip({
   return (
     <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
       <PerformerCard
-        title="Top performers"
+        title="Realized performers"
         icon={Trophy}
         accent="success"
         rows={top}
         byId={byId}
       />
       <PerformerCard
-        title="Bottom performers"
+        title="Realized lower returns"
         icon={TrendingDown}
         accent="destructive"
         rows={bottom}

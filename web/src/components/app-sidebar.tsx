@@ -80,33 +80,25 @@ function Brand() {
   );
 }
 
-function LegacyLink({ onPick }: { onPick?: () => void }) {
-  const { isAnalyst } = useCurrentUser();
-  if (!isAnalyst) return null;
-  return (
-    <Link
-      href="/legacy"
-      onClick={onPick}
-      className="text-[11px] text-muted-foreground hover:text-foreground transition-colors"
-    >
-      Switch to legacy UI →
-    </Link>
-  );
-}
-
 function UserMenu({ onPick }: { onPick?: () => void }) {
   const { user, role } = useCurrentUser();
+  const [signingOut, setSigningOut] = React.useState(false);
+  const [signOutError, setSignOutError] = React.useState(false);
 
   if (!user?.authenticated) return null;
 
   async function signOut() {
+    setSigningOut(true);
+    setSignOutError(false);
     try {
-      await fetch("/api/auth/logout", { method: "POST", credentials: "include" });
+      const response = await fetch("/api/auth/logout", { method: "POST", credentials: "include" });
+      if (!response.ok) throw new Error("Sign-out failed");
+      onPick?.();
+      window.location.href = "/login";
     } catch {
-      /* ignore */
+      setSignOutError(true);
+      setSigningOut(false);
     }
-    onPick?.();
-    window.location.href = "/login";
   }
 
   const label = role === "viewer" ? "Viewer" : "Admin";
@@ -122,11 +114,14 @@ function UserMenu({ onPick }: { onPick?: () => void }) {
         </span>
       </div>
       <button
+        type="button"
         onClick={signOut}
-        className="text-[11px] text-muted-foreground hover:text-destructive transition-colors"
+        disabled={signingOut}
+        className="text-[11px] text-muted-foreground hover:text-destructive transition-colors disabled:opacity-60"
       >
-        Sign out
+        {signingOut ? "Signing out…" : "Sign out"}
       </button>
+      {signOutError && <p role="alert" className="text-xs text-destructive">Sign-out couldn’t be saved. Try again.</p>}
     </div>
   );
 }
@@ -141,7 +136,7 @@ export function AppSidebar() {
       </nav>
       <div className="px-5 py-3 border-t border-border/60 space-y-2">
         <UserMenu />
-        <LegacyLink />
+
       </div>
     </aside>
   );
@@ -217,7 +212,7 @@ export function MobileNav() {
               </nav>
               <div className="px-5 py-3 border-t border-border/60 space-y-2">
                 <UserMenu onPick={() => setOpen(false)} />
-                <LegacyLink onPick={() => setOpen(false)} />
+
               </div>
             </motion.aside>
           </>

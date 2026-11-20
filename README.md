@@ -169,13 +169,7 @@ web/src/              Next.js app
 
 ## Status
 
-All phases 1–17 shipped. See git log on `claude/build-deal-analyzer-*`
-for the chronological walkthrough. The branch is production-ready:
-
-- 56 automated tests, green on every push
-- Alembic migrations for every schema change
-- Auth, rate limit, security headers, path-traversal guards
-- Undo for every destructive action
-- Dark + light themes
-- Mobile nav + responsive layouts
-- First-run welcome + ⌘K + ? shortcuts
+The site is deployed at [Deal Analyzer](https://deals.conpulseai.com). See
+[production release and validation](docs/RELEASE_VALIDATION.md) for the exact
+commit gate, saved-deal checks and recovery procedure. GitHub Actions runs the
+backend and frontend suites with disposable synthetic deal records.
