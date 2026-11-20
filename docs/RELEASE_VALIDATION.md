@@ -14,9 +14,13 @@ requires representative PDF-only and PDF-plus-workbook runs using authorized
 credits, independently checked evidence, measured costs, and retry checks.
 The paid review pause leaves document reading and evidence lookup available.
 
-1. Wait for the **Release gate** on the exact commit. It depends on the backend,
-   frontend build, and production and development browser jobs. Pin both
-   services to that tested commit and inspect the staged changes.
+1. Push the candidate to `codex/deal-analyzer-release-check`, a branch that is
+   separate from the branch connected to Railway. Wait for the **Release gate**
+   on the exact commit. It depends on the backend, frontend build, and both
+   browser modes. Fast-forward the Railway branch to that tested commit and
+   inspect any staged changes before deployment. Verify the deployed SHA for
+   each service. A Railway source update can build the connected branch head
+   even when a commit was specified in the staged change.
 2. Reviewed dependency locks. Python targets Linux/Python 3.12. The Dependency
    candidate workflow produces a candidate lock for review, without changing
    the accepted lock or deploying anything. Run full regression tests for updates.
