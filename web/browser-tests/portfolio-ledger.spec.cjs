@@ -1,6 +1,8 @@
 const { test, expect } = require('@playwright/test');
 const { execFileSync } = require('node:child_process');
 
+test.use({ actionTimeout: 10000 });
+
 test.beforeEach(async ({ page, context }) => {
   await page.addLocatorHandler(page.getByRole('dialog', { name: 'Welcome to Kenyon', exact: true }), async () => {
     await page.getByRole('button', { name: 'Skip tour', exact: true }).click();
@@ -105,7 +107,7 @@ test('linked investment keeps cited hold schedule and revision when deal terms c
     const drawer = page.getByRole('dialog', { name: 'Add investment', exact: true });
     await drawer.getByRole('combobox', { name: 'Deal', exact: true }).selectOption(String(dealId));
     await expect(drawer.getByText(/2-year hold schedule/)).toBeVisible();
-    await drawer.getByLabel('Amount invested', { exact: true }).fill('1000');
+    await drawer.getByRole('spinbutton', { name: 'Amount invested', exact: true }).fill('1000');
     await drawer.getByLabel('Investment date', { exact: true }).fill('2024-01-01');
     await drawer.getByRole('button', { name: 'Add investment', exact: true }).click();
     await expect(drawer).toBeHidden();
@@ -133,7 +135,8 @@ test('linked investment keeps cited hold schedule and revision when deal terms c
     expect(saved.forecast_snapshot.return_schedule.evidence[0].content_hash).toMatch(/^[a-f0-9]{64}$/);
     await expect(card.getByRole('table', { name: 'Projected cash-on-cash by year' })).toContainText('12.5%');
   } finally {
-    if (investmentId) await page.request.delete(`/api/investments/${investmentId}`);
-    await page.request.delete(base);
+    // A browser timeout should keep its original locator and call log.
+    if (investmentId) await page.request.delete(`/api/investments/${investmentId}`, { timeout: 5000 }).catch(() => {});
+    await page.request.delete(base, { timeout: 5000 }).catch(() => {});
   }
 });

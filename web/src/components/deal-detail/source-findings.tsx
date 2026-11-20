@@ -10,30 +10,37 @@ import { useCurrentUser } from "@/lib/auth-client";
 import type { DealDetail, SourceFinding } from "@/lib/types";
 import { EvidenceViewer } from "./evidence-viewer";
 
+type FindingResolution = { revision: number; findings: SourceFinding[] };
+
 export function SourceFindings({ deal }: { deal: DealDetail }) {
-  const findings = deal.analysis?.findings ?? [];
+  const [saved, setSaved] = useState<(FindingResolution & { dealId: number })>();
   const { isAnalyst } = useCurrentUser();
+  // A pending tab navigation can return an older snapshot after the save.
+  const committed = saved?.dealId === deal.id && saved.revision > (deal.revision ?? 0) ? saved : undefined;
+  const findings = committed?.findings ?? deal.analysis?.findings ?? [];
+  const revision = committed?.revision ?? deal.revision;
   if (findings.length === 0) return null;
   return (
     <section id="source-findings" aria-label="Source findings" className="scroll-mt-20 space-y-3">
       <h3 className="text-base font-semibold">Source findings</h3>
       {findings.map(finding => (
         <FindingCard key={`${deal.revision}-${finding.id}`} finding={finding} dealId={deal.id}
-          revision={deal.revision} canEdit={isAnalyst} />
+          revision={revision} canEdit={isAnalyst} onSaved={result => setSaved({ ...result, dealId: deal.id })} />
       ))}
     </section>
   );
 }
 
-function FindingCard({ finding, dealId, revision, canEdit }: {
+function FindingCard({ finding, dealId, revision, canEdit, onSaved }: {
   finding: SourceFinding;
   dealId: number;
   revision?: number;
   canEdit: boolean;
+  onSaved: (result: FindingResolution) => void;
 }) {
   const router = useRouter();
   const [editing, setEditing] = useState(false);
-  const [decision, setDecision] = useState(finding.decision?.text ?? "");
+  const [decision, setDecision] = useState("");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const title = finding.status === "needs_review" ? "Source changed" :
@@ -44,9 +51,10 @@ function FindingCard({ finding, dealId, revision, canEdit }: {
     setSaving(true);
     setError("");
     try {
-      await api.post(`/api/deals/${dealId}/review/findings/${finding.id}/resolve`, {
+      const result = await api.post<FindingResolution>(`/api/deals/${dealId}/review/findings/${finding.id}/resolve`, {
         expected_revision: revision, decision,
       });
+      onSaved(result);
       setEditing(false);
       router.refresh();
     } catch (error) {
@@ -92,7 +100,11 @@ function FindingCard({ finding, dealId, revision, canEdit }: {
           </div>
         </form>
       ) : (
-        <Button size="sm" variant="outline" onClick={() => setEditing(true)}>
+        <Button size="sm" variant="outline" onClick={() => {
+          setDecision(finding.decision?.text ?? "");
+          setError("");
+          setEditing(true);
+        }}>
           {finding.decision ? "Update decision" : "Record decision"}
         </Button>
       ))}

@@ -3,7 +3,9 @@ name: App regression tests
 on:
   pull_request:
   push:
-    branches: ["codex/trust-and-workflow-audit-20260925"]
+    branches:
+      - codex/trust-and-workflow-audit-20260925
+      - codex/deal-analyzer-release-check
 
 permissions:
   contents: read

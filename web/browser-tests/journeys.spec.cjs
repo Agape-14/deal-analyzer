@@ -656,7 +656,13 @@ test('new deal reviews PDF and workbook through Codex paste, Summary, Compare, a
     const findings = page.getByRole('region', {name: 'Source findings', exact: true});
     await findings.getByRole('button', {name: 'Record decision', exact: true}).click();
     await findings.getByRole('textbox', {name: 'Decision and basis'}).fill('Retain both source quotes and leave this figure open.');
+    const decisionSaved = page.waitForResponse(response => response.request().method() === 'POST'
+      && new URL(response.url()).pathname.startsWith(base + '/review/findings/')
+      && new URL(response.url()).pathname.endsWith('/resolve'));
     await findings.getByRole('button', {name: 'Save decision', exact: true}).click();
+    const decisionResponse = await decisionSaved;
+    expect(decisionResponse.ok()).toBeTruthy();
+    expect((await decisionResponse.json()).findings[0]).toMatchObject({status: 'resolved', decision: {text: 'Retain both source quotes and leave this figure open.'}});
     await expect(findings.getByText('Decision recorded', {exact: true})).toBeVisible();
     const replacement = await page.request.post(base + '/documents/upload', {
       multipart: {file: {name: 'pilot-offering.pdf', mimeType: 'application/pdf',
