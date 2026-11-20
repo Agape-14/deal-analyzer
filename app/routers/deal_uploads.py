@@ -569,6 +569,13 @@ def _remove_partial_file(file_path: str) -> None:
         log.warning("Could not remove partial upload file path=%s", file_path, exc_info=True)
 
 
+async def _lock_upload_parent(db: AsyncSession, deal_id: int) -> Deal | None:
+    # SQLite and PostgreSQL serialize these writes on the deal before a
+    # document change also updates its versioned analysis.
+    await db.execute(update(Deal).where(Deal.id == deal_id).values(revision=Deal.revision))
+    return await db.get(Deal, deal_id, populate_existing=True)
+
+
 async def _create_document_record_with_retry(
     db: AsyncSession,
     values: dict[str, object],
@@ -578,11 +585,9 @@ async def _create_document_record_with_retry(
         try:
             # Serialize uploads for this deal on SQLite and PostgreSQL. Repeat
             # the identity check after every rollback, before enqueuing work.
-            deal_id = values["deal_id"]
-            await db.execute(update(Deal).where(Deal.id == deal_id, Deal.deleted_at.is_(None)).values(revision=Deal.revision))
             # Extraction from the previous upload may have advanced the deal
             # since this request checked it. Refresh after acquiring the lock.
-            deal = await db.get(Deal, deal_id, populate_existing=True)
+            deal = await _lock_upload_parent(db, values["deal_id"])
             if not deal or deal.deleted_at is not None:
                 raise HTTPException(status_code=404, detail="Deal not found")
             docs = (await db.execute(select(DealDocument).where(DealDocument.deal_id == values["deal_id"]).order_by(DealDocument.id))).scalars().all()
@@ -677,6 +682,31 @@ async def _mark_extraction_failed(db: AsyncSession, doc_id: int, ext: str, exc: 
         log.exception("Could not persist background extraction failure for doc_id=%s", doc_id)
 
 
+async def _persist_extraction(
+    db: AsyncSession, deal_id: int, doc_id: int, changes: dict, *, update_identity: bool = False,
+) -> DealDocument | None:
+    from app.services.intake_identity import populate_intake_identity
+
+    for attempt in range(3):
+        try:
+            deal = await _lock_upload_parent(db, deal_id)
+            doc = await db.get(DealDocument, doc_id, populate_existing=True) if deal else None
+            if doc is None:
+                await db.rollback()
+                return None
+            for field, value in changes.items():
+                setattr(doc, field, value)
+            if update_identity:
+                await populate_intake_identity(db, deal_id)
+            await db.commit()
+            return doc
+        except (OperationalError, StaleDataError) as exc:
+            await db.rollback()
+            if attempt == 2 or isinstance(exc, OperationalError) and not _is_locked_error(exc):
+                raise
+            await asyncio.sleep(0.5 * (attempt + 1))
+
+
 async def _extract_document_background(doc_id: int, file_path: str, ext: str, *, handoff=True) -> None:
     async with async_session() as db:
         result = await db.execute(select(DealDocument).where(DealDocument.id == doc_id))
@@ -684,31 +714,32 @@ async def _extract_document_background(doc_id: int, file_path: str, ext: str, *,
         if not doc:
             return
         try:
+            deal_id = doc.deal_id
             existing_quality = dict(doc.extraction_quality or {})
             file_hash = doc.file_sha256 or existing_quality.get("file_sha256") or sha256_file(file_path)
-            if file_hash and not doc.file_sha256:
-                doc.file_sha256 = file_hash
-            doc.extraction_quality = {
+            started_quality = {
                 **existing_quality,
                 "status": "extracting",
                 "document_kind": _document_kind(ext),
                 "file_sha256": file_hash,
             }
-            await _commit_with_retry(db, "marking document extracting")
+            await db.rollback()
+            started = await _persist_extraction(db, deal_id, doc_id, {
+                "file_sha256": file_hash, "extraction_quality": started_quality,
+            })
+            if started is None:
+                return
 
-            extraction, quality, extracted_text, page_count = await asyncio.to_thread(_extract_uploaded_file, file_path, ext)
-            result = await db.execute(select(DealDocument).where(DealDocument.id == doc_id))
-            doc = result.scalar_one_or_none()
+            _, quality, extracted_text, page_count = await asyncio.to_thread(_extract_uploaded_file, file_path, ext)
+            doc = await _persist_extraction(db, deal_id, doc_id, {
+                "extracted_text": extracted_text,
+                "page_count": page_count,
+                "file_sha256": quality.get("file_sha256") or file_hash,
+                "content_fingerprint": quality.get("content_fingerprint") or sha256_text(extracted_text),
+                "extraction_quality": quality,
+            }, update_identity=True)
             if not doc:
                 return
-            doc.extracted_text = extracted_text
-            doc.page_count = page_count
-            doc.file_sha256 = quality.get("file_sha256") or doc.file_sha256 or file_hash
-            doc.content_fingerprint = quality.get("content_fingerprint") or sha256_text(extracted_text)
-            doc.extraction_quality = quality
-            from app.services.intake_identity import populate_intake_identity
-            await populate_intake_identity(db, doc.deal_id)
-            await _commit_with_retry(db, "saving extracted document text")
 
             if quality.get("status") == "error":
                 log.warning("Document extraction failed for doc %s: %s", doc_id, quality.get("error"))
