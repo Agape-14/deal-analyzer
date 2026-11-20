@@ -27,6 +27,7 @@ configured credentials and a stable signing secret.
 
 from __future__ import annotations
 
+import hashlib
 import hmac
 import json
 import os
@@ -38,6 +39,8 @@ from typing import Literal, NamedTuple, Optional, TypedDict
 
 import bcrypt
 from fastapi import HTTPException, Request
+from sqlalchemy import delete, select
+from sqlalchemy.exc import SQLAlchemyError
 
 UserRole = Literal["admin", "analyst", "viewer"]
 MAX_USERNAME_LENGTH = 120
@@ -213,26 +216,64 @@ def check_login(username: str, password: str) -> bool:
 
 SESSION_KEY = "kenyon_user"
 SESSION_TTL_DAYS = 30
+_REQUEST_USER = "_kenyon_verified_user"
+_SESSION_IDENTIFIER = re.compile(r"[a-f0-9]{64}")
 
 
-def set_session(request: Request, identity: LoginIdentity) -> None:
+def _session_digest(request: Request) -> str | None:
+    data = request.scope.get("session", {}).get(SESSION_KEY)
+    token = data.get("sid") if isinstance(data, dict) else None
+    if isinstance(token, str) and _SESSION_IDENTIFIER.fullmatch(token):
+        return hashlib.sha256(token.encode("ascii")).hexdigest()
+    return None
+
+
+async def set_session(request: Request, identity: LoginIdentity) -> None:
     if identity["binding"] is None:
-        clear_session(request)
+        await clear_session(request)
         return
+    from app.database import async_session
+    from app.models import AuthSession
+
     now = int(time.time())
+    expires_at = now + SESSION_TTL_DAYS * 86400
+    previous = _session_digest(request)
+    token = secrets.token_hex(32)
+    try:
+        async with async_session.begin() as db:
+            await db.execute(delete(AuthSession).where(AuthSession.expires_at <= now))
+            if previous:
+                await db.execute(delete(AuthSession).where(AuthSession.token_hash == previous))
+            db.add(AuthSession(token_hash=hashlib.sha256(token.encode("ascii")).hexdigest(), expires_at=expires_at))
+    except SQLAlchemyError:
+        raise HTTPException(status_code=503, detail="Sign-in is temporarily unavailable") from None
+
     request.session[SESSION_KEY] = {
         **identity,
+        "sid": token,
         "iat": now,
-        "exp": now + SESSION_TTL_DAYS * 86400,
+        "exp": expires_at,
     }
 
 
-def clear_session(request: Request) -> None:
+async def clear_session(request: Request) -> None:
+    token_hash = _session_digest(request)
+    if token_hash:
+        from app.database import async_session
+        from app.models import AuthSession
+
+        try:
+            async with async_session.begin() as db:
+                await db.execute(delete(AuthSession).where(AuthSession.token_hash == token_hash))
+        except SQLAlchemyError:
+            raise HTTPException(status_code=503, detail="Sign-out could not be saved. Please try again.") from None
+
     request.session.pop(SESSION_KEY, None)
+    setattr(request.state, _REQUEST_USER, None)
 
 
-def current_user(request: Request) -> Optional[dict]:
-    """Return an unexpired session bound to an active configured account."""
+def _bound_identity(request: Request) -> Optional[dict]:
+    """Check the signed cookie against the current configured account."""
     data = request.scope.get("session", {}).get(SESSION_KEY)
     if not isinstance(data, dict) or authentication_check()["code"] != "auth_configured":
         return None
@@ -248,6 +289,37 @@ def current_user(request: Request) -> Optional[dict]:
             if hmac.compare_digest(binding, _credential_binding(account)):
                 return {"u": account.username, "r": account.role, "iat": iat, "exp": exp}
     return None
+
+
+def current_user(request: Request) -> Optional[dict]:
+    """Read the identity already verified for this request."""
+    return getattr(request.state, _REQUEST_USER, None)
+
+
+async def authenticate_request(request: Request) -> Optional[dict]:
+    """Verify credential binding and the shared session record once per request."""
+    if hasattr(request.state, _REQUEST_USER):
+        return current_user(request)
+
+    identity = _bound_identity(request)
+    token_hash = _session_digest(request)
+    user = None
+    if identity and token_hash:
+        from app.database import async_session
+        from app.models import AuthSession
+
+        try:
+            async with async_session() as db:
+                expires_at = await db.scalar(select(AuthSession.expires_at).where(AuthSession.token_hash == token_hash))
+        except SQLAlchemyError:
+            raise HTTPException(status_code=503, detail="Authentication unavailable") from None
+        if expires_at == identity["exp"] and expires_at > int(time.time()):
+            user = identity
+
+    if user is None:
+        request.scope.get("session", {}).pop(SESSION_KEY, None)
+    setattr(request.state, _REQUEST_USER, user)
+    return user
 
 
 def is_analyst(user: Optional[dict]) -> bool:
@@ -283,7 +355,7 @@ async def require_auth(request: Request) -> dict:
         raise HTTPException(status_code=503, detail="Authentication unavailable")
     if check["code"] == "local_auth_disabled":
         return {"u": expected_username(), "r": "admin", "anonymous": True}
-    user = current_user(request)
+    user = await authenticate_request(request)
     if not user:
         raise HTTPException(status_code=401, detail="Not authenticated")
     return user

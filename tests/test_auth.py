@@ -3,6 +3,7 @@
 from types import SimpleNamespace
 
 import pytest
+from httpx import ASGITransport, AsyncClient
 from starlette.requests import Request
 
 from app.auth import (
@@ -92,7 +93,8 @@ def test_deployed_auth_requires_usable_config(monkeypatch):
     assert authentication_check()["code"] == "auth_configured"
 
 
-def test_credential_bound_session_expires(monkeypatch):
+@pytest.mark.asyncio
+async def test_credential_bound_session_expires(client, monkeypatch):
     from app import auth
 
     monkeypatch.setenv("AUTH_DISABLED", "0")
@@ -104,11 +106,68 @@ def test_credential_bound_session_expires(monkeypatch):
     identity = auth.login_identity("synthetic-admin", "synthetic-admin-password")
     assert identity is not None
     request = Request({"type": "http", "session": {}})
-    auth.set_session(request, identity)
-    user = auth.current_user(request)
-    assert user is not None and user["r"] == "admin"
-    clock.time = lambda: user["exp"]
+    await auth.set_session(request, identity)
     assert auth.current_user(request) is None
+    user = await auth.authenticate_request(request)
+    assert user is not None and user["r"] == "admin"
+    assert auth.current_user(request) == user
+    old_session = dict(request.session)
+    clock.time = lambda: user["exp"]
+    later = Request({"type": "http", "session": old_session})
+    assert await auth.authenticate_request(later) is None
+
+
+def _enable_synthetic_login(monkeypatch):
+    monkeypatch.setenv("AUTH_DISABLED", "0")
+    monkeypatch.setenv("AUTH_USERNAME", "synthetic-operator")
+    monkeypatch.setenv("AUTH_PASSWORD", "synthetic-logout-password")
+    monkeypatch.delenv("AUTH_PASSWORD_HASH", raising=False)
+    return {"username": "synthetic-operator", "password": "synthetic-logout-password"}
+
+
+@pytest.mark.asyncio
+async def test_logout_revokes_only_the_current_session(client, monkeypatch):
+    from app.main import app
+
+    credentials = _enable_synthetic_login(monkeypatch)
+    signed_in = await client.post("/api/auth/login", json=credentials)
+    assert signed_in.status_code == 200
+    closed_session = signed_in.cookies["kenyon_session"]
+    assert (await client.get("/api/deals")).status_code == 200
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as another:
+        second_login = await another.post("/api/auth/login", json=credentials)
+        assert second_login.status_code == 200
+        assert second_login.cookies["kenyon_session"] != closed_session
+        assert (await client.post("/api/auth/logout")).status_code == 200
+        assert "kenyon_session" not in client.cookies
+
+        client.cookies.set("kenyon_session", closed_session)
+        assert (await client.get("/api/deals")).status_code == 401
+        client.cookies.set("kenyon_session", closed_session)
+        assert (await client.get("/api/auth/me")).json() == {"authenticated": False}
+        assert (await another.get("/api/auth/me")).json()["authenticated"] is True
+
+
+@pytest.mark.asyncio
+async def test_auth_store_failure_does_not_grant_access_or_report_signout(client, monkeypatch):
+    from sqlalchemy.exc import SQLAlchemyError
+    from app import database
+
+    credentials = _enable_synthetic_login(monkeypatch)
+    assert (await client.post("/api/auth/login", json=credentials)).status_code == 200
+
+    class UnavailableStore:
+        def __call__(self):
+            raise SQLAlchemyError("synthetic unavailable store")
+
+        def begin(self):
+            raise SQLAlchemyError("synthetic unavailable store")
+
+    monkeypatch.setattr(database, "async_session", UnavailableStore())
+    assert (await client.get("/api/deals")).status_code == 503
+    assert (await client.post("/api/auth/logout")).status_code == 503
+    assert "kenyon_session" in client.cookies
 
 
 @pytest.mark.asyncio

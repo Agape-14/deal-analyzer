@@ -1,23 +1,18 @@
-"""PDF extraction service.
-
-Extracts text (with OCR fallback for scanned pages), tables, and images from
-PDFs uploaded for deal analysis. Image extraction is best-effort — images are
-saved next to the source PDF in an `images/` subdirectory and referenced by
-relative path so downstream callers (AI extractor) can attach them as vision
-inputs.
-"""
+"""Read text and tables from deal PDFs, using bounded OCR for scanned pages."""
 
 from __future__ import annotations
 
 import io
 import math
-import os
 import re
 from collections import Counter
 from dataclasses import dataclass, field
 from decimal import Decimal, InvalidOperation
+from time import monotonic
 
 import fitz  # PyMuPDF
+
+from app.services.document_read_limits import DocumentReadLimit, check_input_size
 
 # Minimum number of non-whitespace characters a page must have before we
 # consider its text layer "real." Anything shorter triggers OCR.
@@ -25,15 +20,21 @@ MIN_TEXT_CHARS = 40
 SPARSE_TEXT_CHARS = 800
 LARGE_IMAGE_PAGE_FRACTION = 0.30
 
-# Render DPI for OCR and image extraction. Higher = better quality, slower.
 OCR_DPI = 200
-IMAGE_DPI = 150
+OCR_TIMEOUT_SECONDS = 12
+MAX_PDF_PAGES = 300
+MAX_PDF_PAGE_TEXT_CHARS = 128_000
+MAX_PDF_TEXT_CHARS = 2_000_000
+MAX_OCR_SIDE_PIXELS = 10_000
+MAX_OCR_RENDER_PIXELS = 12_000_000
+MAX_PDF_OCR_PIXELS = 360_000_000
+MAX_PDF_OCR_SECONDS = 120
 
-# Cap per-page OCR time by limiting image count per page, etc.
-MAX_IMAGES_PER_PAGE = 10
+# Keep table-finder output and numeric diagnostics within their document budgets.
 MAX_PDF_TABLES = 32
 MAX_TABLE_ROWS = 120
 MAX_TABLE_COLUMNS = 20
+MAX_TABLE_SCAN_CELLS = 100_000
 MAX_PDF_TABLE_CELLS = 2000
 MAX_CELL_CHARS = 400
 MAX_TABLE_TEXT_CHARS = 40000
@@ -98,7 +99,7 @@ def _ocr_page(page: "fitz.Page") -> str:
     try:
         pix = page.get_pixmap(dpi=OCR_DPI)
         img = Image.open(io.BytesIO(pix.tobytes("png")))
-        return pytesseract.image_to_string(img) or ""
+        return pytesseract.image_to_string(img, timeout=OCR_TIMEOUT_SECONDS) or ""
     except Exception:
         return ""
 
@@ -107,7 +108,28 @@ def _read_budget():
     return {"tables": 0, "cells": 0, "text_chars": 0, "review_chars": 0, "numeric_checks": 0,
             "diagnostics": 0, "diagnostic_chars": 0, "page_checks": {},
             "recoveries": 0, "recovery_chars": 0,
-            "review_pages": set(), "truncated_pages": set(), "unchecked_pages": set()}
+            "review_pages": set(), "truncated_pages": set(), "unchecked_pages": set(),
+            "ocr_pixels": 0, "ocr_seconds": 0.0, "ocr_limited_pages": set()}
+
+
+def _read_ocr(area, page_num, budget, render):
+    # Account for rounding the origin and end of the clip out to pixel edges.
+    scale = OCR_DPI / 72
+    side = max(area.width, area.height) * scale
+    if (area.is_empty or not math.isfinite(side) or side + 2 > MAX_OCR_SIDE_PIXELS
+            or budget["ocr_seconds"] >= MAX_PDF_OCR_SECONDS):
+        budget["ocr_limited_pages"].add(page_num)
+        return ""
+    pixels = (math.ceil(area.width * scale) + 2) * (math.ceil(area.height * scale) + 2)
+    if pixels > MAX_OCR_RENDER_PIXELS or budget["ocr_pixels"] + pixels > MAX_PDF_OCR_PIXELS:
+        budget["ocr_limited_pages"].add(page_num)
+        return ""
+    budget["ocr_pixels"] += pixels
+    started = monotonic()
+    try:
+        return render()
+    finally:
+        budget["ocr_seconds"] += monotonic() - started
 
 
 def _bbox(value):
@@ -251,7 +273,7 @@ def _ocr_region(page, box):
 
         pix = page.get_pixmap(dpi=OCR_DPI, clip=fitz.Rect(box))
         img = Image.open(io.BytesIO(pix.tobytes("png")))
-        return (pytesseract.image_to_string(img, config="--psm 6") or "").strip()
+        return (pytesseract.image_to_string(img, config="--psm 6", timeout=OCR_TIMEOUT_SECONDS) or "").strip()
     except Exception:
         return ""
 
@@ -306,7 +328,10 @@ def _table_numeric_diagnostics(page, table, found_table, words, budget):
                 checks += 1
                 budget["page_checks"][table["page"]] = checks
                 budget["numeric_checks"] += 1
-                ocr_tokens = _NUMBER.findall(_ocr_region(page, box))
+                area = fitz.Rect(box)
+                ocr_tokens = _NUMBER.findall(
+                    _read_ocr(area, table["page"], budget, lambda: _ocr_region(page, box))
+                )
                 if len(ocr_tokens) == 1:
                     ocr_token = ocr_tokens[0].strip()
                     ocr_issue = _numeric_issue(token, ocr_token)
@@ -348,6 +373,9 @@ def _extract_tables(page: "fitz.Page", page_num: int, budget=None) -> list[dict]
     """
     results: list[dict] = []
     budget = budget if budget is not None else _read_budget()
+    if budget["tables"] >= MAX_PDF_TABLES or budget["cells"] >= MAX_PDF_TABLE_CELLS:
+        budget["truncated_pages"].add(page_num)
+        return results
     try:
         words = page.get_text("words") or []
     except Exception:
@@ -357,6 +385,9 @@ def _extract_tables(page: "fitz.Page", page_num: int, budget=None) -> list[dict]
         if budget["tables"] >= MAX_PDF_TABLES or budget["cells"] >= MAX_PDF_TABLE_CELLS:
             budget["truncated_pages"].add(page_num)
             break
+        if (getattr(tbl, "row_count", 0) or 0) * (getattr(tbl, "col_count", 0) or 0) > MAX_TABLE_SCAN_CELLS:
+            budget["truncated_pages"].add(page_num)
+            continue
         try:
             rows = tbl.extract()
         except Exception:
@@ -462,62 +493,6 @@ def _extract_tables(page: "fitz.Page", page_num: int, budget=None) -> list[dict]
     return results
 
 
-def _extract_images(
-    doc: "fitz.Document",
-    page: "fitz.Page",
-    page_num: int,
-    output_dir: str,
-) -> list[dict]:
-    """Extract embedded images from a page and write them to disk.
-
-    Returns metadata for each saved image. Skips tiny images (likely logos /
-    icons / bullets) and caps the count per page.
-    """
-    results: list[dict] = []
-    try:
-        img_list = page.get_images(full=True)
-    except Exception:
-        return results
-
-    os.makedirs(output_dir, exist_ok=True)
-    for img_idx, img_info in enumerate(img_list[:MAX_IMAGES_PER_PAGE], 1):
-        xref = img_info[0]
-        try:
-            base = doc.extract_image(xref)
-        except Exception:
-            continue
-        if not base:
-            continue
-        img_bytes = base.get("image")
-        ext = base.get("ext", "png")
-        width = base.get("width", 0)
-        height = base.get("height", 0)
-
-        # Skip trivially small images.
-        if width < 80 or height < 80:
-            continue
-        if not img_bytes:
-            continue
-
-        fname = f"page{page_num:03d}_img{img_idx:02d}.{ext}"
-        fpath = os.path.join(output_dir, fname)
-        try:
-            with open(fpath, "wb") as fh:
-                fh.write(img_bytes)
-        except OSError:
-            continue
-
-        results.append({
-            "page": page_num,
-            "index": img_idx,
-            "path": fpath,
-            "width": width,
-            "height": height,
-            "ext": ext,
-        })
-    return results
-
-
 def _has_large_image(page: "fitz.Page") -> bool:
     try:
         page_area = page.rect.get_area()
@@ -547,30 +522,30 @@ def _merge_page_text(native_text: str, ocr_text: str) -> str:
 
 
 def extract_pdf(file_path: str) -> PdfExtractionResult:
-    """Full extraction: text (with OCR fallback), tables, and images.
-
-    The primary consumer is the deal extractor. Keeping this function as the
-    single entry point makes it easy to tune (e.g., skip tables for large
-    docs, or disable image extraction for non-PDF files)."""
-    result = PdfExtractionResult()
-
+    """Read native text and tables, with OCR for relevant images in place."""
     if not file_path.lower().endswith(".pdf"):
-        return result
+        return PdfExtractionResult()
 
+    check_input_size(file_path)
     try:
         doc = fitz.open(file_path)
     except Exception as e:
-        result.text = f"[Failed to open PDF: {e}]"
-        return result
+        return PdfExtractionResult(text=f"[Failed to open PDF: {e}]", quality_score=0)
+    with doc:
+        return _read_pdf(doc)
 
-    result.page_count = len(doc)
 
-    images_dir = os.path.join(os.path.dirname(file_path), "images")
-
+def _read_pdf(doc):
+    result = PdfExtractionResult(page_count=len(doc))
+    if result.page_count > MAX_PDF_PAGES:
+        raise DocumentReadLimit(f"The PDF exceeds the {MAX_PDF_PAGES}-page reading limit. Split it into smaller PDFs.")
     text_parts: list[str] = []
+    text_chars = 0
     budget = _read_budget()
     for page_num, page in enumerate(doc, 1):
         page_text = (page.get_text() or "").strip()
+        if len(page_text) > MAX_PDF_PAGE_TEXT_CHARS or text_chars + len(page_text) > MAX_PDF_TEXT_CHARS:
+            raise DocumentReadLimit("The PDF exceeds the text reading limit. Split it into smaller PDFs.")
         native_text = page_text
         source = "text" if len(page_text) >= MIN_TEXT_CHARS else "empty"
         image_needs_reading = len(page_text) < SPARSE_TEXT_CHARS and _has_large_image(page)
@@ -578,7 +553,9 @@ def extract_pdf(file_path: str) -> PdfExtractionResult:
 
         # A native heading can sit above an image containing the actual budget.
         if len(page_text) < MIN_TEXT_CHARS or image_needs_reading:
-            ocr_text = _ocr_page(page).strip()
+            ocr_text = _read_ocr(page.rect, page_num, budget, lambda: _ocr_page(page)).strip()
+            if len(ocr_text) > MAX_PDF_PAGE_TEXT_CHARS:
+                raise DocumentReadLimit("The PDF exceeds the text reading limit. Split it into smaller PDFs.")
             page_text = _merge_page_text(page_text, ocr_text)
             normalized_page = " ".join(page_text.split()).casefold()
             normalized_native = " ".join(native_text.split()).casefold()
@@ -600,7 +577,11 @@ def extract_pdf(file_path: str) -> PdfExtractionResult:
         if review_text:
             page_text += _TABLE_REVIEW_MARKER + review_text
         if page_text:
-            text_parts.append(f"--- Page {page_num} ---\n{page_text}")
+            page_block = f"--- Page {page_num} ---\n{page_text}"
+            text_chars += len(page_block) + 2
+            if text_chars > MAX_PDF_TEXT_CHARS:
+                raise DocumentReadLimit("The PDF exceeds the text reading limit. Split it into smaller PDFs.")
+            text_parts.append(page_block)
         else:
             source = "empty"
 
@@ -609,15 +590,13 @@ def extract_pdf(file_path: str) -> PdfExtractionResult:
              "image_text_unread": image_needs_reading and source == "image_text_unread",
              "table_count": len(page_tables), "table_details_truncated": page_num in budget["truncated_pages"],
              "numeric_diagnostics_count": len(page_diagnostics),
-             "numeric_checks_truncated": page_num in budget["unchecked_pages"]}
+             "numeric_checks_truncated": page_num in budget["unchecked_pages"],
+             "ocr_reading_limit": page_num in budget["ocr_limited_pages"]}
         )
 
-        # Best-effort tables and images. Failures are silently skipped.
         result.tables.extend(page_tables)
         result.numeric_diagnostics.extend(page_diagnostics)
-        result.images.extend(_extract_images(doc, page, page_num, images_dir))
 
-    doc.close()
     result.text = "\n\n".join(text_parts)
 
     # Quality score: fraction of pages that produced >= MIN_TEXT_CHARS.

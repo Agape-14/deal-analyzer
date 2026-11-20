@@ -422,6 +422,58 @@ def draft_view(deal, docs):
     }}
 
 
+def finding_value_options(finding, draft):
+    """Link a finding to one complete candidate group using saved citations."""
+    options = {"draft_id": None, "choices": [], "issue": ""}
+    if finding["kind"] != "conflict" or finding["status"] == "needs_review":
+        return options
+    if not draft or draft["stale"]:
+        return {**options, "issue": "A current review with checked values is needed to apply a figure."}
+
+    def citation_key(evidence, *, candidate=False):
+        keys = ("source_doc_id", "source_document_hash", "source_page", "source_sheet", "source_cell", "source_excerpt"
+                ) if candidate else ("document_id", "content_hash", "page", "sheet", "cell", "excerpt")
+        doc_id, content_hash, page, sheet, cell, quote = (evidence.get(key) for key in keys)
+        # The finding currently has page-level PDF citations. A table cell
+        # requires a location the finding has not recorded.
+        if candidate and evidence.get("source_table_index"):
+            return None
+        if not (doc_id and content_hash and quote and (page or sheet and cell)):
+            return None
+        return doc_id, content_hash, page, sheet, cell and cell.upper(), normalized_text(quote)
+
+    citations = [citation_key(evidence) for evidence in finding["evidence"]]
+    by_path = defaultdict(list)
+    for row in draft["rows"]:
+        if row.get("candidate_id"):
+            by_path[row["path"]].append(row)
+
+    matches = []
+    if len(citations) >= 2 and None not in citations and len(set(citations)) == len(citations):
+        for rows in by_path.values():
+            sources = {citation_key(row["evidence"], candidate=True): row for row in rows}
+            if len(rows) == len(citations) and set(sources) == set(citations):
+                matches.append([sources[citation] for citation in citations])
+    if len(matches) != 1:
+        issue = ("The same quotes match more than one field. Review the field in Documents."
+                 if matches else "A checked field must match all citations before it can be applied from this finding.")
+        return {**options, "issue": issue}
+
+    rows = matches[0]
+    issue = next((row["candidate_issue"] for row in rows if row["candidate_issue"]), "")
+    if not issue and any(row["context_changed"] for row in rows):
+        issue = "The saved figure uses a different context. Review the scope before applying a value."
+    choices = []
+    for source_index, row in enumerate(rows):
+        scope = identity(row["path"], row["unit"], row["context"]).model_dump() if row["unit"] else {}
+        choice = {key: row[key] for key in ("candidate_id", "path", "label", "value", "unit")}
+        choices.append({**choice, "source_index": source_index, "context": {
+            key: scope[key] for key in DIMENSIONS
+            if scope.get(key, "").casefold() not in {"", "unspecified", "unknown"}
+        }})
+    return {"draft_id": None if issue else draft["id"], "choices": choices, "issue": issue}
+
+
 def _draft_reconciliation(deal, docs, rows):
     defaults = [row for row in rows if row["unit"] == "currency" and not row["issue"]
                 and not row["context_changed"] and row["current"] in (None, row["value"])

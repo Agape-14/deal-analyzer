@@ -1,7 +1,16 @@
-from sqlalchemy import Column, Integer, String, Text, Float, DateTime, ForeignKey, JSON, Date, UniqueConstraint
+from sqlalchemy import BigInteger, Column, Integer, String, Text, Float, DateTime, ForeignKey, JSON, Date, UniqueConstraint
 from sqlalchemy.orm import relationship
 from datetime import datetime, timezone, date
 from app.database import Base
+
+
+class AuthSession(Base):
+    """Revocable login session. Only a digest of its browser identifier is stored."""
+
+    __tablename__ = "auth_sessions"
+
+    token_hash = Column(String(64), primary_key=True)
+    expires_at = Column(BigInteger, nullable=False, index=True)
 
 
 class Developer(Base):
@@ -91,6 +100,15 @@ class AnalysisSnapshot(Base):
     input_metrics = Column(JSON, nullable=True)
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
     deal = relationship("Deal", back_populates="analysis_history")
+
+
+class DocumentFileCleanup(Base):
+    """Live-volume deletion intent saved with the owning record's deletion."""
+
+    __tablename__ = "document_file_cleanup"
+
+    relative_path = Column(String(1024), primary_key=True)
+    next_attempt_at = Column(DateTime, nullable=False, index=True)
 
 
 class DealDocument(Base):

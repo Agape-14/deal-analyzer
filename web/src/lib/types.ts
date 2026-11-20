@@ -99,9 +99,18 @@ export interface SourceFinding {
     text: string;
     at: string;
     by: string;
-    action?: "prefer_source" | "keep_open" | "record_note" | "acknowledge";
+    action?: "prefer_source" | "apply_value" | "keep_open" | "record_note" | "acknowledge";
     source_index?: number;
+    applied?: FindingValue;
   };
+}
+
+export interface FindingValue {
+  path: string;
+  label: string;
+  value: number | string;
+  unit: string;
+  context: Partial<Pick<AnalysisFact["identity"], "scenario" | "investor_class" | "basis" | "debt_phase" | "period" | "currency">>;
 }
 
 export interface ReturnCrosscheck {

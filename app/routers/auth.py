@@ -11,9 +11,9 @@ from pydantic import BaseModel, Field
 
 from app.auth import (
     MAX_USERNAME_LENGTH,
+    authenticate_request,
     authentication_check,
     clear_session,
-    current_user,
     expected_username,
     login_identity,
     set_session,
@@ -40,13 +40,13 @@ async def login(data: LoginIn, request: Request):
     if not identity:
         await asyncio.sleep(0.5)
         raise HTTPException(status_code=401, detail="Invalid username or password")
-    set_session(request, identity)
+    await set_session(request, identity)
     return {"message": "Signed in", "username": identity["u"], "role": identity["r"]}
 
 
 @router.post("/logout")
 async def logout(request: Request):
-    clear_session(request)
+    await clear_session(request)
     return {"message": "Signed out"}
 
 
@@ -54,7 +54,7 @@ async def logout(request: Request):
 async def me(request: Request):
     """Identity probe used by the frontend to decide which tools to show.
 
-    Always returns 200 — the caller interprets the `authenticated` flag.
+    Returns the caller's identity when the session is active.
     """
     if authentication_check()["code"] == "local_auth_disabled":
         return {
@@ -63,7 +63,7 @@ async def me(request: Request):
             "role": "admin",
             "auth_disabled": True,
         }
-    user = current_user(request)
+    user = await authenticate_request(request)
     if not user:
         return {"authenticated": False}
     return {

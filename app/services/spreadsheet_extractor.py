@@ -9,12 +9,20 @@ from dataclasses import dataclass, field
 from datetime import date, datetime, time, timedelta
 from typing import Any
 
+from app.services.document_read_limits import DocumentReadLimit, check_input_size
+
 
 MAX_SHEETS = 20
 MAX_ROWS_PER_SHEET = 2000
 MAX_COLS_PER_SHEET = 150
 MAX_CELLS_FOR_PROVENANCE = 1500
 MAX_KEY_ROWS = 250
+MAX_WORKBOOK_CELL_SLOTS = 750_000
+MAX_WORKBOOK_VALUE_CHARS = 4_000_000
+MAX_WORKBOOK_ARCHIVE_ENTRIES = 1_024
+MAX_WORKBOOK_ENTRY_BYTES = 32 * 1024 * 1024
+MAX_WORKBOOK_EXPANDED_BYTES = 128 * 1024 * 1024
+MAX_CSV_RECORD_CHARS = 256 * 1024
 
 KEY_TERMS = {
     "irr",
@@ -64,8 +72,23 @@ class SpreadsheetExtractionResult:
     quality_score: int = 100
 
 
+@dataclass
+class _ReadingBudget:
+    slots: int = 0
+    chars: int = 0
+
+    def add_row(self, values, formulas=()):
+        self.slots += len(values)
+        self.chars += sum(len(value) for value in values if isinstance(value, str))
+        self.chars += sum(len(formula) for formula in formulas if isinstance(formula, str) and formula.startswith("="))
+        if self.slots > MAX_WORKBOOK_CELL_SLOTS or self.chars > MAX_WORKBOOK_VALUE_CHARS:
+            raise DocumentReadLimit("The spreadsheet exceeds the combined reading limit. Split it into smaller files.")
+
+
 def extract_spreadsheet(file_path: str) -> SpreadsheetExtractionResult:
     ext = os.path.splitext(file_path)[1].lower()
+    if ext in {".xlsx", ".xlsm", ".xls", ".csv"}:
+        check_input_size(file_path)
     if ext in {".xlsx", ".xlsm"}:
         return _extract_xlsx(file_path)
     if ext == ".xls":
@@ -79,29 +102,42 @@ def extract_spreadsheet(file_path: str) -> SpreadsheetExtractionResult:
     return result
 
 
+def _check_workbook_archive(file_path: str) -> int:
+    with zipfile.ZipFile(file_path) as archive:
+        entries = archive.infolist()
+        if len(entries) > MAX_WORKBOOK_ARCHIVE_ENTRIES:
+            raise DocumentReadLimit("The workbook contains too many components to read. Save the required sheets in a smaller workbook.")
+        if (any(entry.file_size > MAX_WORKBOOK_ENTRY_BYTES for entry in entries)
+                or sum(entry.file_size for entry in entries) > MAX_WORKBOOK_EXPANDED_BYTES):
+            raise DocumentReadLimit("The workbook expands beyond the reading limit. Save the required sheets in a smaller workbook.")
+        return sum(
+            entry.filename.startswith("xl/externalLinks/externalLink") and entry.filename.endswith(".xml")
+            for entry in entries
+        )
+
+
 def _extract_xlsx(file_path: str) -> SpreadsheetExtractionResult:
     from openpyxl import load_workbook
 
+    external_links = _check_workbook_archive(file_path)
     result = SpreadsheetExtractionResult()
-    wb = load_workbook(file_path, data_only=True, read_only=True)
+    wb = load_workbook(file_path, data_only=True, read_only=True, keep_links=False)
     formula_wb = None
     try:
-        formula_wb = load_workbook(file_path, data_only=False, read_only=True)
+        formula_wb = load_workbook(file_path, data_only=False, read_only=True, keep_links=False)
     except Exception:
         formula_wb = None
 
     sheet_names = list(wb.sheetnames)[:MAX_SHEETS]
     text_parts: list[str] = []
-    with zipfile.ZipFile(file_path) as archive:
-        external_links = sum(1 for name in archive.namelist()
-                             if name.startswith("xl/externalLinks/externalLink") and name.endswith(".xml"))
+    budget = _ReadingBudget()
     if external_links:
         text_parts.append(f"[WORKBOOK LIMITATION: {external_links} external workbook links. Values below are saved cached results, not independently recalculated. Missing linked workbooks prevent full formula validation.]")
     try:
         for sheet_index, sheet_name in enumerate(sheet_names, 1):
             ws = wb[sheet_name]
             formula_ws = formula_wb[sheet_name] if formula_wb and sheet_name in formula_wb.sheetnames else None
-            rows, table_rows, cells, key_rows = _worksheet_rows(ws, formula_ws, sheet_name)
+            rows, table_rows, cells, key_rows = _worksheet_rows(ws, formula_ws, sheet_name, budget)
             result.cells.extend(cells)
             result.key_rows.extend(key_rows)
             result.page_diagnostics.append(
@@ -140,9 +176,17 @@ def _extract_xls(file_path: str) -> SpreadsheetExtractionResult:
         result.quality_score = 0
         return result
 
-    book = xlrd.open_workbook(file_path)
+    book = xlrd.open_workbook(file_path, on_demand=True)
+    try:
+        return _read_xls(book, result)
+    finally:
+        book.release_resources()
+
+
+def _read_xls(book, result: SpreadsheetExtractionResult) -> SpreadsheetExtractionResult:
     text_parts: list[str] = []
     sheet_count = min(book.nsheets, MAX_SHEETS)
+    budget = _ReadingBudget()
     for sheet_index in range(sheet_count):
         sheet = book.sheet_by_index(sheet_index)
         rows: list[str] = []
@@ -151,6 +195,7 @@ def _extract_xls(file_path: str) -> SpreadsheetExtractionResult:
         max_cols = min(sheet.ncols, MAX_COLS_PER_SHEET)
         for row_idx in range(max_rows):
             values = [_clean_cell(sheet.cell_value(row_idx, col_idx)) for col_idx in range(max_cols)]
+            budget.add_row(values)
             rendered_values = [_render_cell(v) for v in values]
             if not any(v != "" for v in rendered_values):
                 continue
@@ -176,6 +221,7 @@ def _extract_xls(file_path: str) -> SpreadsheetExtractionResult:
         text_parts.append(_render_sheet(sheet.name, rows))
         if result.page_diagnostics[-1]["truncated"]:
             text_parts[-1] += "\n[INCOMPLETE SHEET: reading limit reached; review the original file.]"
+        book.unload_sheet(sheet_index)
     if book.nsheets > MAX_SHEETS:
         text_parts.append(f"[INCOMPLETE WORKBOOK: {book.nsheets - MAX_SHEETS} sheets omitted; review the original file.]")
 
@@ -187,19 +233,36 @@ def _extract_xls(file_path: str) -> SpreadsheetExtractionResult:
     return result
 
 
+def _csv_records(fh):
+    record_chars = 0
+
+    def bounded_lines():
+        nonlocal record_chars
+        while line := fh.readline(MAX_CSV_RECORD_CHARS + 1):
+            record_chars += len(line)
+            if record_chars > MAX_CSV_RECORD_CHARS:
+                raise DocumentReadLimit("A CSV row exceeds the reading limit. Shorten or split that row and upload the file again.")
+            yield line
+
+    for row in csv.reader(bounded_lines()):
+        record_chars = 0
+        yield row
+
+
 def _extract_csv(file_path: str) -> SpreadsheetExtractionResult:
     result = SpreadsheetExtractionResult(page_count=1)
     rows: list[str] = []
     table_rows: list[list[str]] = []
     truncated = False
+    budget = _ReadingBudget()
     with open(file_path, newline="", encoding="utf-8-sig", errors="replace") as fh:
-        reader = csv.reader(fh)
-        for idx, row in enumerate(reader):
+        for idx, row in enumerate(_csv_records(fh)):
             if idx >= MAX_ROWS_PER_SHEET:
                 truncated = True
                 break
             truncated = truncated or len(row) > MAX_COLS_PER_SHEET
             trimmed = row[:MAX_COLS_PER_SHEET]
+            budget.add_row(trimmed)
             rendered = [_render_cell(cell) for cell in trimmed]
             if not any(cell.strip() for cell in rendered):
                 continue
@@ -225,20 +288,21 @@ def _extract_csv(file_path: str) -> SpreadsheetExtractionResult:
     return result
 
 
-def _worksheet_rows(ws, formula_ws, sheet_name: str) -> tuple[list[str], list[list[Any]], list[dict], list[dict]]:
+def _worksheet_rows(ws, formula_ws, sheet_name: str, budget: _ReadingBudget) -> tuple[list[str], list[list[Any]], list[dict], list[dict]]:
     rows: list[str] = []
     table_rows: list[list[Any]] = []
     cells: list[dict] = []
     key_rows: list[dict] = []
-    max_row = min(ws.max_row or 0, MAX_ROWS_PER_SHEET)
-    max_col = min(ws.max_column or 0, MAX_COLS_PER_SHEET)
+    max_row = min(ws.max_row or MAX_ROWS_PER_SHEET, MAX_ROWS_PER_SHEET)
+    max_col = min(ws.max_column or MAX_COLS_PER_SHEET, MAX_COLS_PER_SHEET)
 
     # Read-only worksheets stream XML. Repeated ws.cell() reparses the sheet
     # for every cell and becomes unusably slow on detailed cash-flow schedules.
     value_rows = ws.iter_rows(max_row=max_row, max_col=max_col, values_only=True)
     formula_rows = formula_ws.iter_rows(max_row=max_row, max_col=max_col, values_only=True) if formula_ws else None
     for row_idx, values in enumerate(value_rows, 1):
-        formulas = next(formula_rows) if formula_rows else ()
+        formulas = next(formula_rows, ()) if formula_rows else ()
+        budget.add_row(values, formulas)
         row_values: list[str] = []
         raw_values: list[Any] = []
         row_cells: list[dict] = []

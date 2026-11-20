@@ -1,4 +1,3 @@
-import os
 import io
 from collections import defaultdict
 from datetime import datetime, timezone
@@ -8,12 +7,13 @@ from fastapi.responses import StreamingResponse
 from app.rate_limit import limit
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import func, select
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import selectinload
 from pydantic import BaseModel, Field, field_validator
 from typing import Optional
 from app.auth import require_auth
 from app.database import get_db
-from app.models import Deal, DealDocument, Developer
+from app.models import Deal, DealDocument, Developer, Investment
 from app.permissions import require_analyst
 from app.services.deal_validator import validate_deal_metrics
 from app.services.math_checker import run_math_checks
@@ -28,6 +28,7 @@ from app.services.financial_presentation import (
     schedule_context, schedule_source, source_reference,
 )
 from app.services.document_versions import document_payloads
+from app.services.document_cleanup import drain_document_cleanup, queue_document_files
 from app.services.data_integrity import ANALYST_REVIEW_RECORD_KEYS, quality_summary
 from app.services.location_intelligence import build_location_bundle, get_cached_location_bundle
 
@@ -301,11 +302,13 @@ async def restore_deal(deal_id: int, db: AsyncSession = Depends(get_db)):
     return {"message": "Restored", "id": deal_id}
 
 
-@router.delete("/{deal_id}/purge")
+@router.delete("/{deal_id}/purge", dependencies=[Depends(require_analyst)])
 async def purge_deal(deal_id: int, db: AsyncSession = Depends(get_db)):
     """Hard-delete a soft-deleted deal. Only allowed once the row is
     already in the trash - prevents accidental irreversible removal."""
-    result = await db.execute(select(Deal).where(Deal.id == deal_id))
+    from app.routers.deal_uploads import UPLOAD_DIR
+
+    result = await db.execute(select(Deal).options(selectinload(Deal.documents)).where(Deal.id == deal_id))
     deal = result.scalar_one_or_none()
     if not deal:
         raise HTTPException(status_code=404, detail="Deal not found")
@@ -314,9 +317,12 @@ async def purge_deal(deal_id: int, db: AsyncSession = Depends(get_db)):
             status_code=409,
             detail="Deal must be in the trash before it can be purged. Call DELETE first.",
         )
+    if await db.scalar(select(Investment.id).where(Investment.deal_id == deal_id).limit(1)) is not None:
+        raise HTTPException(status_code=409, detail="This deal has linked investment history and cannot be purged.")
+    paths = await queue_document_files(db, UPLOAD_DIR, deal.documents)
     await db.delete(deal)
     await db.commit()
-    return {"message": "Purged"}
+    return await _result_after_file_cleanup("Purged", UPLOAD_DIR, paths)
 
 
 # ===== Documents =====
@@ -352,20 +358,28 @@ async def list_documents(deal_id: int, db: AsyncSession = Depends(get_db)):
     return out
 
 
-@router.delete("/documents/{doc_id}")
+@router.delete("/documents/{doc_id}", dependencies=[Depends(require_analyst)])
 async def delete_document(doc_id: int, db: AsyncSession = Depends(get_db)):
+    from app.routers.deal_uploads import UPLOAD_DIR
+
     result = await db.execute(select(DealDocument).where(DealDocument.id == doc_id))
     doc = result.scalar_one_or_none()
     if not doc:
         raise HTTPException(status_code=404, detail="Document not found")
 
-    # Delete file
-    if os.path.exists(doc.file_path):
-        os.remove(doc.file_path)
-
+    paths = await queue_document_files(db, UPLOAD_DIR, [doc])
     await db.delete(doc)
     await db.commit()
-    return {"message": "Document deleted"}
+    return await _result_after_file_cleanup("Document deleted", UPLOAD_DIR, paths)
+
+
+async def _result_after_file_cleanup(message: str, upload_dir: str, paths: list[str]):
+    try:
+        complete = await drain_document_cleanup(upload_dir, paths)
+    except SQLAlchemyError:
+        # The record deletion and its cleanup intent already committed.
+        complete = False
+    return {"message": message, "cleanup_pending": not complete}
 
 
 @router.get("/documents/{doc_id}/text")

@@ -80,6 +80,9 @@ def document_payloads(documents):
         weak_pages = [str(page["page"]) for page in diagnostics if page.get("source") == "ocr_weak"]
         if weak_pages:
             warnings.append(f"Text on pages {', '.join(weak_pages)} was only partially recognized. Review the original for missing text or figures.")
+        limited_ocr = [str(page["page"]) for page in diagnostics if page.get("ocr_reading_limit")]
+        if limited_ocr:
+            warnings.append(f"Image text on pages {', '.join(limited_ocr)} reached the reading limit. Review those pages in the original PDF.")
         links = max((d.get("external_workbook_links", 0) for d in diagnostics), default=0)
         if links:
             warnings.append(f"Uses {links} external workbook links. Saved values can be checked, but formulas cannot be fully recalculated without the linked workbooks.")

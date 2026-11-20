@@ -35,7 +35,7 @@ jobs:
     # Match the OS supported by the pinned Playwright version. ubuntu-latest
     # can advance independently and prevent browser installation.
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
+    timeout-minutes: 23
     defaults:
       run:
         working-directory: web

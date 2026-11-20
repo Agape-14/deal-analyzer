@@ -19,7 +19,7 @@ from app.services.review_findings import FINDINGS_KEY, apply_findings, project_f
 from app.services.review_jobs import public_pipeline
 from app.services.review_drafts import (
     ATTEMPT_KEY, DRAFT_KEY, MAX_RESULT_BYTES, ReviewError, ReviewResult, apply_rows, codex_packet,
-    draft_record, draft_view, load_documents, package_identity, review_packet,
+    draft_record, draft_view, finding_value_options, load_documents, package_identity, review_packet,
 )
 
 router = APIRouter(dependencies=[Depends(require_analyst)])
@@ -90,6 +90,13 @@ async def approve_draft(deal_id: int, approval: ReviewApproval, db: AsyncSession
         raise HTTPException(409, "The deal changed. Reload the review before applying values.")
     docs = await load_documents(db, deal.id)
     draft = draft_view(deal, docs)["draft"]
+    actor = (current_user(request) or {}).get("u") if request is not None else None
+    counts = _stage_draft_approval(deal, docs, draft, approval, actor or "Analyst")
+    await _commit_review(db, "The deal changed. Reload the review before applying values.")
+    return {**_public_draft(deal, docs), **counts}
+
+
+def _stage_draft_approval(deal, docs, draft, approval, actor, *, finding_decision=None):
     if not draft or draft["stale"] or draft["id"] != approval.draft_id:
         raise HTTPException(409, "This draft is no longer current. Refresh the review before applying values.")
     paths = set(approval.paths)
@@ -118,20 +125,20 @@ async def approve_draft(deal_id: int, approval: ReviewApproval, db: AsyncSession
     record = deal.metrics[DRAFT_KEY]
     result = ReviewResult.model_validate(record["result"])
     metrics = apply_rows(deal, docs, rows, coverage)
-    if chosen:
-        user = current_user(request) if request is not None else None
-        actor = (user or {}).get("u") or "Analyst"
-        for row in chosen:
-            path = row["path"]
-            metrics["_provenance"][path]["conflict_review"] = {
-                "selected_id": row["candidate_id"],
-                "at": now_iso(),
-                "by": actor,
-                "options": [
-                    {key: option[key] for key in ("candidate_id", "value", "evidence", "context")}
-                    for option in draft["rows"] if option["path"] == path
-                ],
-            }
+    for row in chosen:
+        path = row["path"]
+        audit = {
+            "selected_id": row["candidate_id"],
+            "at": now_iso(),
+            "by": actor,
+            "options": [
+                {key: option[key] for key in ("candidate_id", "value", "evidence", "context")}
+                for option in draft["rows"] if option["path"] == path
+            ],
+        }
+        if finding_decision:
+            audit["finding_id"] = finding_decision[0]
+        metrics["_provenance"][path]["conflict_review"] = audit
     try:
         apply_findings(metrics, finding_rows)
         if approval.apply_return_crosscheck:
@@ -140,6 +147,9 @@ async def approve_draft(deal_id: int, approval: ReviewApproval, db: AsyncSession
             metrics[CROSSCHECK_KEY] = checked_return_crosscheck(result.return_crosscheck, docs, document_manifest(docs))
     except ValueError as exc:
         raise HTTPException(422, str(exc)) from None
+    if finding_decision:
+        finding_id, decision_record = finding_decision
+        metrics[FINDINGS_KEY][finding_id]["decision"] = decision_record
     _refresh_integrity(deal, metrics)
     metrics = deal.metrics
     new_package_id = package_identity(deal, docs)
@@ -156,20 +166,43 @@ async def approve_draft(deal_id: int, approval: ReviewApproval, db: AsyncSession
     attempt = metrics.get(ATTEMPT_KEY) or {}
     if attempt.get("completed") and attempt.get("package_id") == result.package_id:
         metrics[ATTEMPT_KEY] = {**attempt, "package_id": new_package_id}
+    return {"applied": len(rows), "coverage_applied": len(coverage),
+            "findings_applied": len(finding_rows), "return_crosscheck_applied": approval.apply_return_crosscheck}
+
+
+async def _commit_review(db, conflict_message):
     try:
         await db.commit()
     except StaleDataError:
         await db.rollback()
-        raise HTTPException(409, "The deal changed. Reload the review before applying values.") from None
-    return {**_public_draft(deal, docs), "applied": len(rows), "coverage_applied": len(coverage),
-            "findings_applied": len(finding_rows), "return_crosscheck_applied": approval.apply_return_crosscheck}
+        raise HTTPException(409, conflict_message) from None
+
+
+def _find_finding(metrics, manifest, finding_id):
+    finding = next((item for item in project_findings(metrics, manifest) if item["id"] == finding_id), None)
+    if finding is None:
+        raise HTTPException(404, "Source finding not found.")
+    return finding
+
+
+@router.get("/{deal_id}/review/findings/{finding_id}/options")
+async def get_finding_options(deal_id: int, finding_id: str, response: Response,
+                              db: AsyncSession = Depends(get_db)):
+    deal = await get_deal(deal_id, db)
+    docs = await load_documents(db, deal.id)
+    finding = _find_finding(deal.metrics or {}, document_manifest(docs), finding_id)
+    draft = draft_view(deal, docs)["draft"] if finding["kind"] == "conflict" else None
+    response.headers["Cache-Control"] = "private, no-store"
+    return {"revision": deal.revision, **finding_value_options(finding, draft)}
 
 
 class FindingDecision(BaseModel):
     expected_revision: int = Field(ge=1)
-    action: Literal["prefer_source", "keep_open", "record_note", "acknowledge"] = "record_note"
+    action: Literal["prefer_source", "apply_value", "keep_open", "record_note", "acknowledge"] = "record_note"
     decision: str = Field(default="", max_length=1000)
     source_index: int | None = Field(default=None, ge=0, strict=True)
+    draft_id: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+    candidate_id: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
 
 
 @router.post("/{deal_id}/review/findings/{finding_id}/resolve")
@@ -183,10 +216,7 @@ async def resolve_finding(deal_id: int, finding_id: str, data: FindingDecision, 
         raise HTTPException(422, "Describe your decision and its basis.")
     docs = await load_documents(db, deal.id)
     manifest = document_manifest(docs)
-    metrics = copy.deepcopy(deal.metrics or {})
-    before = next((item for item in project_findings(metrics, manifest) if item["id"] == finding_id), None)
-    if before is None:
-        raise HTTPException(404, "Source finding not found.")
+    before = _find_finding(deal.metrics or {}, manifest, finding_id)
     if before["status"] == "needs_review":
         raise HTTPException(409, "Recheck the finding against the current source version before saving a decision.")
     if data.action == "prefer_source":
@@ -198,8 +228,28 @@ async def resolve_finding(deal_id: int, finding_id: str, data: FindingDecision, 
         raise HTTPException(422, "Choose a source or leave the conflict open.")
     actor = (current_user(request) or {}).get("u") or "Analyst"
     record = {"action": data.action, "text": decision, "at": now_iso(), "by": actor}
+    if data.action == "apply_value":
+        if not (data.draft_id and data.candidate_id):
+            raise HTTPException(422, "Select a checked value from the current review.")
+        draft = draft_view(deal, docs)["draft"]
+        if not draft or draft["stale"] or draft["id"] != data.draft_id:
+            raise HTTPException(409, "This review changed. Reload the available choices.")
+        options = finding_value_options(before, draft)
+        choice = next((option for option in options["choices"] if option["candidate_id"] == data.candidate_id), None)
+        if options["issue"] or not choice:
+            raise HTTPException(422, options["issue"] or "Select one of this finding's checked values.")
+        record["source_index"] = choice["source_index"]
+        record["applied"] = {key: choice[key] for key in ("path", "label", "value", "unit", "context")}
+        approval = ReviewApproval(draft_id=data.draft_id, expected_revision=data.expected_revision,
+                                  candidate_ids=[data.candidate_id])
+        _stage_draft_approval(deal, docs, draft, approval, actor, finding_decision=(finding_id, record))
+        await _commit_review(db, "The deal changed. Reload before applying this value.")
+        return {"revision": deal.revision, "findings": project_findings(deal.metrics, manifest)}
+    if data.draft_id is not None or data.candidate_id is not None:
+        raise HTTPException(422, "A review choice can only be supplied when applying a checked value.")
     if data.source_index is not None:
         record["source_index"] = data.source_index
+    metrics = copy.deepcopy(deal.metrics or {})
     previous_package = package_identity(deal, docs)
     metrics[FINDINGS_KEY][finding_id]["decision"] = record
     deal.metrics = metrics
@@ -214,9 +264,5 @@ async def resolve_finding(deal_id: int, finding_id: str, data: FindingDecision, 
     attempt = metrics.get(ATTEMPT_KEY) or {}
     if attempt.get("completed") and attempt.get("package_id") == previous_package:
         metrics[ATTEMPT_KEY] = {**attempt, "package_id": new_package}
-    try:
-        await db.commit()
-    except StaleDataError:
-        await db.rollback()
-        raise HTTPException(409, "The deal changed. Reload before saving a decision.") from None
+    await _commit_review(db, "The deal changed. Reload before saving a decision.")
     return {"revision": deal.revision, "findings": project_findings(deal.metrics, manifest)}

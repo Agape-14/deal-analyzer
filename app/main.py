@@ -32,8 +32,8 @@ from app.routers import (
 from app.config import describe_models, environment_status
 from app.auth import (
     SESSION_TTL_DAYS,
+    authenticate_request,
     authentication_check,
-    current_user,
     deployment_auth_required,
     describe_auth,
     is_public_path,
@@ -51,6 +51,7 @@ from app.routers import return_schedules as return_schedules_router
 from sqlalchemy.orm.exc import StaleDataError
 from app.services.review_jobs import start_review_worker, stop_review_worker
 from app.services.operational_readiness import readiness_report
+from app.services.document_cleanup import document_cleanup_worker
 
 
 # ----------------------------- logging setup ----------------------------- #
@@ -95,6 +96,7 @@ async def lifespan(app: FastAPI):
     workers_enabled = os.getenv("REVIEW_WORKERS_ENABLED", "1").lower() not in {"0", "false", "no"}
     pipeline_task = start_pipeline_runner() if workers_enabled else None
     review_task = start_review_worker() if workers_enabled else None
+    cleanup_task = asyncio.create_task(document_cleanup_worker(deal_uploads.UPLOAD_DIR))
     backfill_task = None
     if os.getenv("KENYON_SOURCE_REPLAY"):
         from scripts.release_review_backfill import start_source_replay
@@ -108,6 +110,9 @@ async def lifespan(app: FastAPI):
     try:
         yield
     finally:
+        cleanup_task.cancel()
+        with suppress(asyncio.CancelledError):
+            await cleanup_task
         if backfill_task and not backfill_task.done():
             backfill_task.cancel()
             with suppress(asyncio.CancelledError):
@@ -157,7 +162,10 @@ class EnforceAuthMiddleware(BaseHTTPMiddleware):
         if check["code"] == "local_auth_disabled":
             return await call_next(request)
 
-        user = current_user(request)
+        try:
+            user = await authenticate_request(request)
+        except HTTPException as error:
+            return JSONResponse({"detail": error.detail}, status_code=error.status_code)
         if not user:
             return JSONResponse({"detail": "Not authenticated"}, status_code=401)
 

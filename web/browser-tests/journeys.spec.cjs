@@ -698,7 +698,7 @@ test('new deal reviews PDF and workbook through Codex paste, Summary, Compare, a
   }
 });
 
-test('apply one cited option and see the chosen value in Summary', async ({ page }) => {
+test('apply a checked value directly from Questions and see it in Summary', async ({ page }) => {
   page.setDefaultTimeout(12_000);
   const created = await page.request.post('/api/deals', { data: { project_name: 'Synthetic cited options' } });
   expect(created.ok()).toBeTruthy();
@@ -719,22 +719,42 @@ test('apply one cited option and see the chosen value in Summary', async ({ page
       const source = packet.sources.find(item => item.filename === name);
       return {
         path: 'deal_structure.minimum_investment', value, currency: 'USD',
+        investor_class: 'Class A', period: 'At closing',
         source_doc_id: source.id, source_sheet: 'CSV', source_cell: 'B2',
         source_excerpt: source.text.split('\n').find(line => line.includes(`B2=${value}`)),
       };
     });
-    const imported = await page.request.post(base + '/review/draft', { data: {package_id: packet.package_id, facts} });
+    const finding = {
+      kind: 'conflict', title: 'Minimum commitments differ',
+      detail: 'Two current documents state different minimum commitments.',
+      citations: facts.map(({ source_doc_id, source_sheet, source_cell, source_excerpt }) =>
+        ({ source_doc_id, source_sheet, source_cell, source_excerpt })),
+    };
+    const imported = await page.request.post(base + '/review/draft', {
+      data: { package_id: packet.package_id, facts, findings: [finding] },
+    });
     expect(imported.ok()).toBeTruthy();
+    const { draft, revision } = await imported.json();
+    const published = await page.request.post(base + '/review/approve', {
+      data: { draft_id: draft.id, expected_revision: revision, finding_ids: [draft.findings[0].id] },
+    });
+    expect(published.ok()).toBeTruthy();
     await dealPage(page, id, 'documents');
     const group = page.getByRole('group', { name: /minimum investment conflicting values/i });
     await expect(group.getByRole('radio', { name: 'Leave open' })).toBeChecked();
     await expect(page.getByRole('button', {name: 'Apply selected values'})).toBeDisabled();
     const pick = group.getByRole('radio', { name: '65,000 from updated-terms.csv' });
     await expect(pick).toBeEnabled();
-    await pick.check();
-    await page.getByRole('button', {name: 'Apply 1 value', exact: true}).click();
-    await expect(page.getByText(/1 value applied/)).toBeVisible();
-    await page.getByRole('link', { name: 'Open Summary', exact: true }).click();
+    await dealPage(page, id, 'questions');
+    const findings = page.getByRole('region', { name: 'Source findings', exact: true });
+    await findings.getByRole('button', { name: 'Review choices', exact: true }).click();
+    const checked = findings.getByRole('radio', { name: /65,000 · updated-terms.csv/ });
+    await expect(checked).toBeEnabled();
+    await expect(findings.getByText(/Period At closing · Investor class Class A/)).toHaveCount(2);
+    await checked.check();
+    await findings.getByRole('button', { name: 'Apply checked value', exact: true }).click();
+    await expect(findings.getByText('Checked value applied', { exact: true })).toBeVisible();
+    await page.getByRole('tab', { name: 'Summary', exact: true }).click();
     await expect(page.getByText('$65K', { exact: true }).first()).toBeVisible();
     const selected = await (await page.request.get(base)).json();
     expect(selected.analysis.facts['deal_structure.minimum_investment']).toMatchObject({
@@ -1011,7 +1031,13 @@ test('comparison presets, custom rows and incompatible modes remain usable', asy
 });
 
 test('sign-out and an expired session return to sign-in', async ({ browser }) => {
-  const context = await browser.newContext({ storageState: '.browser-auth/admin.json', baseURL: 'http://127.0.0.1:3000' });
+  // Signing out revokes this session on the server. Give this test its own
+  // login so the shared admin fixture stays valid for later journeys.
+  const context = await browser.newContext({ storageState: { cookies: [], origins: [] }, baseURL: 'http://127.0.0.1:3000' });
+  const login = await context.request.post('/api/auth/login', {
+    data: { username: 'browser-admin', password: 'synthetic-browser-password' },
+  });
+  expect(login.ok()).toBeTruthy();
   const page = await context.newPage();
   await handleWelcomeTour(page);
   await page.goto('/');
