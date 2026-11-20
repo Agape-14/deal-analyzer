@@ -167,18 +167,28 @@ test('documents disclose duplicate contents and preserve original PDF access', a
   await dialog.getByRole('button', { name: 'Close', exact: true }).click();
 });
 
-test('Codex review comes first with API credits available under review options', async ({ page }) => {
+test('PDF-only Codex review supports file import, paste, and saved approval', async ({ page }) => {
+  const { execFileSync } = require('node:child_process');
+  const excerpt = 'Minimum LP commitment: $40,000.';
+  const pdf = execFileSync('python', ['-c', [
+    'import sys',
+    'from reportlab.pdfgen.canvas import Canvas',
+    'memo = Canvas(sys.stdout.buffer)',
+    'memo.drawString(60, 740, "Cedar Court | Investment terms")',
+    'memo.drawString(60, 716, sys.argv[1])',
+    'memo.save()',
+  ].join('\n'), excerpt]);
   await page.route('**/api/healthz', route => route.fulfill({ json: { status: 'ok', environment: { openai: { configured: true } } } }));
-  const created = await page.request.post('/api/deals', { data: { project_name: 'Browser Codex Review' } });
+  const created = await page.request.post('/api/deals', { data: { project_name: 'Cedar Court Synthetic Review' } });
   expect(created.ok()).toBeTruthy();
   const { id } = await created.json();
-  const uploaded = await page.request.post(`/api/deals/${id}/documents/upload`, { multipart: {
-    file: { name: 'review-terms.csv', mimeType: 'text/csv', buffer: Buffer.from('Term,Value\nMinimum investment,40000\n') },
-  } });
-  expect(uploaded.ok()).toBeTruthy();
   const base = `/api/deals/${id}/review`;
-  await expect.poll(async () => (await page.request.get(base + '/packet')).status()).toBe(200);
   await dealPage(page, id, 'documents');
+  await page.getByLabel('Upload deal documents').setInputFiles({
+    name: 'review-terms.pdf', mimeType: 'application/pdf', buffer: pdf,
+  });
+  await expect(page.getByText('Document uploaded', { exact: true })).toBeVisible();
+  await expect.poll(async () => (await page.request.get(base + '/packet')).status()).toBe(200);
 
   await expect(page.getByRole('link', { name: 'Review with Codex', exact: true })).toBeVisible();
   await expect(page.getByText('1 of 4 · Download the source packet', { exact: true })).toBeVisible();
@@ -200,12 +210,13 @@ test('Codex review comes first with API credits available under review options',
   await codex.click();
   await expect(page.getByText('3 of 4 · Return the result to Deal Analyzer', { exact: true })).toBeVisible();
   const { packet } = JSON.parse(await fs.readFile(await download.path(), 'utf8'));
+  expect(packet.sources).toHaveLength(1);
   const source = packet.sources[0];
-  const excerpt = source.text.split('\n').find(line => line.includes('B2=40000'));
-  expect(excerpt).toBeTruthy();
+  expect(source.filename).toBe('review-terms.pdf');
+  expect(source.text).toContain(excerpt);
   const result = { package_id: packet.package_id, facts: [{
     path: 'deal_structure.minimum_investment', value: 40000, currency: 'USD',
-    source_doc_id: source.id, source_sheet: 'CSV', source_cell: 'B2', source_excerpt: excerpt,
+    source_doc_id: source.id, source_page: 1, source_excerpt: excerpt,
   }] };
   await page.getByLabel('Import Codex review result').setInputFiles({
     name: 'deal-review-result.json', mimeType: 'application/json', buffer: Buffer.from(JSON.stringify(result)),
@@ -239,7 +250,11 @@ test('Codex review comes first with API credits available under review options',
 
   await page.getByRole('button', { name: 'Apply 1 value', exact: true }).click();
   await expect(page.getByText(/1 value applied/)).toBeVisible();
-  await expect(page.getByRole('link', { name: 'Open Summary', exact: true })).toHaveAttribute('href', `/deals/${id}?tab=overview`);
+  const summary = page.getByRole('link', { name: 'Open Summary', exact: true });
+  await expect(summary).toHaveAttribute('href', `/deals/${id}?tab=overview`);
+  await summary.click();
+  await expect(page).toHaveURL(new RegExp(`/deals/${id}\\?tab=overview$`));
+  await expect(page.getByText('$40K', { exact: true }).first()).toBeVisible();
   const deal = await (await page.request.get(`/api/deals/${id}`)).json();
   expect(deal.analysis.facts['deal_structure.minimum_investment']).toMatchObject({ value: 40000, state: 'checked' });
   expect((await page.request.delete(`/api/deals/${id}`)).ok()).toBeTruthy();
