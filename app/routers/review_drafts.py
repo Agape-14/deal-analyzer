@@ -1,4 +1,4 @@
-"""Download and approve a document review through the authenticated deal API."""
+"""Download and approve a document review through the analyst deal API."""
 import copy
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
@@ -7,6 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth import current_user
 from app.database import get_db
+from app.permissions import require_analyst
 from app.routers.analysis import get_deal
 from app.routers.field_edits import _refresh_integrity
 from app.services.analysis_store import document_manifest
@@ -19,7 +20,7 @@ from app.services.review_drafts import (
     draft_record, draft_view, load_documents, package_identity, review_packet,
 )
 
-router = APIRouter()
+router = APIRouter(dependencies=[Depends(require_analyst)])
 
 
 def _public_draft(deal, docs):

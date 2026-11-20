@@ -11,6 +11,7 @@ from sqlalchemy.orm.attributes import flag_modified
 
 from app.database import get_db
 from app.models import AnalysisSnapshot, Deal, DealDocument
+from app.permissions import require_analyst
 from app.services.analysis import (
     REGISTRY, RETURN_CONTEXT_FIELDS, RETURN_REVIEWS_KEY, analysis_for_deal,
     build_analysis, identity, return_review_binding, valid_number, valid_tiers,
@@ -40,7 +41,7 @@ async def history(deal_id: int, db: AsyncSession = Depends(get_db)):
     return [{"version": s.version, "input_hash": s.input_hash, "created_at": s.created_at.isoformat(), "status": s.payload["status"], "changes": s.payload.get("changes", []), "can_restore": s.input_metrics is not None} for s in records]
 
 
-@router.get("/{deal_id}/analysis/preview")
+@router.get("/{deal_id}/analysis/preview", dependencies=[Depends(require_analyst)])
 async def preview(deal_id: int, db: AsyncSession = Depends(get_db)):
     deal = await get_deal(deal_id, db)
     docs = (await db.execute(select(DealDocument).where(DealDocument.deal_id == deal_id))).scalars().all()

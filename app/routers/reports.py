@@ -19,6 +19,7 @@ import io
 import json
 import zipfile
 from datetime import date, datetime, timezone
+from unicodedata import normalize
 from xml.sax.saxutils import escape
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -29,6 +30,7 @@ from sqlalchemy.orm import selectinload
 
 from app.database import get_db
 from app.models import Deal, Developer, Investment
+from app.permissions import require_analyst
 from app.services.portfolio_analytics import portfolio_analytics
 from app.services.canonical_metrics import canonical_return_summary
 from app.services.analysis import analysis_for_deal, effective_scores
@@ -137,7 +139,7 @@ async def deal_pdf_report(deal_id: int, db: AsyncSession = Depends(get_db)):
     result = await db.execute(
         select(Deal)
         .options(selectinload(Deal.developer), selectinload(Deal.documents))
-        .where(Deal.id == deal_id)
+        .where(Deal.id == deal_id, Deal.deleted_at.is_(None))
     )
     deal = result.scalar_one_or_none()
     if not deal:
@@ -477,6 +479,11 @@ async def portfolio_excel_report(db: AsyncSession = Depends(get_db)):
         ws.cell(row=i, column=5, value=row["multiple"])
         ws.cell(row=i, column=6, value=row["share_pct"])
 
+    for sheet in wb.worksheets:
+        for row in sheet.iter_rows():
+            for cell in row:
+                if isinstance(cell.value, str):
+                    cell.data_type = "s"
     buf = io.BytesIO()
     wb.save(buf)
     buf.seek(0)
@@ -624,7 +631,7 @@ def _json_default(obj):
     raise TypeError(f"Not serializable: {type(obj)}")
 
 
-@router.get("/export/json")
+@router.get("/export/json", dependencies=[Depends(require_analyst)])
 async def export_all_json(db: AsyncSession = Depends(get_db)):
     """Bulk JSON dump of developers, deals, investments and distributions."""
     devs_r = await db.execute(select(Developer))
@@ -635,7 +642,7 @@ async def export_all_json(db: AsyncSession = Depends(get_db)):
         "created_at": d.created_at,
     } for d in devs_r.scalars().all()]
 
-    deals_r = await db.execute(select(Deal).options(selectinload(Deal.documents)))
+    deals_r = await db.execute(select(Deal).options(selectinload(Deal.documents)).where(Deal.deleted_at.is_(None)))
     deals = [{
         "id": d.id, "developer_id": d.developer_id, "project_name": d.project_name,
         "location": d.location, "city": d.city, "state": d.state,
@@ -686,12 +693,22 @@ async def export_all_json(db: AsyncSession = Depends(get_db)):
     )
 
 
-@router.get("/export/csv")
+def _csv_cell(value):
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        normalized = normalize("NFKC", value)
+        if normalized.startswith(("\t", "\r", "\n")) or normalized.lstrip("\ufeff \t\r\n").startswith(("=", "+", "-", "@")):
+            return "'" + value
+    return value
+
+
+@router.get("/export/csv", dependencies=[Depends(require_analyst)])
 async def export_all_csv(db: AsyncSession = Depends(get_db)):
     """Bulk CSV export as a zip (one CSV per table)."""
     devs_r = await db.execute(select(Developer))
     developers = devs_r.scalars().all()
-    deals_r = await db.execute(select(Deal))
+    deals_r = await db.execute(select(Deal).where(Deal.deleted_at.is_(None)))
     deals = deals_r.scalars().all()
     inv_r = await db.execute(select(Investment).where(Investment.deleted_at.is_(None)).options(selectinload(Investment.distributions)))
     investments = inv_r.scalars().all()
@@ -701,7 +718,7 @@ async def export_all_csv(db: AsyncSession = Depends(get_db)):
         w = csv.writer(out)
         w.writerow(header)
         for row in rows:
-            w.writerow([("" if v is None else v) for v in row])
+            w.writerow([_csv_cell(v) for v in row])
         return out.getvalue().encode("utf-8")
 
     dev_bytes = _csv(

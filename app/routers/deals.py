@@ -11,8 +11,10 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import selectinload
 from pydantic import BaseModel, Field, field_validator
 from typing import Optional
+from app.auth import require_auth
 from app.database import get_db
 from app.models import Deal, DealDocument, Developer
+from app.permissions import require_analyst
 from app.services.deal_validator import validate_deal_metrics
 from app.services.math_checker import run_math_checks
 from app.services.market_data import fetch_market_data
@@ -27,7 +29,7 @@ from app.services.financial_presentation import (
 )
 from app.services.document_versions import document_payloads
 from app.services.data_integrity import ANALYST_REVIEW_RECORD_KEYS, quality_summary
-from app.services.location_intelligence import build_location_bundle
+from app.services.location_intelligence import build_location_bundle, get_cached_location_bundle
 
 router = APIRouter()
 
@@ -145,9 +147,12 @@ def _deal_to_dict(deal: Deal, developer_name: str = None, *, accepted_only=False
 async def list_deals(
     trash: bool = False,
     db: AsyncSession = Depends(get_db),
+    user: dict = Depends(require_auth),
 ):
     """List deals. Trashed (soft-deleted) rows are excluded unless
     `?trash=true` is passed - handy for a future 'Trash' view."""
+    if trash:
+        await require_analyst(user)
     visible = Deal.deleted_at.is_not(None) if trash else Deal.deleted_at.is_(None)
     q = select(Deal).options(selectinload(Deal.developer)).where(visible).order_by(Deal.created_at.desc())
     result = await db.execute(q)
@@ -319,7 +324,9 @@ async def purge_deal(deal_id: int, db: AsyncSession = Depends(get_db)):
 @router.get("/{deal_id}/documents")
 async def list_documents(deal_id: int, db: AsyncSession = Depends(get_db)):
     result = await db.execute(
-        select(DealDocument).where(DealDocument.deal_id == deal_id).order_by(DealDocument.upload_date.desc())
+        select(DealDocument).join(Deal).where(
+            DealDocument.deal_id == deal_id, Deal.deleted_at.is_(None),
+        ).order_by(DealDocument.upload_date.desc())
     )
     docs = result.scalars().all()
     out = []
@@ -363,7 +370,9 @@ async def delete_document(doc_id: int, db: AsyncSession = Depends(get_db)):
 
 @router.get("/documents/{doc_id}/text")
 async def get_document_text(doc_id: int, db: AsyncSession = Depends(get_db)):
-    result = await db.execute(select(DealDocument).where(DealDocument.id == doc_id))
+    result = await db.execute(select(DealDocument).join(Deal).where(
+        DealDocument.id == doc_id, Deal.deleted_at.is_(None),
+    ))
     doc = result.scalar_one_or_none()
     if not doc:
         raise HTTPException(status_code=404, detail="Document not found")
@@ -375,7 +384,7 @@ async def get_document_text(doc_id: int, db: AsyncSession = Depends(get_db)):
 @router.get("/{deal_id}/validate")
 async def validate_deal(deal_id: int, db: AsyncSession = Depends(get_db)):
     """Run validation checks on current metrics and return flags."""
-    result = await db.execute(select(Deal).where(Deal.id == deal_id))
+    result = await db.execute(select(Deal).where(Deal.id == deal_id, Deal.deleted_at.is_(None)))
     deal = result.scalar_one_or_none()
     if not deal:
         raise HTTPException(status_code=404, detail="Deal not found")
@@ -384,12 +393,6 @@ async def validate_deal(deal_id: int, db: AsyncSession = Depends(get_db)):
         raise HTTPException(status_code=400, detail="No metrics extracted yet. Run extraction first.")
 
     flags = validate_deal_metrics(deal.metrics, deal.property_type)
-
-    # Also update stored flags
-    metrics = deal.metrics.copy()
-    metrics["validation_flags"] = flags
-    deal.metrics = metrics
-    await db.commit()
 
     return {"flags": flags, "summary": {
         "red": len([f for f in flags if f["severity"] == "red"]),
@@ -404,7 +407,7 @@ async def math_check_deal(deal_id: int, db: AsyncSession = Depends(get_db)):
     
     Cross-checks all calculations, internal consistency, and benchmark ranges.
     """
-    result = await db.execute(select(Deal).where(Deal.id == deal_id))
+    result = await db.execute(select(Deal).where(Deal.id == deal_id, Deal.deleted_at.is_(None)))
     deal = result.scalar_one_or_none()
     if not deal:
         raise HTTPException(status_code=404, detail="Deal not found")
@@ -430,39 +433,31 @@ async def math_check_deal(deal_id: int, db: AsyncSession = Depends(get_db)):
 @router.get("/{deal_id}/location")
 async def get_deal_location(
     deal_id: int,
-    radius_m: int = 1600,
-    refresh: bool = False,
     db: AsyncSession = Depends(get_db),
 ):
-    """Return cached or freshly-fetched location data for a deal.
-
-    Payload shape (all sources free / unauthenticated by default):
-      - lat, lng             - resolved via Nominatim or user-placed
-      - display_name         - free-form, good enough for a map attribution
-      - radius_m             - currently fetched radius
-      - categories           - {apartments|restaurants|grocery|transit|schools|
-                                healthcare|parks|employers: [POI...]}
-      - fmr                  - HUD Fair Market Rent (if HUD_API_TOKEN set)
-      - fetched_at           - unix timestamp, used for staleness UI
-
-    Results are cached in `deal.location_data` for 7 days unless
-    `refresh=true` is passed.
-    """
-    radius_m = max(500, min(8000, int(radius_m)))
-    result = await db.execute(select(Deal).where(Deal.id == deal_id))
-    deal = result.scalar_one_or_none()
+    """Read the saved location without external requests or writes."""
+    deal = await db.scalar(select(Deal).where(Deal.id == deal_id, Deal.deleted_at.is_(None)))
     if not deal:
         raise HTTPException(status_code=404, detail="Deal not found")
+    return get_cached_location_bundle(deal)
 
-    bundle = await build_location_bundle(deal, radius_m=radius_m, force_refresh=refresh)
 
-    # Persist whatever we learned so the next page load is instant.
+@router.post("/{deal_id}/location/refresh", dependencies=[Depends(require_analyst), Depends(limit("read"))])
+async def refresh_deal_location(
+    deal_id: int,
+    radius_m: int = 1600,
+    db: AsyncSession = Depends(get_db),
+):
+    """Fetch external context after an analyst requests it."""
+    deal = await db.scalar(select(Deal).where(Deal.id == deal_id, Deal.deleted_at.is_(None)))
+    if not deal:
+        raise HTTPException(status_code=404, detail="Deal not found")
+    bundle = await build_location_bundle(deal, radius_m=max(500, min(8000, radius_m)))
     if bundle.get("lat") is not None and bundle.get("lng") is not None:
         deal.lat = bundle["lat"]
         deal.lng = bundle["lng"]
-    deal.location_data = bundle
-    await db.commit()
-
+        deal.location_data = bundle
+        await db.commit()
     return bundle
 
 
@@ -471,31 +466,19 @@ class LocationManualIn(BaseModel):
     lng: float = Field(..., ge=-180, le=180)
 
 
-@router.post("/{deal_id}/location/manual")
+@router.post("/{deal_id}/location/manual", dependencies=[Depends(require_analyst)])
 async def set_manual_location(
     deal_id: int,
     data: LocationManualIn,
     db: AsyncSession = Depends(get_db),
 ):
-    """Pin the deal's map position by hand.
-
-    Geocoding can miss when the address is a new development or when the
-    city/state pair is ambiguous. This lets the user drop a marker
-    precisely on the site; subsequent GETs use these coords and re-query
-    Overpass from the new center.
-    """
-    result = await db.execute(select(Deal).where(Deal.id == deal_id))
-    deal = result.scalar_one_or_none()
+    """Pin the location and discard context from the previous center."""
+    deal = await db.scalar(select(Deal).where(Deal.id == deal_id, Deal.deleted_at.is_(None)))
     if not deal:
         raise HTTPException(status_code=404, detail="Deal not found")
     deal.lat = float(data.lat)
     deal.lng = float(data.lng)
-    # Invalidate any cached categories - they were centered on the old point.
-    ld = deal.location_data or {}
-    if isinstance(ld, dict):
-        ld.pop("categories", None)
-        ld.pop("fetched_at", None)
-        deal.location_data = ld
+    deal.location_data = None
     await db.commit()
     return {"message": "Location updated", "lat": deal.lat, "lng": deal.lng}
 
@@ -545,7 +528,7 @@ async def public_market_context(deal_id: int, db: AsyncSession = Depends(get_db)
 @router.get("/{deal_id}/cashflow")
 async def cashflow_projection(deal_id: int, investment: Optional[float] = None, db: AsyncSession = Depends(get_db)):
     """Generate year-by-year cash flow projections."""
-    result = await db.execute(select(Deal).where(Deal.id == deal_id))
+    result = await db.execute(select(Deal).where(Deal.id == deal_id, Deal.deleted_at.is_(None)))
     deal = result.scalar_one_or_none()
     if not deal:
         raise HTTPException(status_code=404, detail="Deal not found")
@@ -562,7 +545,7 @@ async def cashflow_projection(deal_id: int, investment: Optional[float] = None, 
 @router.get("/{deal_id}/waterfall")
 async def waterfall_calculation(deal_id: int, investment: Optional[float] = None, db: AsyncSession = Depends(get_db)):
     """Calculate waterfall distribution from deal metrics."""
-    result = await db.execute(select(Deal).where(Deal.id == deal_id))
+    result = await db.execute(select(Deal).where(Deal.id == deal_id, Deal.deleted_at.is_(None)))
     deal = result.scalar_one_or_none()
     if not deal:
         raise HTTPException(status_code=404, detail="Deal not found")

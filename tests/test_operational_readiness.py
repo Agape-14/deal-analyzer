@@ -23,6 +23,7 @@ async def test_existing_liveness_and_minimal_readiness_are_compatible(client):
 
 
 async def test_production_requires_expected_migration_head_and_actual_schema(client, monkeypatch):
+    import bcrypt
     from app.database import engine
     from alembic.script import ScriptDirectory
     from pathlib import Path
@@ -33,7 +34,18 @@ async def test_production_requires_expected_migration_head_and_actual_schema(cli
     async with engine.begin() as connection:
         await connection.execute(text("CREATE TABLE alembic_version (version_num VARCHAR(32) NOT NULL)"))
         await connection.execute(text("INSERT INTO alembic_version VALUES (:head)"), {"head": expected})
+    # A current database does not compensate for unavailable authentication.
+    assert (await client.get("/api/healthz/ready")).status_code == 503
+    username = "synthetic-operator"
+    password = "synthetic-operator-password"
+    monkeypatch.setenv("AUTH_DISABLED", "0")
+    monkeypatch.setenv("AUTH_USERNAME", username)
+    monkeypatch.setenv("AUTH_PASSWORD_HASH", bcrypt.hashpw(password.encode(), bcrypt.gensalt(rounds=4)).decode())
+    monkeypatch.setenv("AUTH_SECRET", "synthetic-deployment-signing-secret")
+    signed_in = await client.post("/api/auth/login", json={"username": username, "password": password})
+    assert signed_in.status_code == 200
     assert (await client.get("/api/healthz/ready")).status_code == 200
+    assert (await client.get("/api/admin/readiness")).json()["checks"]["auth"]["code"] == "auth_configured"
     async with engine.begin() as connection:
         await connection.execute(text("UPDATE alembic_version SET version_num='older_synthetic_revision'"))
     report = (await client.get("/api/admin/readiness")).json()

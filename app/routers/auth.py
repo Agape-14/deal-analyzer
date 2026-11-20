@@ -10,7 +10,8 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 
 from app.auth import (
-    auth_enabled,
+    MAX_USERNAME_LENGTH,
+    authentication_check,
     clear_session,
     current_user,
     expected_username,
@@ -23,7 +24,7 @@ router = APIRouter()
 
 
 class LoginIn(BaseModel):
-    username: str = Field(..., min_length=1, max_length=120)
+    username: str = Field(..., min_length=1, max_length=MAX_USERNAME_LENGTH)
     password: str = Field(..., min_length=1, max_length=256)
 
 
@@ -33,11 +34,13 @@ async def login(data: LoginIn, request: Request):
 
     A small constant-time delay on failure slows down brute-force attempts.
     """
+    if authentication_check()["status"] == "error":
+        raise HTTPException(status_code=503, detail="Authentication unavailable")
     identity = login_identity(data.username, data.password)
     if not identity:
         await asyncio.sleep(0.5)
         raise HTTPException(status_code=401, detail="Invalid username or password")
-    set_session(request, identity["u"], identity["r"])
+    set_session(request, identity)
     return {"message": "Signed in", "username": identity["u"], "role": identity["r"]}
 
 
@@ -53,7 +56,7 @@ async def me(request: Request):
 
     Always returns 200 — the caller interprets the `authenticated` flag.
     """
-    if not auth_enabled():
+    if authentication_check()["code"] == "local_auth_disabled":
         return {
             "authenticated": True,
             "username": expected_username(),

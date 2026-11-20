@@ -31,8 +31,10 @@ from app.routers import (
 )
 from app.config import describe_models, environment_status
 from app.auth import (
-    auth_enabled,
+    SESSION_TTL_DAYS,
+    authentication_check,
     current_user,
+    deployment_auth_required,
     describe_auth,
     is_public_path,
     is_analyst,
@@ -70,6 +72,9 @@ install_deal_verifier_json_guard()
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    auth_check = authentication_check()
+    if auth_check["status"] == "error":
+        raise RuntimeError(f"Authentication configuration is invalid ({auth_check['code']})")
     await init_db()
     # Surface environment configuration at boot so operators don't discover
     # missing keys by user bug reports.
@@ -132,7 +137,7 @@ class EnforceAuthMiddleware(BaseHTTPMiddleware):
 
     Runs *after* SessionMiddleware so `request.session` is populated.
     Public paths (healthz, auth, static, legacy, root) pass through
-    untouched. If auth is globally disabled this is a no-op.
+    untouched. Auth bypass is available only in local development.
     """
 
     VIEWER_BLOCKED_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
@@ -142,18 +147,21 @@ class EnforceAuthMiddleware(BaseHTTPMiddleware):
     }
 
     async def dispatch(self, request: FastRequest, call_next):
-        if not auth_enabled():
+        path = request.url.path or "/"
+        if (path != "/api" and not path.startswith("/api/")) or is_public_path(path):
             return await call_next(request)
 
-        path = request.url.path or "/"
-        if not path.startswith("/api/") or is_public_path(path):
+        check = authentication_check()
+        if check["status"] == "error":
+            return JSONResponse({"detail": "Authentication unavailable"}, status_code=503)
+        if check["code"] == "local_auth_disabled":
             return await call_next(request)
 
         user = current_user(request)
         if not user:
             return JSONResponse({"detail": "Not authenticated"}, status_code=401)
 
-        role = str(user.get("r") or "admin").lower()
+        role = user["r"]
         method = request.method.upper()
         if role == "viewer" and method in self.VIEWER_BLOCKED_METHODS and path not in self.VIEWER_READONLY_POSTS:
             return JSONResponse({"detail": "Viewer accounts are read-only"}, status_code=403)
@@ -161,13 +169,10 @@ class EnforceAuthMiddleware(BaseHTTPMiddleware):
         return await call_next(request)
 
 
-# Cookie Secure flag: on in production (Railway sets RAILWAY_ENVIRONMENT;
-# any deploy with HTTPS should have it). Override with SESSION_HTTPS_ONLY=0
-# for local HTTP development.
-_session_https_only = os.getenv(
-    "SESSION_HTTPS_ONLY",
-    "1" if os.getenv("RAILWAY_ENVIRONMENT") or os.getenv("PRODUCTION") else "0",
-).strip().lower() in ("1", "true", "yes")
+# Deployments always use Secure cookies. Local HTTPS can opt in.
+_session_https_only = deployment_auth_required() or os.getenv("SESSION_HTTPS_ONLY", "").strip().lower() in (
+    "1", "true", "yes",
+)
 
 # Middleware ordering note: `add_middleware` registers in reverse — the
 # LAST one added is the OUTERMOST layer (first to see the request). So
@@ -183,7 +188,7 @@ app.add_middleware(
     SessionMiddleware,
     secret_key=session_secret(),
     session_cookie="kenyon_session",
-    max_age=60 * 60 * 24 * 30,          # 30 days
+    max_age=SESSION_TTL_DAYS * 86400,
     same_site="lax",
     https_only=_session_https_only,
 )

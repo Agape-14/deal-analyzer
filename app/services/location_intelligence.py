@@ -62,7 +62,7 @@ async def _nominatim_throttle() -> None:
 
 
 async def geocode(query: str) -> dict | None:
-    """Geocode a free-form string ("Sunset Apartments, Austin, TX") via Nominatim.
+    """Geocode an address ("100 Example Road, Austin, TX") via Nominatim.
 
     Returns {lat, lng, display_name, bbox} or None if no match.
     """
@@ -321,23 +321,32 @@ async def fetch_hud_fmr(zip_code: str) -> dict | None:
 
 # ---------- Top-level composer ---------- #
 
-async def build_location_bundle(
-    deal,
-    radius_m: int = 1600,
-    force_refresh: bool = False,
-) -> dict:
-    """
-    Compose the full 'Location' payload for a deal. Designed to be safe to
-    call on every page load; fetches upstream only when there's no cached
-    result or `force_refresh` is true.
-    """
-    cached = deal.location_data if not force_refresh else None
-    # Use cached data if it's from the last 7 days and radius matches.
-    if isinstance(cached, dict) and cached.get("radius_m") == radius_m:
-        fetched_at = cached.get("fetched_at") or 0
-        age = time.time() - float(fetched_at or 0)
-        if age < 7 * 86400 and cached.get("categories") and cached.get("coverage_version") == 1 and not cached.get("category_errors"):
-            return cached
+def get_cached_location_bundle(deal) -> dict:
+    """Read the last stored location or the current manual pin without I/O."""
+    cached = deal.location_data
+    lat, lng = deal.lat, deal.lng
+    if (
+        lat is not None
+        and lng is not None
+        and isinstance(cached, dict)
+        and cached.get("fetched_at")
+        and (cached.get("lat"), cached.get("lng")) == (lat, lng)
+    ):
+        return cached
+    display = _compose_address(deal) if lat is not None and lng is not None else ""
+    return {
+        "lat": lat,
+        "lng": lng,
+        "radius_m": 1609,
+        "categories": {},
+        "fmr": None,
+        "display_name": display or None,
+        "fetched_at": 0,
+    }
+
+
+async def build_location_bundle(deal, radius_m: int = 1600) -> dict:
+    """Fetch current location data after an analyst explicitly requests it."""
 
     # Need coords — try stored first, then geocode.
     lat, lng = deal.lat, deal.lng
@@ -353,7 +362,7 @@ async def build_location_bundle(
                 "categories": {},
                 "fmr": None,
                 "display_name": None,
-                "fetched_at": time.time(),
+                "fetched_at": 0,
                 "error": "Could not geocode address. Set city/state or manually place the marker.",
             }
         lat, lng = geo["lat"], geo["lng"]
@@ -388,8 +397,8 @@ async def _fmr_from_deal(deal) -> dict | None:
 
 
 def _compose_address(deal) -> str:
-    bits = [deal.project_name, deal.location, deal.city, deal.state]
-    return ", ".join(b for b in bits if b)
+    address = [part.strip() for part in (deal.location, deal.city, deal.state) if part and part.strip()]
+    return ", ".join(address)
 
 
 def _guess_zip(deal) -> str | None:

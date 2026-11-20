@@ -10,6 +10,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Card } from "@/components/ui/card";
 import { api } from "@/lib/api";
+import { loginDestination } from "@/lib/login-destination";
 
 /**
  * Login page. Pre-fills `username = "admin"` for the operator account,
@@ -20,7 +21,7 @@ import { api } from "@/lib/api";
 export default function LoginPage() {
   const router = useRouter();
   const search = useSearchParams();
-  const next = search?.get("next") || "/";
+  const next = loginDestination(search?.get("next"));
   const [username, setUsername] = React.useState("admin");
   const [password, setPassword] = React.useState("");
   const [submitting, setSubmitting] = React.useState(false);
@@ -52,7 +53,7 @@ export default function LoginPage() {
       toast.success("Welcome back");
       // Root-level drawers and search cache the anonymous session. A full
       // navigation refreshes them along with the new session cookie.
-      window.location.assign(next.startsWith("/") && !next.startsWith("//") ? next : "/");
+      window.location.assign(next);
     } catch (err) {
       const d = (err as { detail?: string })?.detail ?? "Login failed";
       toast.error(d);

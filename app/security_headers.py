@@ -50,6 +50,8 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next) -> Response:
         response: Response = await call_next(request)
         h = response.headers
+        if request.url.path.startswith("/api/") and request.url.path not in {"/api/healthz", "/api/healthz/ready"}:
+            h["Cache-Control"] = "private, no-store"
         # Only add HSTS if the original scheme was HTTPS. Behind a
         # proxy, the upstream scheme comes through as X-Forwarded-Proto.
         scheme = (

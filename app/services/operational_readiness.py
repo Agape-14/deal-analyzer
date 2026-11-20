@@ -9,16 +9,12 @@ import shutil
 
 from alembic.script import ScriptDirectory
 from sqlalchemy import func, inspect, or_, select, text
+from app.auth import authentication_check, deployment_auth_required
 
 READINESS_TIMEOUT_SECONDS = 5
 QUEUE_WARNING_SECONDS = 600
 MIN_FREE_BYTES = 16 * 1024 * 1024
 WARNING_FREE_BYTES = 64 * 1024 * 1024
-
-
-def _production():
-    return bool(os.getenv("RAILWAY_PROJECT_ID") or os.getenv("RAILWAY_ENVIRONMENT")
-                or os.getenv("RAILWAY_ENVIRONMENT_NAME")) or os.getenv("PRODUCTION", "").lower() in {"1", "true", "yes"}
 
 
 def _schema_state(connection):
@@ -41,7 +37,7 @@ def _schema_state(connection):
     scripts = ScriptDirectory(str(Path(__file__).resolve().parents[2] / "alembic"))
     expected = set(scripts.get_heads())
     if "alembic_version" not in tables:
-        migrations = {"status": "error" if _production() else "warning", "code": "migration_tracking_missing",
+        migrations = {"status": "error" if deployment_auth_required() else "warning", "code": "migration_tracking_missing",
                       "at_expected_head": False, "expected_head_count": len(expected)}
     else:
         current = set(connection.execute(text("SELECT version_num FROM alembic_version")).scalars())
@@ -113,7 +109,7 @@ async def _job_state(connection, now):
 
 
 async def _collect(db_engine, now):
-    checks = {}
+    checks = {"auth": authentication_check()}
     try:
         if (db_engine.dialect.name == "sqlite" and db_engine.url.database
                 and db_engine.url.database != ":memory:" and not Path(db_engine.url.database).is_file()):

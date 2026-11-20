@@ -13,6 +13,7 @@ import * as React from "react";
 import { Loader2, AlertCircle, CheckCircle2, RefreshCw, Trash2, Eye, EyeOff } from "lucide-react";
 import { toast } from "sonner";
 import { api } from "@/lib/api";
+import { useCurrentUser } from "@/lib/auth-client";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 
@@ -48,6 +49,13 @@ interface Diagnostics {
 }
 
 export default function DiagnosticsPage() {
+  const { isAnalyst, loading } = useCurrentUser();
+  if (loading) return <p role="status" className="p-6">Checking access…</p>;
+  if (!isAnalyst) return <p className="p-6">Diagnostics are available to analysts.</p>;
+  return <DiagnosticsPanel />;
+}
+
+function DiagnosticsPanel() {
   const [data, setData] = React.useState<Diagnostics | null>(null);
   const [loading, setLoading] = React.useState(true);
   const [loadError, setLoadError] = React.useState(false);

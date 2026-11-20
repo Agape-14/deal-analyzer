@@ -12,6 +12,7 @@ from sqlalchemy.orm import selectinload
 from app.database import async_session, get_db
 from app.config import openai_review_configured, openai_review_selected, paid_review_enabled, PAID_REVIEW_PAUSED_MESSAGE
 from app.models import Deal
+from app.permissions import require_analyst
 from app.rate_limit import limit
 from app.services.canonical_metrics import annotate_canonical_metrics
 from app.services import notifications as notif_svc
@@ -263,7 +264,7 @@ def _usable_text_docs(deal: Deal):
     return [d for d in review_documents(deal.documents) if _doc_has_usable_text(d)]
 
 
-@router.get("/{deal_id}/quality")
+@router.get("/{deal_id}/quality", dependencies=[Depends(require_analyst)])
 async def deal_quality(deal_id: int, db: AsyncSession = Depends(get_db)):
     result = await db.execute(select(Deal).options(selectinload(Deal.documents)).where(Deal.id == deal_id))
     deal = result.scalar_one_or_none()

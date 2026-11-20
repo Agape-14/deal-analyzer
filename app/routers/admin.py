@@ -1,20 +1,10 @@
-"""Admin-only diagnostics endpoints.
-
-Read-only visibility into the live process — the operation buffer
-populated by `app/services/operation_log.py`. Sits behind the same
-auth that protects the rest of /api/*; no separate admin role (this
-is a single-operator tool).
-
-Not part of the public OpenAPI spec. It's here so the operator can
-answer "why did that extraction fail?" in 5 seconds instead of
-grepping Railway logs.
-"""
+"""Operator access to AI usage and recent review diagnostics."""
 
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, Query
 
-from app.auth import require_auth
+from app.permissions import require_analyst
 from app.services.ai_usage import summarize_usage
 from app.services.operation_log import clear_entries, snapshot_entries
 from app.database import get_db
@@ -23,13 +13,12 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 
-router = APIRouter()
+router = APIRouter(dependencies=[Depends(require_analyst)])
 
 
 @router.get(
     "/diagnostics",
     summary="Recent AI operations — successes, failures, tracebacks",
-    dependencies=[Depends(require_auth)],
 )
 async def diagnostics(
     full: bool = Query(False, description="Include truncated prompt/response bodies"),
@@ -85,7 +74,6 @@ async def diagnostics(
 @router.get(
     "/ai-usage",
     summary="Persistent AI usage and estimated cost",
-    dependencies=[Depends(require_auth)],
 )
 async def ai_usage(
     deal_id: int | None = Query(None, ge=1, description="Limit usage to one deal"),
@@ -102,7 +90,6 @@ async def ai_usage(
 @router.post(
     "/diagnostics/clear",
     summary="Clear the operation buffer (diagnostics only)",
-    dependencies=[Depends(require_auth)],
 )
 async def clear_diagnostics():
     await clear_entries()

@@ -3,8 +3,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 from pydantic import BaseModel, Field
+from app.auth import require_auth
 from app.database import get_db
 from app.models import Deal, DealChat
+from app.permissions import require_analyst
 from app.rate_limit import limit
 from app.services.analysis import analysis_for_deal
 from app.services.grounded_chat import answer_from_analysis
@@ -32,7 +34,7 @@ def message_payload(row, analysis):
             "references": row.references or [],
             "stale": row.role == "assistant" and (row.analysis_input_hash != analysis["input_hash"] or row.analysis_version != analysis["version"])}
 
-@router.post("", dependencies=[Depends(limit("ai"))])
+@router.post("", dependencies=[Depends(require_analyst), Depends(limit("ai"))])
 async def chat_with_deal(data: ChatMessage, db: AsyncSession = Depends(get_db)):
     if not data.message.strip():
         raise HTTPException(422, "Enter a question")
@@ -47,7 +49,7 @@ async def chat_with_deal(data: ChatMessage, db: AsyncSession = Depends(get_db)):
     return {"response": text, "message": message_payload(reply, analysis)}
 
 
-@router.get("/search")
+@router.get("/search", dependencies=[Depends(require_auth)])
 async def search_evidence(q: str, deal_id: int | None = None, db: AsyncSession = Depends(get_db)):
     if not 2 <= len(q.strip()) <= 200:
         raise HTTPException(422, "Search needs 2–200 characters")
@@ -65,13 +67,13 @@ async def search_evidence(q: str, deal_id: int | None = None, db: AsyncSession =
                          "analysis_version": deal.analysis_version, "kind": "reported_excerpt"})
     return {"hits": hits[:20], "scope": "Current active sources in up to 100 most recently added deals; 100 documents per deal. Reported excerpts require review."}
 
-@router.get("/history/{deal_id}")
+@router.get("/history/{deal_id}", dependencies=[Depends(require_analyst)])
 async def get_chat_history(deal_id: int, db: AsyncSession = Depends(get_db)):
     analysis = await current_analysis(db, deal_id)
     rows = (await db.execute(select(DealChat).where(DealChat.deal_id == deal_id).order_by(DealChat.created_at, DealChat.id))).scalars().all()
     return [message_payload(row, analysis) for row in rows]
 
-@router.delete("/history/{deal_id}")
+@router.delete("/history/{deal_id}", dependencies=[Depends(require_analyst)])
 async def clear_chat_history(deal_id: int, db: AsyncSession = Depends(get_db)):
     await current_analysis(db, deal_id)
     rows = (await db.execute(select(DealChat).where(DealChat.deal_id == deal_id))).scalars().all()

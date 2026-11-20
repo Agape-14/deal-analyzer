@@ -119,7 +119,9 @@ async def intake_documents(background_tasks: BackgroundTasks, files: list[Upload
 @router.get("/{deal_id}/documents")
 async def list_uploaded_documents(deal_id: int, db: AsyncSession = Depends(get_db)):
     result = await db.execute(
-        select(DealDocument).where(DealDocument.deal_id == deal_id).order_by(DealDocument.upload_date.desc())
+        select(DealDocument).join(Deal).where(
+            DealDocument.deal_id == deal_id, Deal.deleted_at.is_(None),
+        ).order_by(DealDocument.upload_date.desc())
     )
     return document_payloads(result.scalars().all())
 
@@ -366,7 +368,9 @@ async def document_excerpt(doc_id: int, page: int | None = None, sheet: str | No
 
 @router.get("/documents/{doc_id}/file")
 async def get_document_file(doc_id: int, db: AsyncSession = Depends(get_db)):
-    result = await db.execute(select(DealDocument).where(DealDocument.id == doc_id))
+    result = await db.execute(select(DealDocument).join(Deal).where(
+        DealDocument.id == doc_id, Deal.deleted_at.is_(None),
+    ))
     doc = result.scalar_one_or_none()
     if not doc:
         raise HTTPException(status_code=404, detail="Document not found")
@@ -379,7 +383,7 @@ async def get_document_file(doc_id: int, db: AsyncSession = Depends(get_db)):
         media_type=media_type,
         headers={
             "Content-Disposition": f'{disposition}; filename="{doc.filename or "document"}"',
-            "Cache-Control": "private, max-age=60",
+            "Cache-Control": "private, no-store",
             "X-Frame-Options": "SAMEORIGIN",
             "Content-Security-Policy": "frame-ancestors 'self'",
         },

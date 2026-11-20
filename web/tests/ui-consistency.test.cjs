@@ -7,7 +7,7 @@ const vm = require("node:vm");
 const ts = require("typescript");
 
 function load(relative, dependencies = {}) {
-  const context = vm.createContext({ exports: {}, require: (name) => dependencies[name] ?? {} });
+  const context = vm.createContext({ exports: {}, URL, require: (name) => dependencies[name] ?? {} });
   vm.runInContext(ts.transpileModule(readFileSync(path.join(__dirname, relative), "utf8"), {
     compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022, jsx: ts.JsxEmit.ReactJSX },
   }).outputText, context);
@@ -17,6 +17,19 @@ const utils = load("../src/lib/utils.ts", { clsx: require("clsx"), "tailwind-mer
 const { formatValue } = load("../src/components/deal-detail/metrics-section.tsx", { "@/lib/utils": utils });
 const { buildReviewItems } = load("../src/components/deal-detail/review-queue.tsx", { "@/lib/utils": utils });
 const { getValueAt, getRow } = load("../src/components/compare/presets.ts");
+const { loginDestination } = load("../src/lib/login-destination.ts");
+
+test("login destination preserves internal deal links and their query strings", () => {
+  assert.equal(loginDestination("/?new=1"), "/?new=1");
+  assert.equal(loginDestination("/deals/123?tab=location#map"), "/deals/123?tab=location#map");
+  assert.equal(loginDestination("/deals/123?q=A%2FB"), "/deals/123?q=A%2FB");
+});
+
+test("login destination defaults to the dashboard for non-app URLs", () => {
+  for (const next of [null, "", "https://example.invalid", "//example.invalid", "/\\example.invalid", "/.//example.invalid", "/%252Fexample.invalid"]) {
+    assert.equal(loginDestination(next), "/");
+  }
+});
 
 test("comparison rows use the same accepted returns as headers", () => {
   const deal = { metrics: { target_returns: { target_irr: 6.5, target_cash_on_cash: 13 },

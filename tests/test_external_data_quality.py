@@ -53,7 +53,7 @@ async def test_land_and_unsupported_asset_profiles_do_not_use_apartment_defaults
 
 
 @pytest.mark.asyncio
-async def test_map_partial_failure_is_explicit_and_not_cached_as_complete(monkeypatch):
+async def test_incomplete_map_data_stays_visible_and_only_refresh_retries(monkeypatch):
     from app.services import location_intelligence as location
     calls = []
     async def query(body):
@@ -73,8 +73,51 @@ async def test_map_partial_failure_is_explicit_and_not_cached_as_complete(monkey
     assert "parks" not in bundle["category_errors"]
     deal.location_data = bundle
     count = len(calls)
+    assert location.get_cached_location_bundle(deal) == bundle
+    assert len(calls) == count
     await location.build_location_bundle(deal)
     assert len(calls) > count
+
+
+@pytest.mark.asyncio
+async def test_location_refresh_geocodes_address_fields_only(monkeypatch):
+    from app.services import location_intelligence as location
+
+    requests = []
+
+    async def handle(request):
+        requests.append(request)
+        return httpx.Response(200, json=[{"lat": "30.25", "lon": "-97.75"}])
+
+    async def amenities(lat, lng, radius_m, *, errors):
+        assert (lat, lng, radius_m) == (30.25, -97.75, 1609)
+        return {}
+
+    client = httpx.AsyncClient
+    monkeypatch.setattr(location.httpx, "AsyncClient", lambda **kwargs: client(transport=httpx.MockTransport(handle)))
+    monkeypatch.setattr(location, "fetch_amenities", amenities)
+    deal = SimpleNamespace(
+        lat=None, lng=None, location_data=None, project_name="Confidential project",
+        location="100 Example Road", city="Austin", state="TX",
+    )
+
+    stored = location.get_cached_location_bundle(deal)
+    assert stored["lat"] is None
+    assert stored["fetched_at"] == 0
+    assert requests == []
+
+    bundle = await location.build_location_bundle(deal, radius_m=1609)
+    assert bundle["fetched_at"] > 0
+    assert len(requests) == 1
+    assert requests[0].url.params["q"] == "100 Example Road, Austin, TX"
+
+    # An older cache can remain after a manual move. Display the current pin.
+    deal.location_data = bundle
+    deal.lat, deal.lng = 30.5, -98.0
+    stored = location.get_cached_location_bundle(deal)
+    assert (stored["lat"], stored["lng"]) == (30.5, -98.0)
+    assert stored["fetched_at"] == 0
+    assert len(requests) == 1
 
 
 def test_csv_and_workbook_limits_are_explicit(tmp_path, monkeypatch):
