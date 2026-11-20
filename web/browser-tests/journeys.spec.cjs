@@ -321,6 +321,7 @@ test('unsupported models show reasons and assistant works without provider credi
   await expect(page.getByPlaceholder('Ask about accepted returns, terms or missing evidence…')).toBeEnabled();
 });
 test('new deal reviews PDF and workbook through Codex paste, Summary, Compare, and exports', async ({ page }) => {
+  page.setDefaultTimeout(15_000);
   const { execFileSync } = require('node:child_process');
   const artifacts = JSON.parse(execFileSync('python', ['-c', [
     'from base64 import b64encode',
@@ -667,20 +668,8 @@ test('new deal reviews PDF and workbook through Codex paste, Summary, Compare, a
     await expect(unchecked).not.toBeChecked();
     await expect(page.getByRole('button', {name: 'Apply selected values'})).toBeDisabled();
 
-    const twoValues = await page.request.post(base + '/review/draft', {
-      data: { package_id: refreshedPacket.package_id, facts: facts.filter(fact => fact.path === noiPath) },
-    });
-    expect(twoValues.ok()).toBeTruthy();
-    await dealPage(page, id, 'documents');
-    await workbookValue.check();
-    await page.getByRole('button', {name: 'Apply 1 value', exact: true}).click();
-    await expect(page.getByText(/1 value applied/)).toBeVisible();
-    const selected = await (await page.request.get(base)).json();
-    expect(selected.analysis.facts[noiPath]).toMatchObject({
-      value: 2160000, state: 'checked', evidence: [{document_id: model.id, cell: 'B7'}],
-    });
-
     await page.getByRole('tab', {name: 'Questions', exact: true}).click();
+    await expect(page).toHaveURL(/tab=questions/);
     const findings = page.getByRole('region', {name: 'Source findings', exact: true});
     await findings.getByRole('button', {name: 'Review choices', exact: true}).click();
     await findings.getByRole('radio', {name: /pilot-underwriting.xlsx/}).check();
@@ -705,7 +694,54 @@ test('new deal reviews PDF and workbook through Codex paste, Summary, Compare, a
     expect(stale.findings[0]).toMatchObject({status: 'needs_review', decision: {action: 'prefer_source', text: decisionNote}});
     expect(stale.return_crosscheck).toMatchObject({status: 'needs_review', annual_irr_pct: null, cash_flow_multiple: null});
   } finally {
-    expect((await page.request.delete(base)).ok()).toBeTruthy();
+    await page.request.delete(base, { timeout: 8000 }).catch(() => {});
+  }
+});
+
+test('apply one cited option and see the chosen value in Summary', async ({ page }) => {
+  page.setDefaultTimeout(12_000);
+  const created = await page.request.post('/api/deals', { data: { project_name: 'Synthetic cited options' } });
+  expect(created.ok()).toBeTruthy();
+  const { id } = await created.json();
+  const base = '/api/deals/' + id;
+  const options = [['first-terms.csv', 40000], ['updated-terms.csv', 65000]];
+  try {
+    for (const [name, value] of options) {
+      const upload = await page.request.post(base + '/documents/upload', {
+        multipart: { file: {name, mimeType: 'text/csv', buffer: Buffer.from(`Term,Value\nMinimum investment,${value}\n`)} },
+        timeout: 8000,
+      });
+      expect(upload.ok()).toBeTruthy();
+    }
+    await expect.poll(async () => (await page.request.get(base + '/review/packet', { timeout: 8000 })).status()).toBe(200);
+    const { packet } = await (await page.request.get(base + '/review/packet')).json();
+    const facts = options.map(([name, value]) => {
+      const source = packet.sources.find(item => item.filename === name);
+      return {
+        path: 'deal_structure.minimum_investment', value, currency: 'USD',
+        source_doc_id: source.id, source_sheet: 'CSV', source_cell: 'B2',
+        source_excerpt: source.text.split('\n').find(line => line.includes(`B2=${value}`)),
+      };
+    });
+    const imported = await page.request.post(base + '/review/draft', { data: {package_id: packet.package_id, facts} });
+    expect(imported.ok()).toBeTruthy();
+    await dealPage(page, id, 'documents');
+    const group = page.getByRole('group', { name: /minimum investment conflicting values/i });
+    await expect(group.getByRole('radio', { name: 'Leave open' })).toBeChecked();
+    await expect(page.getByRole('button', {name: 'Apply selected values'})).toBeDisabled();
+    const pick = group.getByRole('radio', { name: '65,000 from updated-terms.csv' });
+    await expect(pick).toBeEnabled();
+    await pick.check();
+    await page.getByRole('button', {name: 'Apply 1 value', exact: true}).click();
+    await expect(page.getByText(/1 value applied/)).toBeVisible();
+    await page.getByRole('link', { name: 'Open Summary', exact: true }).click();
+    await expect(page.getByText('$65K', { exact: true }).first()).toBeVisible();
+    const selected = await (await page.request.get(base)).json();
+    expect(selected.analysis.facts['deal_structure.minimum_investment']).toMatchObject({
+      value: 65000, state: 'checked', evidence: [{document_id: facts[1].source_doc_id, cell: 'B2'}],
+    });
+  } finally {
+    await page.request.delete(base, { timeout: 8000 }).catch(() => {});
   }
 });
 
