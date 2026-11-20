@@ -10,6 +10,7 @@ from sqlalchemy import select, update
 from sqlalchemy.exc import OperationalError, IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
+from sqlalchemy.orm.exc import StaleDataError
 
 from app.database import async_session, get_db
 from app.config import openai_review_configured, paid_review_enabled
@@ -577,7 +578,13 @@ async def _create_document_record_with_retry(
         try:
             # Serialize uploads for this deal on SQLite and PostgreSQL. Repeat
             # the identity check after every rollback, before enqueuing work.
-            await db.execute(update(Deal).where(Deal.id == values["deal_id"]).values(revision=Deal.revision))
+            deal_id = values["deal_id"]
+            await db.execute(update(Deal).where(Deal.id == deal_id, Deal.deleted_at.is_(None)).values(revision=Deal.revision))
+            # Extraction from the previous upload may have advanced the deal
+            # since this request checked it. Refresh after acquiring the lock.
+            deal = await db.get(Deal, deal_id, populate_existing=True)
+            if not deal or deal.deleted_at is not None:
+                raise HTTPException(status_code=404, detail="Deal not found")
             docs = (await db.execute(select(DealDocument).where(DealDocument.deal_id == values["deal_id"]).order_by(DealDocument.id))).scalars().all()
             digest = values.get("file_sha256")
             existing = next((d for d in docs if digest and file_hash(d) == digest), None)
@@ -595,12 +602,16 @@ async def _create_document_record_with_retry(
             await db.commit()
             await db.refresh(doc)
             return doc, False
-        except OperationalError as exc:
+        except (OperationalError, StaleDataError) as exc:
             await db.rollback()
-            if not _is_locked_error(exc) or attempt == 2:
+            if attempt == 2:
+                if isinstance(exc, StaleDataError):
+                    raise HTTPException(409, "The deal changed during upload. Try this file again.") from None
+                raise
+            if isinstance(exc, OperationalError) and not _is_locked_error(exc):
                 raise
             await asyncio.sleep(0.5 * (attempt + 1))
-            log.warning("Retrying %s after transient database lock", stage)
+            log.warning("Retrying %s after concurrent database update", stage)
     raise RuntimeError(f"Could not complete {stage}")
 
 
