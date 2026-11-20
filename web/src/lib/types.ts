@@ -95,7 +95,13 @@ export interface SourceFinding {
   detail: string;
   evidence: AnalysisFact["evidence"];
   status: "current" | "needs_review" | "resolved";
-  decision?: { text: string; at: string; by: string };
+  decision?: {
+    text: string;
+    at: string;
+    by: string;
+    action?: "prefer_source" | "keep_open" | "record_note" | "acknowledge";
+    source_index?: number;
+  };
 }
 
 export interface ReturnCrosscheck {

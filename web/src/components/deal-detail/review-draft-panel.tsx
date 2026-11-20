@@ -24,6 +24,8 @@ type Row = {
   context_changed?: boolean;
   missing_context?: string[];
   issue: string;
+  candidate_id?: string;
+  candidate_issue?: string;
   evidence: { source_doc_id?: number; source_doc_name?: string; source_document_hash?: string; source_page?: number; source_sheet?: string; source_cell?: string; source_excerpt?: string; source_value_note?: string;
     source_table_index?: number; source_table_row?: number; source_column_label?: string };
   context: Record<string, string>;
@@ -83,7 +85,34 @@ function display(value: unknown, unit: string) {
 }
 
 function needsAttention(row: Row) {
-  return Boolean(row.issue || row.context_changed || row.missing_context?.length || (row.current != null && row.current !== row.value));
+  return Boolean(row.candidate_id || row.issue || row.context_changed || row.missing_context?.length || (row.current != null && row.current !== row.value));
+}
+
+function rowLabel(row: Row) {
+  return row.label + (row.path.includes(".hold_scenario.") ? " (hold)" : row.path.includes(".sale_scenario.") ? " (sale)" : "");
+}
+
+function RowSourceDetails({ row, issue }: { row: Row; issue: string }) {
+  const location = row.evidence.source_page ? [
+    `page ${row.evidence.source_page}`,
+    row.evidence.source_table_index && `table ${row.evidence.source_table_index}, row ${row.evidence.source_table_row}`,
+    row.evidence.source_column_label,
+  ].filter(Boolean).join(" · ") : [row.evidence.source_sheet, row.evidence.source_cell].filter(Boolean).join(" ");
+
+  return <div className="space-y-1 break-words pl-5 text-muted-foreground">
+    {issue && <p className="text-warning">{issue}</p>}
+    {!issue && row.context_changed && <p className="text-warning">The proposed context differs from the saved context. Check the source before selecting this value.</p>}
+    {!issue && !!row.missing_context?.length && <p className="text-warning">Confirm the {row.missing_context.join(", ")} before approving this return.</p>}
+    {Object.values(row.context).length > 0 && <p>{Object.values(row.context).join(" · ")}</p>}
+    <p>{[row.evidence.source_doc_name, location].filter(Boolean).join(" · ")}</p>
+    {row.evidence.source_excerpt && <blockquote className="border-l border-border pl-2">{row.evidence.source_excerpt}</blockquote>}
+    {row.evidence.source_value_note && <p>{row.evidence.source_value_note}</p>}
+    {row.evidence.source_document_hash && row.evidence.source_doc_id && (row.candidate_id || (issue && row.evidence.source_page)) &&
+      <a href={`/api/deals/documents/${row.evidence.source_doc_id}/file${row.evidence.source_page ? `#page=${row.evidence.source_page}` : ""}`}
+        target="_blank" rel="noreferrer" className="inline-block text-primary underline">
+        {row.evidence.source_page ? "Open original page" : "Download original"}
+      </a>}
+  </div>;
 }
 
 function errorMessage(error: unknown) {
@@ -126,6 +155,7 @@ export function ReviewDraftPanel({ dealId, revision, refreshKey, source }: {
   const base = `/api/deals/${dealId}/review`;
   const [state, setState] = React.useState<ReviewState | null>(null);
   const [selected, setSelected] = React.useState<Set<string>>(new Set());
+  const [candidateChoices, setCandidateChoices] = React.useState<Map<string, string>>(new Map());
   const [selectedCoverage, setSelectedCoverage] = React.useState<Set<ReviewCoverageGroup>>(new Set());
   const [selectedFindings, setSelectedFindings] = React.useState<Set<string>>(new Set());
   const [applyCheck, setApplyCheck] = React.useState(false);
@@ -145,7 +175,19 @@ export function ReviewDraftPanel({ dealId, revision, refreshKey, source }: {
   const fileInput = React.useRef<HTMLInputElement>(null);
   const draft = state?.draft;
   const routineRows = draft?.rows.filter(row => !needsAttention(row)) ?? [];
-  const exceptionRows = draft?.rows.filter(needsAttention) ?? [];
+  const exceptionRows = draft?.rows.filter(row => !row.candidate_id && needsAttention(row)) ?? [];
+  const conflicts = new Map<string, Row[]>();
+  for (const row of draft?.rows ?? []) {
+    if (!row.candidate_id) continue;
+    const group = conflicts.get(row.path);
+    if (group) group.push(row);
+    else conflicts.set(row.path, [row]);
+  }
+  const selectedCandidateIds = [...conflicts].flatMap(([path, rows]) => {
+    const choice = candidateChoices.get(path);
+    return choice && rows.some(row => row.candidate_id === choice && row.candidate_issue === "") ? [choice] : [];
+  });
+  const selectedValueCount = selected.size + selectedCandidateIds.length;
   const savingReview = selectedCoverage.size > 0 || selectedFindings.size > 0 || applyCheck;
   const running = ["queued", "running"].includes(state?.job?.status || "");
   const ready = source.status === "ready";
@@ -188,6 +230,7 @@ export function ReviewDraftPanel({ dealId, revision, refreshKey, source }: {
 
   React.useEffect(() => {
     setSelected(new Set((draft?.rows || []).filter(row => !needsAttention(row)).map(row => row.path)));
+    setCandidateChoices(new Map());
     setSelectedCoverage(new Set());
     setSelectedFindings(new Set(draft?.findings?.filter(row => !row.issue).map(row => row.id) ?? []));
     setApplyCheck(Boolean(draft?.return_crosscheck?.value && !draft.return_crosscheck.issue));
@@ -229,14 +272,14 @@ export function ReviewDraftPanel({ dealId, revision, refreshKey, source }: {
   }
 
   async function approve() {
-    if (busy.current || !ready || !draft || draft.stale || !state || waitingForDraft || (!selected.size && !savingReview)) return;
+    if (busy.current || !ready || !draft || draft.stale || !state || waitingForDraft || (!selectedValueCount && !savingReview)) return;
     busy.current = true;
     setOperation("approve");
     setError("");
     setMessage("");
     try {
       const result = await api.post<ReviewState & { applied: number; coverage_applied?: number; findings_applied?: number; return_crosscheck_applied?: boolean }>(base + "/approve", {
-        draft_id: draft.id, expected_revision: state.revision, paths: [...selected], coverage_groups: [...selectedCoverage],
+        draft_id: draft.id, expected_revision: state.revision, paths: [...selected], candidate_ids: selectedCandidateIds, coverage_groups: [...selectedCoverage],
         finding_ids: [...selectedFindings], apply_return_crosscheck: applyCheck,
       });
       setState(result);
@@ -260,11 +303,6 @@ export function ReviewDraftPanel({ dealId, revision, refreshKey, source }: {
 
   function renderRow(row: Row, index: number) {
     const changed = row.current != null && row.current !== row.value;
-    const location = row.evidence.source_page ? [
-      `page ${row.evidence.source_page}`,
-      row.evidence.source_table_index && `table ${row.evidence.source_table_index}, row ${row.evidence.source_table_row}`,
-      row.evidence.source_column_label,
-    ].filter(Boolean).join(" · ") : [row.evidence.source_sheet, row.evidence.source_cell].filter(Boolean).join(" ");
     return (
       <li key={row.path + index} className="space-y-1 px-3 py-2.5 text-xs">
         <label className="flex items-start gap-2">
@@ -278,24 +316,22 @@ export function ReviewDraftPanel({ dealId, revision, refreshKey, source }: {
             });
           }} />
           <span className="min-w-0 break-words font-medium">
-            {row.label}{row.path.includes(".hold_scenario.") ? " (hold)" : row.path.includes(".sale_scenario.") ? " (sale)" : ""}
+            {rowLabel(row)}
             {" · "}{changed ? `${display(row.current, row.unit)} → ` : ""}{display(row.value, row.unit)}
           </span>
         </label>
-        <div className="space-y-1 break-words pl-5 text-muted-foreground">
-          {row.issue && <p className="text-warning">{row.issue}</p>}
-          {!row.issue && row.context_changed && <p className="text-warning">The proposed context differs from the saved context. Check the source before selecting this value.</p>}
-          {!row.issue && !!row.missing_context?.length && <p className="text-warning">Confirm the {row.missing_context.join(", ")} before approving this return.</p>}
-          {Object.values(row.context).length > 0 && <p>{Object.values(row.context).join(" · ")}</p>}
-          <p>{[row.evidence.source_doc_name, location].filter(Boolean).join(" · ")}</p>
-          {row.evidence.source_excerpt && <blockquote className="border-l border-border pl-2">{row.evidence.source_excerpt}</blockquote>}
-          {row.evidence.source_value_note && <p>{row.evidence.source_value_note}</p>}
-          {row.issue && row.evidence.source_document_hash && row.evidence.source_page &&
-            <a href={`/api/deals/documents/${row.evidence.source_doc_id}/file#page=${row.evidence.source_page}`}
-              target="_blank" rel="noreferrer" className="inline-block text-primary underline">Open original page</a>}
-        </div>
+        <RowSourceDetails row={row} issue={row.issue} />
       </li>
     );
+  }
+
+  function chooseCandidate(path: string, candidateId?: string) {
+    setCandidateChoices(current => {
+      const next = new Map(current);
+      if (candidateId) next.set(path, candidateId);
+      else next.delete(path);
+      return next;
+    });
   }
 
   return (
@@ -405,7 +441,7 @@ export function ReviewDraftPanel({ dealId, revision, refreshKey, source }: {
           </p> :
             draft.rows.length === 0 && !draft.coverage?.length && !draft.findings?.length && !draft.return_crosscheck ? <p className="text-xs text-muted-foreground">This review found no supported values in the source package.</p> : (
               <>
-                {(exceptionRows.length > 0 || !!draft.reconciliation_warnings?.length) && <section aria-label="Review exceptions" className="space-y-2">
+                {(exceptionRows.length > 0 || conflicts.size > 0 || !!draft.reconciliation_warnings?.length) && <section aria-label="Review exceptions" className="space-y-2">
                   <h6 className="text-sm font-medium">Review exceptions</h6>
                   {draft.reconciliation_warnings?.map(check => (
                     <p key={check.key} className="rounded-lg border border-border/70 p-3 text-xs text-warning">
@@ -415,6 +451,37 @@ export function ReviewDraftPanel({ dealId, revision, refreshKey, source }: {
                   {exceptionRows.length > 0 && <ul className="max-h-72 divide-y divide-border/70 overflow-auto rounded-lg border border-border/70">
                     {exceptionRows.map(renderRow)}
                   </ul>}
+                  {[...conflicts].map(([path, rows]) => {
+                    const first = rows[0];
+                    const selectedCandidate = candidateChoices.get(path);
+                    const choice = rows.some(row => row.candidate_id === selectedCandidate && row.candidate_issue === "") ? selectedCandidate : undefined;
+                    const name = `${pasteId}-candidate-${path}`;
+                    return <fieldset key={path} className="space-y-2 rounded-lg border border-border/70 p-3 text-xs" disabled={working}>
+                      <legend className="px-1 text-sm font-medium">{rowLabel(first)} conflicting values</legend>
+                      <p className="text-muted-foreground">
+                        Choose a supported value to apply, or leave this conflict open while applying other selections.
+                        {first.current != null && <> Saved value {display(first.current, first.unit)}.</>}
+                      </p>
+                      {rows.map(row => (
+                        <div key={row.candidate_id} className="space-y-1 rounded-md border border-border/70 p-2">
+                          <label className="flex items-start gap-2 font-medium">
+                            <input className="mt-0.5 accent-primary" type="radio" name={name}
+                              disabled={row.candidate_issue !== ""} checked={choice === row.candidate_id}
+                              onChange={() => chooseCandidate(path, row.candidate_id)} />
+                            <span className="min-w-0 break-words">
+                              {display(row.value, row.unit)}{row.evidence.source_doc_name && ` from ${row.evidence.source_doc_name}`}
+                            </span>
+                          </label>
+                          <RowSourceDetails row={row} issue={row.candidate_issue ?? row.issue} />
+                        </div>
+                      ))}
+                      <label className="flex items-center gap-2 py-1 font-medium">
+                        <input className="accent-primary" type="radio" name={name}
+                          checked={!choice} onChange={() => chooseCandidate(path)} />
+                        Leave open
+                      </label>
+                    </fieldset>;
+                  })}
                 </section>}
                 {routineRows.length > 0 && <details open={routineRows.length <= 5} className="rounded-lg border border-border/70">
                   <summary className="cursor-pointer px-3 py-2.5 text-sm font-medium">
@@ -488,8 +555,8 @@ export function ReviewDraftPanel({ dealId, revision, refreshKey, source }: {
                   </fieldset>
                 )}
                 <Button size="sm" type="button" variant={step === "approve" ? "default" : "outline"}
-                  disabled={(!selected.size && !savingReview) || !ready || working || waitingForDraft} onClick={() => void approve()}>
-                  {selected.size ? `Apply ${selected.size} ${selected.size === 1 ? "value" : "values"}${savingReview ? " and save review" : ""}` : savingReview ? "Save review" : "Apply selected values"}
+                  disabled={(!selectedValueCount && !savingReview) || !ready || working || waitingForDraft} onClick={() => void approve()}>
+                  {selectedValueCount ? `Apply ${selectedValueCount} ${selectedValueCount === 1 ? "value" : "values"}${savingReview ? " and save review" : ""}` : savingReview ? "Save review" : "Apply selected values"}
                 </Button>
               </>
             )}

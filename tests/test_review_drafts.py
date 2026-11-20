@@ -588,9 +588,38 @@ async def test_cited_finding_and_decision_survive_unrelated_upload_but_flag_new_
     detail = (await client.get(deal_url)).json()
     assert detail["analysis"]["findings"][0]["status"] == "current"
     assert detail["analysis"]["facts"][PATH]["value"] is None
+    pending_pack = await packet_for(client, base)
+    pending = await client.post(base + "/draft", json={
+        "package_id": pending_pack["package_id"],
+        "facts": [{"path": PATH, "value": int(citation["source_excerpt"].split("B2=")[1].split("|")[0]),
+                   **citation, "currency": "USD"} for citation in citations],
+    })
+    assert pending.status_code == 200, pending.text
+    initial_revision = pending.json()["revision"]
     decision_url = base + f"/findings/{row['id']}/resolve"
+    too_far = await client.post(decision_url, json={
+        "expected_revision": initial_revision, "action": "prefer_source", "source_index": len(row["evidence"]),
+    })
+    assert too_far.status_code == 422
+    preferred = await client.post(decision_url, json={
+        "expected_revision": initial_revision, "action": "prefer_source", "source_index": 1,
+    })
+    assert preferred.status_code == 200, preferred.text
+    choice = preferred.json()["findings"][0]
+    assert choice["status"] == "resolved"
+    assert choice["decision"]["source_index"] == 1
+    assert choice["decision"]["action"] == "prefer_source"
+    assert (await client.get(deal_url)).json()["analysis"]["facts"][PATH]["value"] is None
+    still_pending = (await client.get(base + "/draft")).json()["draft"]
+    assert not still_pending["stale"]
+    assert len(still_pending["rows"]) == 2
+    reopened = await client.post(decision_url, json={
+        "expected_revision": preferred.json()["revision"], "action": "keep_open",
+    })
+    assert reopened.status_code == 200, reopened.text
+    assert reopened.json()["findings"][0]["status"] == "current"
     decided = await client.post(decision_url, json={
-        "expected_revision": detail["revision"], "decision": "Both terms are retained for this comparison.",
+        "expected_revision": reopened.json()["revision"], "decision": "Both terms are retained for this comparison.",
     })
     assert decided.status_code == 200, decided.text
     assert decided.json()["findings"][0]["status"] == "resolved"

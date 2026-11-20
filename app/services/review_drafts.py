@@ -2,7 +2,7 @@
 import copy
 import json
 import re
-from collections import Counter
+from collections import Counter, defaultdict
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -237,7 +237,6 @@ def _pdf_ocr_cost_page(fact, unit, documents):
 
 
 def validate_rows(deal, docs, result):
-    counts = Counter(fact.path for fact in result.facts)
     manifest = document_manifest(docs)
     sources = review_documents(docs)
     sources_by_id = {source.id: source for source in sources}
@@ -258,7 +257,7 @@ def validate_rows(deal, docs, result):
             fact = fact.model_copy(update={"value": value})
             citation["source_value_note"] = COST_MAGNITUDE_NOTE
         context = {key: getattr(fact, key).strip() for key in DIMENSIONS if getattr(fact, key)}
-        issue = _row_issue(fact, unit, citation, source_issue or cell_issue, context, metrics, current, counts,
+        issue = _row_issue(fact, unit, citation, source_issue or cell_issue, context, metrics, current,
                            ocr_cost_page=_pdf_ocr_cost_page(fact, unit, sources), cited_cell=cell_text)
         issue = issue or table_number_warning(fact, source_doc)
         saved = next(iter(current.get(path, [])), None)
@@ -273,15 +272,53 @@ def validate_rows(deal, docs, result):
                      "current": saved, "context_changed": saved is not None and context_changed,
                      "missing_context": missing_context,
                      "evidence": citation, "context": context, "issue": issue})
+    _annotate_conflict_candidates(rows, metrics)
     return rows
 
 
-def _row_issue(fact, unit, citation, source_issue, context, metrics, current, counts, *, ocr_cost_page=False, cited_cell=None):
+def _annotate_conflict_candidates(rows, metrics):
+    by_path = defaultdict(list)
+    for row in rows:
+        by_path[row["path"]].append(row)
+
+    for path, candidates in by_path.items():
+        if len(candidates) < 2:
+            continue
+        identities = {
+            tuple(normalized_text(part) for part in identity(path, row["unit"], row["context"]).model_dump().values())
+            for row in candidates
+            if row["unit"]
+        }
+        values = {
+            normalized_text(row["value"]) if isinstance(row["value"], str) else row["value"]
+            for row in candidates
+        }
+        citations = {
+            tuple(normalized_text(row["evidence"].get(key)) for key in (
+                "source_doc_id", "source_document_hash", "source_page", "source_sheet", "source_cell",
+                "source_table_index", "source_table_row", "source_table_column", "source_excerpt",
+            ))
+            for row in candidates
+        }
+        group_issue = ""
+        if is_path_locked(metrics, path):
+            group_issue = "An analyst locked this field. Review the lock before choosing a value."
+        elif len(identities) != 1 or any(row["missing_context"] for row in candidates):
+            group_issue = "Confirm that these options use the same scope, period, and units before choosing."
+        elif len(values) < 2 or len(citations) != len(candidates):
+            group_issue = "Choose between distinct values with separate source citations."
+        elif any(row["issue"] for row in candidates):
+            group_issue = "Check the cited options before choosing a value."
+        for index, row in enumerate(candidates):
+            row["candidate_id"] = digest([path, index, row["value"], row["context"], row["evidence"]])
+            row["candidate_issue"] = row["issue"] or group_issue
+            row["issue"] = "Multiple values were proposed for this field. Compare the sources before resolving it."
+
+
+def _row_issue(fact, unit, citation, source_issue, context, metrics, current, *, ocr_cost_page=False, cited_cell=None):
     path, value = fact.path, fact.value
     if path not in FIELDS:
         return "This field is outside the review vocabulary."
-    if counts[path] > 1:
-        return "Multiple values were proposed for this field. Compare the sources before resolving it."
     if len(current.get(path, [])) > 1:
         return "Existing values for this field conflict. Resolve them in the Questions tab."
     if is_path_locked(metrics, path):

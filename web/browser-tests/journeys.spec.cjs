@@ -482,14 +482,14 @@ test('new deal reviews PDF and workbook through Codex paste, Summary, Compare, a
     await expect(page.getByRole('checkbox', { name: 'Save cash-flow check', exact: true })).toBeChecked();
     await expect(page.getByText('9 of 9 cited values selected', { exact: true })).toBeVisible();
     const exceptionList = page.getByRole('region', { name: 'Review exceptions', exact: true });
-    const conflict = exceptionList.getByText('Multiple values were proposed for this field. Compare the sources before resolving it.', { exact: true });
-    await expect(conflict).toHaveCount(2);
-    const conflictChoices = exceptionList.getByRole('checkbox', { name: /stabilized noi/i });
-    await expect(conflictChoices).toHaveCount(2);
-    for (const choice of await conflictChoices.all()) {
-      await expect(choice).toBeDisabled();
-      await expect(choice).not.toBeChecked();
-    }
+    const conflict = exceptionList.getByRole('group', { name: /stabilized noi conflicting values/i });
+    const pdfValue = conflict.getByRole('radio', { name: '2,040,000 from pilot-offering.pdf' });
+    const workbookValue = conflict.getByRole('radio', { name: '2,160,000 from pilot-underwriting.xlsx' });
+    await expect(pdfValue).toBeEnabled();
+    await expect(pdfValue).not.toBeChecked();
+    await expect(workbookValue).toBeEnabled();
+    await expect(workbookValue).not.toBeChecked();
+    await expect(conflict.getByRole('radio', { name: 'Leave open' })).toBeChecked();
     const { draft } = await (await page.request.get(base + '/review/draft')).json();
     expect(draft.rows.filter(row => !row.issue)).toHaveLength(9);
     expect(draft.rows.find(row => row.path === holdPath)).toMatchObject({
@@ -501,7 +501,7 @@ test('new deal reviews PDF and workbook through Codex paste, Summary, Compare, a
     expect(before.analysis.returns.cash_on_cash).toBeNull();
     await apply.click();
     await expect(page.getByText(/9 values applied/)).toBeVisible();
-    await expect(conflict).toHaveCount(2);
+    await expect(conflict.getByRole('radio', { name: 'Leave open' })).toBeChecked();
 
     const approved = await (await page.request.get(base)).json();
     const scoped = await page.request.put(base + '/analysis/return-context', { data: {
@@ -667,25 +667,42 @@ test('new deal reviews PDF and workbook through Codex paste, Summary, Compare, a
     await expect(unchecked).not.toBeChecked();
     await expect(page.getByRole('button', {name: 'Apply selected values'})).toBeDisabled();
 
+    const twoValues = await page.request.post(base + '/review/draft', {
+      data: { package_id: refreshedPacket.package_id, facts: facts.filter(fact => fact.path === noiPath) },
+    });
+    expect(twoValues.ok()).toBeTruthy();
+    await dealPage(page, id, 'documents');
+    await workbookValue.check();
+    await page.getByRole('button', {name: 'Apply 1 value', exact: true}).click();
+    await expect(page.getByText(/1 value applied/)).toBeVisible();
+    const selected = await (await page.request.get(base)).json();
+    expect(selected.analysis.facts[noiPath]).toMatchObject({
+      value: 2160000, state: 'checked', evidence: [{document_id: model.id, cell: 'B7'}],
+    });
+
     await page.getByRole('tab', {name: 'Questions', exact: true}).click();
     const findings = page.getByRole('region', {name: 'Source findings', exact: true});
-    await findings.getByRole('button', {name: 'Record decision', exact: true}).click();
-    await findings.getByRole('textbox', {name: 'Decision and basis'}).fill('Retain both source quotes and leave this figure open.');
+    await findings.getByRole('button', {name: 'Review choices', exact: true}).click();
+    await findings.getByRole('radio', {name: /pilot-underwriting.xlsx/}).check();
+    const decisionNote = 'Prefer the workbook because it identifies the fiscal period.';
+    await findings.getByRole('textbox', {name: 'Decision note (optional)'}).fill(decisionNote);
     const decisionSaved = page.waitForResponse(response => response.request().method() === 'POST'
       && new URL(response.url()).pathname.startsWith(base + '/review/findings/')
       && new URL(response.url()).pathname.endsWith('/resolve'));
     await findings.getByRole('button', {name: 'Save decision', exact: true}).click();
     const decisionResponse = await decisionSaved;
     expect(decisionResponse.ok()).toBeTruthy();
-    expect((await decisionResponse.json()).findings[0]).toMatchObject({status: 'resolved', decision: {text: 'Retain both source quotes and leave this figure open.'}});
-    await expect(findings.getByText('Decision recorded', {exact: true})).toBeVisible();
+    expect((await decisionResponse.json()).findings[0]).toMatchObject({
+      status: 'resolved', decision: {action: 'prefer_source', source_index: 1, text: decisionNote},
+    });
+    await expect(findings.getByText('Preferred source saved', {exact: true})).toBeVisible();
     const replacement = await page.request.post(base + '/documents/upload', {
       multipart: {file: {name: 'pilot-offering.pdf', mimeType: 'application/pdf',
         buffer: Buffer.concat([Buffer.from(artifacts.pdf, 'base64'), Buffer.from('\n% replacement edition\n')])}},
     });
     expect(replacement.ok()).toBeTruthy();
     const stale = (await (await page.request.get(base)).json()).analysis;
-    expect(stale.findings[0]).toMatchObject({status: 'needs_review', decision: {text: 'Retain both source quotes and leave this figure open.'}});
+    expect(stale.findings[0]).toMatchObject({status: 'needs_review', decision: {action: 'prefer_source', text: decisionNote}});
     expect(stale.return_crosscheck).toMatchObject({status: 'needs_review', annual_irr_pct: null, cash_flow_multiple: null});
   } finally {
     expect((await page.request.delete(base)).ok()).toBeTruthy();

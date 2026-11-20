@@ -126,6 +126,11 @@ def project_findings(metrics, manifest):
         evidence, versions = entry["evidence"], entry["source_versions"]
         stale = (any((item["document_id"], item["content_hash"]) not in active_sources for item in evidence)
                  or versions != _named_versions(active, versions))
-        status = "needs_review" if stale else "resolved" if entry.get("decision") else "current"
+        decision = entry.get("decision") or {}
+        status = "current"
+        if stale:
+            status = "needs_review"
+        elif decision and decision.get("action") != "keep_open":
+            status = "resolved"
         findings.append({key: value for key, value in entry.items() if key != "source_versions"} | {"status": status})
     return sorted(findings, key=lambda row: (row["status"] != "needs_review", row["status"] == "resolved", row["title"], row["id"]))
