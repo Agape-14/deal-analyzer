@@ -339,7 +339,12 @@ async def deal_pdf_report(deal_id: int, db: AsyncSession = Depends(get_db)):
         story.append(Spacer(1, 12))
         story.append(Paragraph("Source Documents", styles["SectionHeading"]))
         for d in deal.documents:
-            line = f"• {d.filename}  ({d.doc_type}, {d.page_count} pages)"
+            description = d.doc_type
+            if d.page_count and d.page_count > 0:
+                unit = "sheet" if d.filename.lower().endswith((".xlsx", ".xlsm", ".xls", ".csv")) else "page"
+                suffix = "" if d.page_count == 1 else "s"
+                description = f"{description}, {d.page_count} {unit}{suffix}"
+            line = f"• {d.filename}  ({description})"
             story.append(Paragraph(escape(line), styles["Small"]))
 
     doc.build(story)

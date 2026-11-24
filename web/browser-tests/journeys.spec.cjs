@@ -322,6 +322,7 @@ test('unsupported models show reasons and assistant works without provider credi
 });
 test('new deal reviews PDF and workbook through Codex paste, Summary, Compare, and exports', async ({ page }) => {
   page.setDefaultTimeout(15_000);
+  const pilotName = 'Juniper Station Apartments Synthetic Pilot';
   const { execFileSync } = require('node:child_process');
   const artifacts = JSON.parse(execFileSync('python', ['-c', [
     'from base64 import b64encode',
@@ -374,7 +375,7 @@ test('new deal reviews PDF and workbook through Codex paste, Summary, Compare, a
     'print(json.dumps({"pdf": b64encode(pdf.getvalue()).decode(), "xlsx": b64encode(workbook.getvalue()).decode()}))',
   ].join('\n')], { encoding: 'utf8' }));
 
-  const created = await page.request.post('/api/deals', { data: { project_name: 'Juniper Station Apartments Synthetic Pilot' } });
+  const created = await page.request.post('/api/deals', { data: { project_name: pilotName } });
   expect(created.ok()).toBeTruthy();
   const { id } = await created.json();
   const base = '/api/deals/' + id;
@@ -563,10 +564,19 @@ test('new deal reviews PDF and workbook through Codex paste, Summary, Compare, a
     expect(reportText).toContain('pilot-offering.pdf, p. 2');
     expect(reportText).toContain('Optional Sale Scenario');
     expect(reportText).toContain('17.40%');
+    expect(reportText).toMatch(/pilot-underwriting\.xlsx\s+\([^)]*2 sheets\)/);
     expect(reportText).toContain('PDF Cash-Flow Check');
     expect(reportText).toContain('20.00%');
     expect(reportText).not.toMatch(/2,040,000|2,160,000/);
 
+    await page.route(url => url.pathname === '/api/deals', async route => {
+      const response = await route.fetch();
+      const deals = await response.json();
+      await route.fulfill({
+        response,
+        json: deals.map(deal => deal.id === id ? { ...deal, city: null } : deal),
+      });
+    });
     await page.goto('/compare?ids=' + id + ',1');
     const minRow = page.getByTestId('compare-row-min_investment');
     await expect(minRow.getByText('$125K', { exact: true })).toBeVisible();
@@ -574,6 +584,17 @@ test('new deal reviews PDF and workbook through Codex paste, Summary, Compare, a
     await expect(cashRow.getByText('8.9%', { exact: true })).toBeVisible();
     await expect(cashRow.getByText(contextText, { exact: true })).toBeVisible();
     await expect(cashRow.getByText('Different or unspecified context · values only')).toBeVisible();
+    await page.getByRole('button', { name: 'Change selection', exact: true }).click();
+    const picker = page.getByRole('dialog', { name: 'Pick deals to compare' });
+    const dealSearch = picker.getByPlaceholder('Search project, sponsor, city…');
+    await dealSearch.fill('no match for this synthetic search');
+    await expect(picker.getByText('No deals match.')).toBeVisible();
+    await dealSearch.fill(pilotName);
+    const pickerDeal = picker.getByRole('button', { name: new RegExp(pilotName) });
+    await expect(pickerDeal).toContainText('8.9% Cash-on-Cash');
+    await expect(pickerDeal).toContainText(contextText);
+    await expect(pickerDeal).not.toContainText('Target IRR');
+    await picker.getByRole('button', { name: 'Cancel', exact: true }).click();
     const compare = await page.request.post('/api/deals/compare', {data: {deal_ids: [id, 1]}});
     expect(compare.ok()).toBeTruthy();
     const compared = (await compare.json()).deals.find(deal => deal.id === id).analysis;
@@ -603,7 +624,6 @@ test('new deal reviews PDF and workbook through Codex paste, Summary, Compare, a
       'Target IRR': null,
       'Stabilized NOI': null,
     });
-    const pilotName = 'Juniper Station Apartments Synthetic Pilot';
     expect(rows.sales.find(row => row[0] === pilotName)).toEqual(expect.arrayContaining([17.4, 'percent', 'pilot-offering.pdf, p. 2']));
     expect(rows.checks).toHaveLength(3);
     expect(rows.checks[1]).toEqual(expect.arrayContaining([pilotName, 20, 1.4, 'Includes refinance proceeds', 'pilot-offering.pdf, p. 2']));
