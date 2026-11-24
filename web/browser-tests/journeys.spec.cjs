@@ -571,9 +571,10 @@ test('new deal reviews PDF and workbook through Codex paste, Summary, Compare, a
 
     await page.route(url => url.pathname === '/api/deals', async route => {
       const response = await route.fetch();
+      expect(response.ok()).toBeTruthy();
       const deals = await response.json();
       await route.fulfill({
-        response,
+        status: response.status(),
         json: deals.map(deal => deal.id === id ? { ...deal, city: null } : deal),
       });
     });
