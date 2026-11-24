@@ -24,6 +24,7 @@ export type FinancingMeasure = {
   debt_phase: "construction";
   note: string;
   state: "checked" | "stale";
+  source_path?: string;
   evidence: Array<{
     document_id: number;
     document_name: string;

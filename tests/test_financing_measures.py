@@ -1,9 +1,11 @@
+import io
 import re
 
 import pytest
 
 
 DEBT_PATH = "deal_structure.debt_amount"
+CONSTRUCTION_LOAN_PATH = "deal_structure.construction_loan_amount"
 
 
 async def upload(client, deal_id, body, name="loan.csv"):
@@ -165,3 +167,120 @@ async def test_pdf_financing_requires_one_measure_and_its_amount_in_each_quote(c
     financing = (await client.get(url)).json()["analysis"]["financing"]
     assert financing["debt_amount_kind"] == "modeled_payoff"
     assert [measure["state"] for measure in financing["measures"]] == ["checked"] * 3
+
+
+@pytest.mark.asyncio
+async def test_approved_pdf_commitment_is_used_in_summary_and_exports(client):
+    import fitz
+    import openpyxl
+
+    from app.database import async_session
+    from app.models import Deal, DealDocument
+
+    created = await client.post("/api/deals", json={"project_name": "Synthetic commitment"})
+    deal_id = created.json()["id"]
+    other = await client.post("/api/deals", json={"project_name": "Comparison"})
+    quote = "Construction loan commitment: $19,800,000."
+    draw_quote = "Construction loan draw: $5,000,000."
+    async with async_session() as db:
+        doc = DealDocument(deal_id=deal_id, filename="commitment.pdf", file_path="commitment.pdf",
+                           file_sha256="d" * 64, page_count=1,
+                           extracted_text=f"--- Page 1 ---\n{quote}\n{draw_quote}")
+        db.add(doc)
+        await db.commit()
+        doc_id = doc.id
+
+    url = f"/api/deals/{deal_id}"
+    review = f"{url}/review"
+    packet = (await client.get(f"{review}/packet")).json()["packet"]
+    imported = await client.post(f"{review}/draft", json={"package_id": packet["package_id"], "facts": [{
+        "path": CONSTRUCTION_LOAN_PATH, "value": 19_800_000, "source_doc_id": doc_id, "source_page": 1,
+        "source_excerpt": quote, "basis": "Construction loan commitment", "currency": "USD", "debt_phase": "construction",
+    }]})
+    assert imported.status_code == 200, imported.text
+    draft = imported.json()
+    before = (await client.get(url)).json()["analysis"]
+    assert before["financing"]["measures"] == []
+    approved = await client.post(f"{review}/approve", json={
+        "draft_id": draft["draft"]["id"], "expected_revision": draft["revision"], "paths": [CONSTRUCTION_LOAN_PATH],
+    })
+    assert approved.status_code == 200, approved.text
+
+    # The pilot already has a saved pre-change snapshot. Reads can rebuild it
+    # from the reviewed facts without another approval or deal revision.
+    async with async_session() as db:
+        deal = await db.get(Deal, deal_id)
+        snapshot = dict(deal.analysis_snapshot)
+        snapshot["schema_version"] = 7
+        snapshot["financing"] = {**snapshot["financing"], "measures": []}
+        deal.analysis_snapshot = snapshot
+        await db.commit()
+
+    detail = (await client.get(url)).json()
+    financing = detail["analysis"]["financing"]
+    assert detail["analysis"]["version"] == snapshot["version"]
+    assert financing["debt_amount_label"] == "Debt amount"
+    commitment, = financing["measures"]
+    assert commitment["label"] == "Construction lender commitment"
+    assert commitment["amount"] == 19_800_000
+    assert commitment["source_path"] == CONSTRUCTION_LOAN_PATH
+    assert commitment["evidence"][0]["excerpt"] == quote
+
+    pdf = await client.get(f"/api/reports/deal/{deal_id}/pdf")
+    assert pdf.status_code == 200
+    with fitz.open(stream=pdf.content, filetype="pdf") as report:
+        text = " ".join(" ".join(page.get_text().split()) for page in report)
+    assert "Construction lender commitment · $19,800,000" in text
+    assert "commitment.pdf, p. 1" in text
+
+    xlsx = await client.post("/api/deals/compare/export", json={"deal_ids": [deal_id, other.json()["id"]]})
+    assert xlsx.status_code == 200
+    workbook = openpyxl.load_workbook(io.BytesIO(xlsx.content))
+    assert tuple(cell.value for cell in workbook["Construction Financing"][2]) == (
+        "Synthetic commitment", "Construction lender commitment", 19_800_000, "USD", None, "commitment.pdf, p. 1",
+    )
+
+    saved = await client.put(f"{url}/analysis/financing-measures", json={
+        "expected_revision": detail["revision"], "measures": [{
+            "kind": "draw", "amount": 5_000_000, "source_doc_id": doc_id, "source_page": 1, "source_excerpt": draw_quote,
+        }],
+    })
+    assert saved.status_code == 200, saved.text
+    explicit = (await client.get(url)).json()["analysis"]["financing"]["measures"]
+    assert [measure["kind"] for measure in explicit] == ["draw"]
+
+
+@pytest.mark.parametrize(("citation_change", "provenance_change", "context_change", "expected"), [
+    ({}, {}, {}, True),
+    ({"source_excerpt": "A5=Construction loan draw | B5=19800000 | C5=USD"}, {}, {}, False),
+    ({"source_excerpt": "A5=Construction loan commitment fee | B5=19800000 | C5=USD"}, {}, {}, False),
+    ({"source_excerpt": "A5=Construction loan commitment | B5=2000000 | C5=19800000"}, {}, {}, False),
+    ({"source_excerpt": "A5=Construction loan commitment | B5=-19800000 | C5=USD"}, {}, {}, False),
+    ({"source_document_hash": "changed"}, {}, {}, False),
+    ({}, {"conflict": [19_800_000, 18_900_000]}, {}, False),
+    ({}, {"status": "manual"}, {}, False),
+    ({}, {"review_document_set": "stale"}, {}, False),
+    ({}, {}, {"basis": "Loan amount"}, False),
+    ({}, {}, {"currency": "CAD"}, False),
+])
+def test_commitment_requires_a_checked_unambiguous_current_workbook_source(
+    citation_change, provenance_change, context_change, expected,
+):
+    from app.services.analysis import build_analysis, digest
+
+    documents = [{"id": 1, "filename": "funding.xlsx", "content_hash": "current", "included_in_review": True}]
+    citation = {
+        "source_doc_id": 1, "source_document_hash": "current", "source_sheet": "Funding", "source_cell": "B5",
+        "source_excerpt": "A5=Construction loan commitment | B5=19800000 | C5=USD",
+    }
+    provenance = {"status": "confirmed", "source_check_version": 1, "review_document_set": digest(documents)}
+    context = {"basis": "Construction loan commitment", "currency": "USD", "debt_phase": "construction"}
+    metrics = {
+        "deal_structure": {"construction_loan_amount": 19_800_000},
+        "_provenance": {CONSTRUCTION_LOAN_PATH: {**citation, **citation_change, **provenance, **provenance_change}},
+        "_fact_context": {CONSTRUCTION_LOAN_PATH: {**context, **context_change}},
+    }
+    financing = build_analysis(metrics, documents)["financing"]
+    assert bool(financing["measures"]) is expected
+    if expected:
+        assert financing["measures"][0]["evidence"][0]["cell"] == "B5"

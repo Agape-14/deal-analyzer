@@ -107,12 +107,12 @@ async def intake_documents(background_tasks: BackgroundTasks, files: list[Upload
             deal = (await db.execute(select(Deal).where(Deal.intake_token == token))).scalar_one()
     results, errors = [], []
     deal_id = deal.id
-    for file in files:
+    for file_index, file in enumerate(files):
         filename = file.filename
         try:
             results.append(await upload_document(deal_id, background_tasks, file, "other", db))
         except HTTPException as exc:
-            errors.append({"filename": filename, "detail": exc.detail})
+            errors.append({"file_index": file_index, "filename": filename, "detail": exc.detail})
     return {"deal_id": deal_id, "documents": results, "errors": errors,
             "message": "Documents saved. Review begins automatically when available." if results else "No documents saved. Retry this upload to reuse the same deal."}
 

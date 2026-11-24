@@ -5,6 +5,7 @@ import { Card } from "@/components/ui/card";
 import type { AnalysisFact, DealDetail } from "@/lib/types";
 import { fmtMoney, fmtPct, fmtMultiple } from "@/lib/utils";
 import { operatingFactContext } from "@/lib/fact-context";
+import { sourceFindingsNeedReview } from "@/lib/review-attention";
 import { EvidenceViewer } from "./evidence-viewer";
 import { ReturnContextPanel } from "./return-context-panel";
 import { ReturnCrosscheckPanel } from "./return-crosscheck";
@@ -57,6 +58,7 @@ export function AcceptedSummary({ deal }: { deal: DealDetail }) {
   const analysis = deal.analysis;
   if (!analysis) return <Card className="p-6">Analysis is unavailable. Reload after document review completes.</Card>;
   const facts = analysis.facts;
+  const financingSourcePaths = new Set(analysis.financing?.measures.map(measure => measure.source_path));
   const paths = ["deal_structure.total_project_cost", "deal_structure.total_equity_required", "deal_structure.debt_amount", "deal_structure.minimum_investment", "deal_structure.hold_period_years", "project_details.unit_count", "financial_projections.stabilized_noi", "underwriting_checks.dscr"];
   const acceptedPaths = paths.filter(path => facts[path] && ["checked", "calculated", "manual"].includes(facts[path].state));
   const pendingPaths = paths.filter(path => !acceptedPaths.includes(path));
@@ -70,7 +72,7 @@ export function AcceptedSummary({ deal }: { deal: DealDetail }) {
           <p className="mt-1 text-sm text-muted-foreground">{analysis.primary_strategy === "unknown" ? "Strategy needs clarification" : `Primary strategy: ${analysis.primary_strategy.replaceAll("_", " ")}`}{analysis.investor_class !== "unspecified" ? ` · ${analysis.investor_class}` : ""}</p>
         </div>
         <Link href={`/deals/${deal.id}?tab=questions`} className="rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground">
-          {analysis.questions.length || analysis.readiness?.attention_count || analysis.findings?.some(item => item.status === "needs_review" || item.kind === "conflict" && item.status === "current")
+          {analysis.questions.length || analysis.readiness?.attention_count || sourceFindingsNeedReview(analysis.findings)
             ? "Review exceptions" : analysis.findings?.length ? "Source findings" : "No material questions"}
         </Link>
       </div>
@@ -100,7 +102,8 @@ export function AcceptedSummary({ deal }: { deal: DealDetail }) {
     </Card>
     {detailSections.map(({ prefix, title }) => {
       const entries = Object.entries(facts).filter(([path, fact]) => path.startsWith(prefix)
-        && !acceptedPaths.includes(path) && fact.value != null && ["checked", "calculated", "manual"].includes(fact.state));
+        && !acceptedPaths.includes(path) && !financingSourcePaths.has(path)
+        && fact.value != null && ["checked", "calculated", "manual"].includes(fact.state));
       if (!entries.length) return null;
       return <Card key={prefix} className="p-5 md:p-6"><h2 className="text-lg font-semibold">{title}</h2>
         <div className="mt-4 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">{entries.map(([path, fact]) => (

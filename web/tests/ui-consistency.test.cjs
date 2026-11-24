@@ -18,6 +18,17 @@ const { formatValue } = load("../src/components/deal-detail/metrics-section.tsx"
 const { buildReviewItems } = load("../src/components/deal-detail/review-queue.tsx", { "@/lib/utils": utils });
 const { getValueAt, getRow } = load("../src/components/compare/presets.ts");
 const { loginDestination } = load("../src/lib/login-destination.ts");
+const { sourceFindingsNeedReview } = load("../src/lib/review-attention.ts");
+
+test("open conflicts and changed sources still need attention without field questions", () => {
+  assert.equal(sourceFindingsNeedReview(), false);
+  assert.equal(sourceFindingsNeedReview([
+    { kind: "conflict", status: "resolved" },
+    { kind: "source_note", status: "current" },
+  ]), false);
+  assert.equal(sourceFindingsNeedReview([{ kind: "conflict", status: "current" }]), true);
+  assert.equal(sourceFindingsNeedReview([{ kind: "source_note", status: "needs_review" }]), true);
+});
 
 test("login destination preserves internal deal links and their query strings", () => {
   assert.equal(loginDestination("/?new=1"), "/?new=1");

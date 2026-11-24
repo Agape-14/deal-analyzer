@@ -14,13 +14,13 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from app.services.canonical_metrics import HOLD_CASH_YIELD_PATHS, canonical_return_summary, primary_strategy
+from app.services.canonical_metrics import HOLD_CASH_YIELD_PATHS, canonical_return_summary, get_path, primary_strategy
 from app.services.return_schedules import SCHEDULE_KEY, active_sources_fingerprint, project_return_schedule
 from app.services.review_coverage import GROUP_REVIEWS_KEY, build_review_coverage
 from app.services.review_findings import FINDINGS_KEY, project_findings
 from app.services.review_readiness import review_readiness
 
-SCHEMA_VERSION = 7
+SCHEMA_VERSION = 8
 ACCEPTED = {"checked", "calculated", "manual"}
 BAD = {"wrong", "missing", "unverifiable", "stale", "math_failed"}
 RETURN_REVIEWS_KEY = "_return_reviews"
@@ -280,6 +280,36 @@ def group_for(path):
     return "Property and operations"
 
 
+def _primary_strategy_with_accepted_terms(metrics, accepted, facts):
+    strategy = primary_strategy(metrics)
+    if strategy != "unknown":
+        return strategy
+
+    investment_strategy = get_path(accepted, "deal_structure.investment_strategy")
+    fallback = investment_strategy.strip().casefold() if isinstance(investment_strategy, str) else ""
+    if fallback not in {"hold", "sale"}:
+        return strategy
+
+    primary_path = "target_returns.primary_strategy"
+    primary_label = get_path(metrics, primary_path)
+    if primary_label is not None and (
+        not isinstance(primary_label, str) or primary_label.strip().casefold() not in {"", "unknown"}
+    ):
+        return strategy
+
+    primary_fact = facts.get(primary_path)
+    primary_source = (metrics.get("_provenance") or {}).get(primary_path)
+    if (primary_fact and primary_fact.state == "disputed") or (
+        isinstance(primary_source, dict) and (primary_source.get("conflict") or primary_source.get("source_challenge"))
+    ):
+        return strategy
+
+    return primary_strategy({
+        **metrics,
+        "target_returns": {**(metrics.get("target_returns") or {}), "primary_strategy": fallback},
+    })
+
+
 def build_analysis(metrics, documents=None, property_type="multifamily"):
     metrics = copy.deepcopy(metrics) if isinstance(metrics, dict) else {}
     documents = documents or []
@@ -420,7 +450,7 @@ def build_analysis(metrics, documents=None, property_type="multifamily"):
             set_path(accepted, path, fact.value)
     from app.services.model_limits import model_limits
     accepted["_model_limits"] = model_limits(metrics)
-    strategy = primary_strategy(metrics)
+    strategy = _primary_strategy_with_accepted_terms(metrics, accepted, facts)
     accepted.setdefault("target_returns", {})["primary_strategy"] = strategy
     accepted["_fact_context"] = {**contexts, **reviewed_contexts}
     selection = metrics.get("_analysis_context") or {}
@@ -492,10 +522,11 @@ def build_analysis(metrics, documents=None, property_type="multifamily"):
                   "impact": "The summary remains incomplete until these evidence or calculation questions are resolved."} for area, issues in sorted(grouped.items()) if issues]
     coverage = {"accepted": sum(f.state in ACCEPTED for f in facts.values()), "checked": sum(f.state == "checked" for f in facts.values()),
                 "manual": sum(f.state == "manual" for f in facts.values()), "calculated": sum(f.state == "calculated" for f in facts.values()), "total": len(facts)}
-    from app.services.financing_measures import project_financing
+    from app.services.financing_measures import CONSTRUCTION_LOAN_PATH, project_financing
 
-    financing = project_financing(metrics, documents, (accepted.get("deal_structure") or {}).get("debt_amount"))
     serialized_facts = {p: f.model_dump() for p, f in sorted(facts.items())}
+    financing = project_financing(metrics, documents, get_path(accepted, "deal_structure.debt_amount"),
+                                  serialized_facts.get(CONSTRUCTION_LOAN_PATH))
     review_coverage = build_review_coverage(metrics, serialized_facts, accepted, returns, schedule, documents, property_type)
     from app.services.return_crosscheck import project_return_crosscheck
 

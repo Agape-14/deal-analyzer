@@ -544,6 +544,88 @@ def test_empty_optional_scenario_does_not_change_strategy_and_unknown_labels_nee
     assert analysis["returns"]["cash_on_cash"] is None
 
 
+def test_checked_investment_strategy_restores_hold_return_in_an_existing_deal():
+    from types import SimpleNamespace
+
+    from app.services.analysis import SCHEMA_VERSION, analysis_for_deal
+
+    metrics = manual_metrics()
+    metrics["target_returns"].pop("primary_strategy")
+    metrics["target_returns"]["sale_scenario"] = {"net_irr": 17.4}
+    metrics["deal_structure"]["investment_strategy"] = "  HOLD  "
+    path = "deal_structure.investment_strategy"
+    metrics["_provenance"]["target_returns.sale_scenario.net_irr"] = {"status": "manual"}
+    metrics["_provenance"][path] = {
+        "status": "confirmed", "source_check_version": 1, "source_doc_id": 1,
+        "source_page": 1, "source_document_hash": "memo", "source_excerpt": "Investment strategy: hold.",
+    }
+    old_snapshot = {
+        "schema_version": SCHEMA_VERSION - 1, "version": 4, "primary_strategy": "unknown",
+        "documents": [{"id": 1, "filename": "Memo.pdf", "page_count": 1, "content_hash": "memo"}],
+    }
+    analysis = analysis_for_deal(SimpleNamespace(
+        metrics=metrics, property_type="multifamily", analysis_snapshot=old_snapshot,
+    ))
+
+    assert analysis["facts"][path]["state"] == "checked"
+    assert analysis["primary_strategy"] == analysis["returns"]["primary_strategy"] == "hold_with_sale_option"
+    assert analysis["returns"]["cash_on_cash"] == 8
+    assert analysis["returns"]["target_irr"] is None
+    assert not analysis["questions"]
+    assert analysis["version"] == 4
+    assert old_snapshot["primary_strategy"] == "unknown"
+
+
+@pytest.mark.parametrize("primary_label, fallback_evidence, expected", [
+    ("unknown", {"status": "manual"}, "hold"),
+    (None, {"status": "unverified"}, "unknown"),
+    (None, {"status": "manual", "conflict": ["hold", "sale"]}, "unknown"),
+    ("hold or sell depending on the market", {"status": "manual"}, "unknown"),
+    ("sale", {"status": "manual"}, "sale"),
+])
+def test_only_accepted_strategy_labels_fill_an_empty_or_unknown_primary_label(primary_label, fallback_evidence, expected):
+    metrics = manual_metrics()
+    metrics["target_returns"]["primary_strategy"] = primary_label
+    metrics["deal_structure"]["investment_strategy"] = "hold"
+    metrics["_provenance"]["deal_structure.investment_strategy"] = fallback_evidence
+    analysis = build_analysis(metrics)
+    assert analysis["primary_strategy"] == expected
+    assert analysis["returns"]["cash_on_cash"] == (8 if expected == "hold" else None)
+
+
+def test_investment_strategy_does_not_mask_a_dedicated_strategy_conflict():
+    metrics = manual_metrics()
+    metrics["target_returns"]["primary_strategy"] = None
+    metrics["deal_structure"]["investment_strategy"] = "hold"
+    metrics["_provenance"].update({
+        "deal_structure.investment_strategy": {"status": "manual"},
+        "target_returns.primary_strategy": {"conflict": ["hold", "sale"]},
+    })
+    analysis = build_analysis(metrics)
+    assert analysis["primary_strategy"] == "unknown"
+    assert analysis["returns"]["cash_on_cash"] is None
+    assert any(issue["path"] == "target_returns.primary_strategy"
+               for question in analysis["questions"] for issue in question["issues"])
+
+
+def test_accepted_sale_strategy_does_not_promote_a_hypothetical_sale():
+    metrics = manual_metrics()
+    metrics["deal_structure"]["investment_strategy"] = "sale"
+    metrics["target_returns"] = {"sale_scenario": {"sale_irr": 17.4}}
+    metrics["_provenance"].update({
+        "deal_structure.investment_strategy": {"status": "manual"},
+        "target_returns.sale_scenario.sale_irr": {"status": "manual"},
+    })
+    analysis = build_analysis(metrics)
+    assert analysis["primary_strategy"] == "sale"
+    assert analysis["returns"]["target_irr"] == 17.4
+
+    metrics["target_returns"]["sale_scenario"]["is_hypothetical"] = True
+    analysis = build_analysis(metrics)
+    assert analysis["primary_strategy"] == "unknown"
+    assert analysis["returns"]["target_irr"] is None
+
+
 def test_explicit_source_supported_waterfall_terms_survive_the_accepted_projection():
     from app.services.waterfall_calculator import waterfall_from_deal
     metrics = manual_metrics()
