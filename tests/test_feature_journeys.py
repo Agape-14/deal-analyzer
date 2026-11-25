@@ -29,16 +29,24 @@ async def test_return_values_agree_in_detail_compare_and_exports(client):
     a, b = await new_deal(client, "A & B <Fund>"), await new_deal(client, "Sale Deal")
     metrics = {
         "target_returns": {"primary_strategy": "hold", "target_irr": 22,
-            "hold_scenario": {"cash_on_cash_return": 8},
-            "sale_scenario": {"sale_irr": 22, "sale_equity_multiple": 2.4, "is_hypothetical": True}},
+            "hold_scenario": {"cash_on_cash_return": 8.9},
+            "sale_scenario": {"sale_irr": 17.4, "sale_equity_multiple": 2.4, "is_hypothetical": True}},
         "deal_structure": {"ltv": 60},
-        "_provenance": {"target_returns.hold_scenario.cash_on_cash_return": {"status": "manual", "verification_note": "Project model, page 4."}},
+        "_provenance": {
+            "target_returns.hold_scenario.cash_on_cash_return": {"status": "manual", "verification_note": "Project model, page 4."},
+            "target_returns.sale_scenario.sale_irr": {"status": "manual"},
+            "target_returns.sale_scenario.sale_equity_multiple": {"status": "manual"},
+        },
         "_fact_context": {"target_returns.hold_scenario.cash_on_cash_return": {
             "investor_class": "Class B", "basis": "net", "period": "Year 2 after stabilization",
         }},
     }
     await client.put(f"/api/deals/{a}", json={"metrics": metrics, "scores": {"overall": None}, "notes": "A < B & C"})
-    await client.put(f"/api/deals/{b}", json={"metrics": {"target_returns": {"target_irr": 15}, "deal_structure": {"ltv": 80}}})
+    await client.put(f"/api/deals/{b}", json={"metrics": {
+        "target_returns": {"primary_strategy": "sale", "target_irr": 15},
+        "deal_structure": {"ltv": 80},
+        "_provenance": {"target_returns.target_irr": {"status": "manual"}},
+    }})
     detail = (await client.get(f"/api/deals/{a}")).json()
     assert detail["target_irr"] is None
     assert detail["target_equity_multiple"] is None
@@ -47,20 +55,28 @@ async def test_return_values_agree_in_detail_compare_and_exports(client):
     assert comparison[1]["target_irr"] is None
     xlsx = await client.post("/api/deals/compare/export", json={"deal_ids": [b, a]})
     assert xlsx.status_code == 200
-    sheet = openpyxl.load_workbook(io.BytesIO(xlsx.content)).active
-    rows = {row[0].value: row for row in sheet.iter_rows() if row[0].value}
+    workbook = openpyxl.load_workbook(io.BytesIO(xlsx.content))
+    rows = {row[0].value: row for row in workbook.active.iter_rows() if row[0].value}
     assert rows["Target IRR"][2].value is None
-    assert rows["Cash-on-Cash"][2].value == 8
+    assert rows["Target IRR"][1].value == 15
+    assert rows["Target IRR"][1].number_format == '0.00"%"'
+    assert rows["Cash-on-Cash"][2].value == 8.9
+    assert rows["Cash-on-Cash"][2].number_format == '0.00"%"'
     assert "Class B" in rows["Cash-on-Cash Context"][2].value
     assert "Year 2 after stabilization" in rows["Cash-on-Cash Context"][2].value
     assert "Project model, page 4." in rows["Cash-on-Cash Evidence"][2].value
     assert rows["LTV"][1].fill.fill_type is None  # High leverage is not a winner.
+    sale_values = {row[3].value: row[2] for row in workbook["Optional Sale Scenarios"].iter_rows(min_row=2)}
+    assert sale_values["percent"].value == 17.4
+    assert sale_values["percent"].number_format == '0.00"%"'
+    assert sale_values["multiple"].value == 2.4
+    assert sale_values["multiple"].number_format == "General"
     pdf = await client.get(f"/api/reports/deal/{a}/pdf")
     assert pdf.status_code == 200
     with fitz.open(stream=pdf.content, filetype="pdf") as document:
         text = "".join(page.get_text() for page in document)
     assert "22.00%" not in text
-    assert "8.00%" in text
+    assert "8.90%" in text
     assert "Class B" in text
     assert "Calculation basis: net" in text
     assert "Year 2 after stabilization" in " ".join(text.split())

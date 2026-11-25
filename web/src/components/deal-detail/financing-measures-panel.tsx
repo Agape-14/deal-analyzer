@@ -46,6 +46,7 @@ export function FinancingMeasuresPanel({ deal, financing, debtAmount }: {
 }) {
   const { isAnalyst } = useCurrentUser();
   const measures = financing?.measures ?? [];
+  const savedMeasures = measures.filter(measure => !measure.source_path);
   const documents = deal.documents.filter(document => document.has_text && document.included_in_review !== false && (!document.source_role || document.source_role === "active"));
   const editable = isAnalyst && !!deal.revision && documents.length > 0;
   const [draft, setDraft] = React.useState<EditableMeasure[] | null>(null);
@@ -60,7 +61,7 @@ export function FinancingMeasuresPanel({ deal, financing, debtAmount }: {
     setError("");
     setAddKind("");
     setPrimary(financing?.debt_amount_kind ?? "");
-    setDraft(measures.map(row => ({
+    setDraft(savedMeasures.map(row => ({
       kind: row.kind,
       amount: String(row.amount),
       documentId: String(row.citation.source_doc_id),
@@ -182,7 +183,7 @@ export function FinancingMeasuresPanel({ deal, financing, debtAmount }: {
         </label>}
         {error && <p role="alert" className="text-sm text-destructive">{error}</p>}
         <div className="flex flex-wrap gap-2">
-          <Button type="submit" disabled={!draft.length && !measures.length}>{busy ? "Saving…" : "Save financing measures"}</Button>
+          <Button type="submit" disabled={!draft.length && !savedMeasures.length}>{busy ? "Saving…" : "Save financing measures"}</Button>
           <Button type="button" variant="ghost" onClick={() => setDraft(null)}>Cancel</Button>
         </div>
       </fieldset>

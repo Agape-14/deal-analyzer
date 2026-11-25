@@ -322,6 +322,7 @@ test('unsupported models show reasons and assistant works without provider credi
 });
 test('new deal reviews PDF and workbook through Codex paste, Summary, Compare, and exports', async ({ page }) => {
   page.setDefaultTimeout(15_000);
+  const pilotName = 'Juniper Station Apartments Synthetic Pilot';
   const { execFileSync } = require('node:child_process');
   const artifacts = JSON.parse(execFileSync('python', ['-c', [
     'from base64 import b64encode',
@@ -374,7 +375,7 @@ test('new deal reviews PDF and workbook through Codex paste, Summary, Compare, a
     'print(json.dumps({"pdf": b64encode(pdf.getvalue()).decode(), "xlsx": b64encode(workbook.getvalue()).decode()}))',
   ].join('\n')], { encoding: 'utf8' }));
 
-  const created = await page.request.post('/api/deals', { data: { project_name: 'Juniper Station Apartments Synthetic Pilot' } });
+  const created = await page.request.post('/api/deals', { data: { project_name: pilotName } });
   expect(created.ok()).toBeTruthy();
   const { id } = await created.json();
   const base = '/api/deals/' + id;
@@ -396,6 +397,13 @@ test('new deal reviews PDF and workbook through Codex paste, Summary, Compare, a
     const holdPath = 'target_returns.hold_scenario.target_cash_on_cash';
     const salePath = 'target_returns.sale_scenario.net_irr';
     const noiPath = 'financial_projections.stabilized_noi';
+    const commitmentPath = 'deal_structure.construction_loan_amount';
+    const commitmentLabel = 'Construction lender commitment';
+    const commitmentAmount = 19_800_000;
+    const commitmentContext = {basis: 'Construction loan commitment', debt_phase: 'construction', currency: 'USD'};
+    const commitmentQuote = 'A5=Construction loan commitment | B5=19800000 | C5=USD';
+    const commitmentCitation = {document_name: 'pilot-underwriting.xlsx', sheet: 'Funding and Operations', cell: 'B5', excerpt: commitmentQuote};
+    const commitmentReference = 'pilot-underwriting.xlsx, Funding and Operations B5';
     const holdContext = {scenario: 'hold', investor_class: 'lp', basis: 'net', period: 'Year 2 after stabilization'};
     const holdQuote = 'Annual net LP hold cash-on-cash target, Year 2 after stabilization: 8.9%.';
     const memoNoiQuote = 'Base case FY2030 stabilized annual NOI: $2,040,000.';
@@ -408,6 +416,7 @@ test('new deal reviews PDF and workbook through Codex paste, Summary, Compare, a
     expect(memo.text).toContain(holdQuote);
     expect(memo.text).toContain(memoNoiQuote);
     expect(model.text).toContain(unitQuote);
+    expect(model.text).toContain(commitmentQuote);
     expect(model.text).toContain(modelNoiQuote);
     expect(model.text).toContain('A3=Year 2 after stabilization | B3=0.089 | C3=Annual hold cash-on-cash target');
     expect(model.text).toContain('A5=Illustrative sale after 5 years | B5=0.174 | C5=Net LP IRR');
@@ -422,8 +431,8 @@ test('new deal reviews PDF and workbook through Codex paste, Summary, Compare, a
         source_doc_id: model.id, source_sheet: 'Funding and Operations', source_cell: 'B2', source_excerpt: unitQuote},
       {path: 'deal_structure.total_equity_required', value: 12200000, currency: 'USD',
         source_doc_id: memo.id, source_page: 1, source_excerpt: 'Project equity requirement: $12,200,000.'},
-      {path: 'deal_structure.debt_amount', value: 19800000, currency: 'USD', debt_phase: 'construction',
-        source_doc_id: memo.id, source_page: 1, source_excerpt: 'Construction loan commitment: $19,800,000.'},
+      {path: commitmentPath, value: commitmentAmount, ...commitmentContext,
+        source_doc_id: model.id, source_sheet: 'Funding and Operations', source_cell: 'B5', source_excerpt: commitmentQuote},
       {path: 'deal_structure.total_project_cost', value: 32000000, currency: 'USD',
         source_doc_id: memo.id, source_page: 1, source_excerpt: 'Total project cost: $32,000,000.'},
       {path: 'construction_costs.total_project_cost', value: 32000000, currency: 'USD',
@@ -497,9 +506,14 @@ test('new deal reviews PDF and workbook through Codex paste, Summary, Compare, a
       value: 8.9, issue: '', context: holdContext,
       evidence: {source_doc_id: memo.id, source_page: 2, source_excerpt: holdQuote},
     });
+    expect(draft.rows.find(row => row.path === commitmentPath)).toMatchObject({
+      value: commitmentAmount, issue: '', context: commitmentContext,
+      evidence: {source_doc_id: model.id, source_sheet: 'Funding and Operations', source_cell: 'B5', source_excerpt: commitmentQuote},
+    });
     const before = await (await page.request.get(base)).json();
     expect(before.analysis.facts['project_details.unit_count'].value).toBeNull();
     expect(before.analysis.returns.cash_on_cash).toBeNull();
+    expect(before.analysis.financing.measures).toEqual([]);
     await apply.click();
     await expect(page.getByText(/9 values applied/)).toBeVisible();
     await expect(conflict.getByRole('radio', { name: 'Leave open' })).toBeChecked();
@@ -517,6 +531,9 @@ test('new deal reviews PDF and workbook through Codex paste, Summary, Compare, a
     await expect(summary.getByText('148', { exact: true })).toBeVisible();
     await expect(summary.getByRole('heading', { name: 'Construction costs', exact: true })).toBeVisible();
     await expect(summary.getByRole('heading', { name: 'Score breakdown', exact: true })).toBeVisible();
+    const commitment = summary.getByRole('listitem').filter({ hasText: commitmentLabel });
+    await expect(commitment.getByText('$19,800,000', { exact: true })).toBeVisible();
+    await expect(commitment.getByRole('button', { name: 'pilot-underwriting.xlsx · Funding and Operations B5', exact: true })).toBeVisible();
     const coverage = summary.getByRole('region', { name: 'Review coverage', exact: true });
     await expect(coverage.getByText('Sources read', { exact: true })).toBeVisible();
     await expect(coverage.getByRole('listitem').filter({ hasText: 'Construction budget' })).toContainText('Partial coverage');
@@ -547,6 +564,16 @@ test('new deal reviews PDF and workbook through Codex paste, Summary, Compare, a
     expect(deal.analysis.facts['project_details.unit_count'].evidence[0]).toMatchObject({
       document_name: 'pilot-underwriting.xlsx', sheet: 'Funding and Operations', cell: 'B2', excerpt: unitQuote,
     });
+    expect(deal.analysis.facts[commitmentPath]).toMatchObject({
+      value: commitmentAmount, state: 'checked',
+      identity: { ...commitmentContext, scenario: 'unspecified' }, evidence: [commitmentCitation],
+    });
+    expect(deal.analysis.facts['deal_structure.debt_amount']?.value ?? null).toBeNull();
+    expect(deal.analysis.financing.measures).toMatchObject([{
+      kind: 'lender_commitment', label: commitmentLabel, amount: commitmentAmount,
+      debt_phase: 'construction', currency: 'USD', state: 'checked', source_path: commitmentPath,
+      evidence: [commitmentCitation],
+    }]);
     expect(deal.analysis.facts[holdPath]).toMatchObject({value: 8.9, state: 'checked', identity: holdContext, evidence: [returnSource]});
     expect(deal.analysis.facts[salePath]).toMatchObject({value: 17.4, state: 'checked'});
     expect(deal.analysis.returns).toMatchObject({cash_on_cash: 8.9, cash_on_cash_path: holdPath, target_irr: null});
@@ -558,15 +585,27 @@ test('new deal reviews PDF and workbook through Codex paste, Summary, Compare, a
     expect(reportText).toMatch(/Unit Count\s+148/);
     expect(reportText).toContain('Cash-on-Cash');
     expect(reportText).toContain('Construction Costs');
+    expect(reportText).toMatch(/Construction lender commitment\s*·\s*\$19,800,000/);
+    expect(reportText.replace(/\s+/g, ' ')).toContain(commitmentReference);
     expect(reportText).toContain('8.90%');
     expect(reportText.replace(/\s+/g, ' ')).toContain(exportContext);
     expect(reportText).toContain('pilot-offering.pdf, p. 2');
     expect(reportText).toContain('Optional Sale Scenario');
     expect(reportText).toContain('17.40%');
+    expect(reportText).toMatch(/pilot-underwriting\.xlsx\s+\([^)]*2 sheets\)/);
     expect(reportText).toContain('PDF Cash-Flow Check');
     expect(reportText).toContain('20.00%');
     expect(reportText).not.toMatch(/2,040,000|2,160,000/);
 
+    await page.route(url => url.pathname === '/api/deals', async route => {
+      const response = await route.fetch();
+      expect(response.ok()).toBeTruthy();
+      const deals = await response.json();
+      await route.fulfill({
+        status: response.status(),
+        json: deals.map(deal => deal.id === id ? { ...deal, city: null } : deal),
+      });
+    });
     await page.goto('/compare?ids=' + id + ',1');
     const minRow = page.getByTestId('compare-row-min_investment');
     await expect(minRow.getByText('$125K', { exact: true })).toBeVisible();
@@ -574,11 +613,23 @@ test('new deal reviews PDF and workbook through Codex paste, Summary, Compare, a
     await expect(cashRow.getByText('8.9%', { exact: true })).toBeVisible();
     await expect(cashRow.getByText(contextText, { exact: true })).toBeVisible();
     await expect(cashRow.getByText('Different or unspecified context · values only')).toBeVisible();
+    await page.getByRole('button', { name: 'Change selection', exact: true }).click();
+    const picker = page.getByRole('dialog', { name: 'Pick deals to compare' });
+    const dealSearch = picker.getByPlaceholder('Search project, sponsor, city…');
+    await dealSearch.fill('no match for this synthetic search');
+    await expect(picker.getByText('No deals match.')).toBeVisible();
+    await dealSearch.fill(pilotName);
+    const pickerDeal = picker.getByRole('button', { name: new RegExp(pilotName) });
+    await expect(pickerDeal).toContainText('8.9% Cash-on-Cash');
+    await expect(pickerDeal).toContainText(contextText);
+    await expect(pickerDeal).not.toContainText('Target IRR');
+    await picker.getByRole('button', { name: 'Cancel', exact: true }).click();
     const compare = await page.request.post('/api/deals/compare', {data: {deal_ids: [id, 1]}});
     expect(compare.ok()).toBeTruthy();
     const compared = (await compare.json()).deals.find(deal => deal.id === id).analysis;
     expect(compared.readiness).toEqual(deal.analysis.readiness);
     expect(compared.return_crosscheck).toEqual(cashFlowCheck);
+    expect(compared.financing).toEqual(deal.analysis.financing);
     await expect(page.getByRole('region', {name: 'PDF cash-flow checks'})).toContainText('Annual-period IRR');
     expect(compared.facts['project_details.unit_count'].value).toBe(148);
     expect(compared.facts[holdPath]).toMatchObject({value: 8.9, identity: holdContext, evidence: [returnSource]});
@@ -591,20 +642,29 @@ test('new deal reviews PDF and workbook through Codex paste, Summary, Compare, a
       'from openpyxl import load_workbook',
       'import json, sys',
       'book = load_workbook(BytesIO(sys.stdin.buffer.read()), data_only=True)',
-      'print(json.dumps({"comparison": {row[0]: row[1] for row in book.active.values if row[0]}, "projections": list(book["Return Projections"].values)[1:] if "Return Projections" in book else [], "sales": list(book["Optional Sale Scenarios"].values)[1:], "checks": list(book["PDF Cash Flow Checks"].values)[1:]}))',
+      'print(json.dumps({',
+      '    "comparison": {row[0]: row[1] for row in book.active.values if row[0]},',
+      '    "projections": list(book["Return Projections"].values)[1:] if "Return Projections" in book else [],',
+      '    "sales": list(book["Optional Sale Scenarios"].values)[1:],',
+      '    "checks": list(book["PDF Cash Flow Checks"].values)[1:],',
+      '    "financing": list(book["Construction Financing"].values)[1:] if "Construction Financing" in book else [],',
+      '}))',
     ].join('\n')], {input, encoding: 'utf8'}));
     const rows = readWorkbook(await exported.body());
     expect(rows.comparison).toMatchObject({
       'Minimum Investment': 125000,
       'Unit Count': 148,
+      'Debt Amount': null,
       'Cash-on-Cash': 8.9,
       'Cash-on-Cash Context': exportContext,
       'Cash-on-Cash Evidence': 'pilot-offering.pdf, p. 2',
       'Target IRR': null,
       'Stabilized NOI': null,
     });
-    const pilotName = 'Juniper Station Apartments Synthetic Pilot';
     expect(rows.sales.find(row => row[0] === pilotName)).toEqual(expect.arrayContaining([17.4, 'percent', 'pilot-offering.pdf, p. 2']));
+    expect(rows.financing.filter(row => row[0] === pilotName)).toEqual([
+      [pilotName, commitmentLabel, commitmentAmount, 'USD', null, commitmentReference],
+    ]);
     expect(rows.checks).toHaveLength(3);
     expect(rows.checks[1]).toEqual(expect.arrayContaining([pilotName, 20, 1.4, 'Includes refinance proceeds', 'pilot-offering.pdf, p. 2']));
 

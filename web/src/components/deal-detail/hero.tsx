@@ -13,6 +13,7 @@ import { useCurrentUser } from "@/lib/auth-client";
 import { useCapabilities } from "@/lib/capabilities";
 import { api } from "@/lib/api";
 import { getHeadlineReturnMetrics } from "@/lib/return-metrics";
+import { sourceFindingsNeedReview } from "@/lib/review-attention";
 import { cn, fmtMoney, fmtMultiple, fmtPct } from "@/lib/utils";
 import type { DataQualityGate, DealDetail, DealQualitySummary } from "@/lib/types";
 
@@ -58,7 +59,14 @@ export function DealHero({ deal }: { deal: DealDetail }) {
   const visibleScore = deal.scores?.data_quality?.can_score === true ? deal.overall_score : null;
   const { headlineMultiple, primaryReturnLabel, primaryReturnValue } = getHeadlineReturnMetrics(deal);
   const gate = deal.scores?.data_quality;
-  const reviewSummary = deal.analysis ? `${deal.analysis.questions.length} material question groups. Accepted facts and evidence are shared across Summary, comparison and exports.` : dealReviewSummary(gate);
+  const questionCount = deal.analysis?.questions.length ?? 0;
+  const pendingSourceFindings = sourceFindingsNeedReview(deal.analysis?.findings);
+  const { questionStatus, reviewDestination, reviewLinkLabel } = questionCount > 0
+    ? { questionStatus: `${questionCount} material question${questionCount === 1 ? "" : "s"}`, reviewDestination: "questions", reviewLinkLabel: "Resolve next question" }
+    : pendingSourceFindings
+      ? { questionStatus: "Source findings need review", reviewDestination: "questions#source-findings", reviewLinkLabel: "Review source findings" }
+      : { questionStatus: "No material questions recorded", reviewDestination: "overview#reviewed-facts", reviewLinkLabel: "Inspect reviewed evidence" };
+  const reviewSummary = deal.analysis ? `${questionStatus}. Accepted facts and evidence are shared across Summary, comparison and exports.` : dealReviewSummary(gate);
   const viewerSummary = deal.analysis ? `${deal.analysis.coverage.accepted} of ${deal.analysis.coverage.total} recognized facts accepted. Source checks and analyst decisions are labeled separately.` : viewerScoreSummary(gate);
   const coverage = deal.analysis?.review_coverage;
   const coverageGaps = coverage?.attention_count ?? 0;
@@ -177,7 +185,12 @@ export function DealHero({ deal }: { deal: DealDetail }) {
             </div>
 
             <h1 className="text-2xl md:text-3xl font-semibold tracking-tight break-words">{deal.project_name}</h1>
-            {deal.analysis && <div className="mt-2 flex items-center flex-wrap gap-2 text-xs"><span className="text-muted-foreground">Revision {deal.analysis.version} · {deal.analysis.questions.length ? `${deal.analysis.questions.length} material questions` : "No material questions recorded"}</span><Link className="underline font-medium text-primary" href={`/deals/${deal.id}?tab=${deal.analysis.questions.length ? "questions" : "overview#reviewed-facts"}`}>{deal.analysis.questions.length ? "Resolve next question" : "Inspect reviewed evidence"}</Link></div>}
+            {deal.analysis && (
+              <div className="mt-2 flex items-center flex-wrap gap-2 text-xs">
+                <span className="text-muted-foreground">Revision {deal.analysis.version} · {questionStatus}</span>
+                <Link className="underline font-medium text-primary" href={`/deals/${deal.id}?tab=${reviewDestination}`}>{reviewLinkLabel}</Link>
+              </div>
+            )}
             {coverage && (coverageGaps > 0 || coverage.sources.status !== "read") && (
               <Link href={`/deals/${deal.id}?tab=overview#reviewed-facts`} className="mt-2 inline-block text-xs font-medium text-warning underline underline-offset-2">
                 {coverageGaps ? `${coverageGaps} review ${coverageGaps === 1 ? "area needs" : "areas need"} attention` : "Check source reading"}
@@ -214,7 +227,7 @@ export function DealHero({ deal }: { deal: DealDetail }) {
               <div>
                 <div className="hidden lg:block text-[10px] font-extrabold uppercase tracking-[0.14em] text-muted-foreground">Investment summary</div>
                 <div className="mt-2">
-                  {deal.analysis ? <span className="text-xs font-medium">{deal.analysis.questions.length ? `${deal.analysis.questions.length} question${deal.analysis.questions.length === 1 ? " remains" : "s remain"}` : "No material questions recorded"}</span> : <ViewerTrustBadge gate={gate} />}
+                  {deal.analysis ? <span className="text-xs font-medium">{questionStatus}</span> : <ViewerTrustBadge gate={gate} />}
                 </div>
                 <p className="hidden lg:block mt-3 text-xs leading-relaxed text-muted-foreground">{viewerSummary}</p>
                 {visibleScore == null && typeof deal.scores?.provisional_overall === "number" && <p className="mt-3 text-xs">

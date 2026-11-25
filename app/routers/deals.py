@@ -597,7 +597,11 @@ async def compare_deals(data: CompareRequest, db: AsyncSession = Depends(get_db)
     return {"deals": comparison}
 
 
-def _write_comparison_sheet(sheet, headers, rows, widths):
+# Exports store percentages in points, so the percent sign must be literal.
+_PERCENTAGE_POINT_FORMAT = '0.00"%"'
+
+
+def _write_comparison_sheet(sheet, headers, rows, widths, *, percent_column=None, unit_column=None):
     from openpyxl.styles import Alignment, Font, PatternFill
     from openpyxl.utils import get_column_letter
 
@@ -613,6 +617,9 @@ def _write_comparison_sheet(sheet, headers, rows, widths):
             if isinstance(value, str):
                 cell.data_type = "s"
                 cell.alignment = Alignment(vertical="top", wrap_text=True)
+            elif column == percent_column and isinstance(value, (int, float)):
+                if unit_column is None or values[unit_column - 1] == "percent":
+                    cell.number_format = _PERCENTAGE_POINT_FORMAT
     sheet.freeze_panes = "C2"
     sheet.auto_filter.ref = sheet.dimensions
 
@@ -752,6 +759,7 @@ async def export_comparison(data: CompareRequest, db: AsyncSession = Depends(get
     row = 2
     green_fill = PatternFill(start_color="ecfdf5", end_color="ecfdf5", fill_type="solid")
     red_fill = PatternFill(start_color="fef2f2", end_color="fef2f2", fill_type="solid")
+    percent_return_labels = {label for key, label in RETURN_LABELS if key in {"target_irr", "cash_on_cash"}}
 
     for section_name, metrics_list in sections:
         # Section header
@@ -772,6 +780,8 @@ async def export_comparison(data: CompareRequest, db: AsyncSession = Depends(get
                 else:
                     cell.alignment = Alignment(horizontal="center")
                 if isinstance(val, (int, float)):
+                    if section_name == "TARGET RETURNS" and metric_name in percent_return_labels:
+                        cell.number_format = _PERCENTAGE_POINT_FORMAT
                     values.append((col_idx, val))
 
             if section_name == "SCORES" and metric_name in score_rows and len(values) >= 2:
@@ -825,11 +835,11 @@ async def export_comparison(data: CompareRequest, db: AsyncSession = Depends(get
     if sale_returns:
         _write_comparison_sheet(wb.create_sheet("Optional Sale Scenarios"), (
             "Deal", "Metric", "Value", "Unit", "Context", "Source",
-        ), sale_returns, (28, 28, 17, 12, 72, 52))
+        ), sale_returns, (28, 28, 17, 12, 72, 52), percent_column=3, unit_column=4)
     if projections:
         _write_comparison_sheet(wb.create_sheet("Return Projections"), (
             "Deal", "Year", "Annual cash-on-cash (%)", "Context", "Year note", "Assumptions", "Source",
-        ), projections, (28, 9, 26, 56, 38, 56, 38))
+        ), projections, (28, 9, 26, 56, 38, 56, 38), percent_column=3)
     if debt_measures:
         _write_comparison_sheet(wb.create_sheet("Construction Financing"), (
             "Deal", "Metric", "Amount", "Currency", "Note", "Source",
@@ -838,7 +848,7 @@ async def export_comparison(data: CompareRequest, db: AsyncSession = Depends(get
         _write_comparison_sheet(wb.create_sheet("PDF Cash Flow Checks"), (
             "Deal", "Status", "Context", "Annual-period IRR (%)", "Cash-flow multiple", "Period", "Cash flow",
             "Flow context", "Source date", "Calculation", "Evidence",
-        ), cash_flow_checks, (28, 18, 56, 24, 19, 13, 18, 32, 22, 62, 40))
+        ), cash_flow_checks, (28, 18, 56, 24, 19, 13, 18, 32, 22, 62, 40), percent_column=4)
 
     # Save to bytes
     buffer = io.BytesIO()

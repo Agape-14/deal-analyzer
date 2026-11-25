@@ -6,6 +6,7 @@ import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { api } from "@/lib/api";
 import { useCurrentUser } from "@/lib/auth-client";
+import { sourceFindingsNeedReview } from "@/lib/review-attention";
 import type { AnalysisQuestion, DealDetail } from "@/lib/types";
 import { FactEvidence, factValue } from "./accepted-summary";
 import { ReadinessChecks } from "./review-coverage";
@@ -18,7 +19,7 @@ export function AnalysisQuestions({ deal }: { deal: DealDetail }) {
     <div><h2 className="text-xl font-semibold">Review exceptions</h2><p className="mt-2 text-sm text-muted-foreground">Check the cited sources and add missing evidence. Save analyst decisions after verifying the figures.</p></div>
     {deal.analysis && <ReadinessChecks analysis={deal.analysis} dealId={deal.id} exceptionsOnly />}
     <SourceFindings deal={deal} />
-    {questions.length === 0 && <Card className="p-6">
+    {questions.length === 0 && !sourceFindingsNeedReview(deal.analysis?.findings) && <Card className="p-6">
       <p className="font-medium">No field decisions remain</p>
       <p className="mt-1 text-sm text-muted-foreground">
         {readinessAttention > 0 ? "Check the evidence and context flagged above." : "Browse the reviewed facts and evidence in Summary."}

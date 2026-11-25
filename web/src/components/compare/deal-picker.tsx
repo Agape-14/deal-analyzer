@@ -6,7 +6,9 @@ import { Dialog, DialogContent, DialogTitle, DialogDescription } from "@/compone
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { cn, fmtPct, fmtMultiple } from "@/lib/utils";
+import { getHeadlineReturnMetrics } from "@/lib/return-metrics";
 import type { DealSummary } from "@/lib/types";
+import { returnContext } from "./comparison-context";
 
 /**
  * Deal picker sheet. Multi-select with a search box. "Apply" returns the
@@ -38,11 +40,10 @@ export function DealPicker({
   const filtered = React.useMemo(() => {
     const needle = q.trim().toLowerCase();
     if (!needle) return deals;
-    return deals.filter(
-      (d) =>
-        d.project_name.toLowerCase().includes(needle) ||
-        d.developer_name.toLowerCase().includes(needle) ||
-        d.city.toLowerCase().includes(needle),
+    return deals.filter((deal) =>
+      [deal.project_name, deal.developer_name, deal.city].some(
+        (value) => value?.toLowerCase().includes(needle),
+      ),
     );
   }, [deals, q]);
 
@@ -86,12 +87,29 @@ export function DealPicker({
             <ul className="divide-y divide-border/60">
               {filtered.map((d) => {
                 const isSelected = pick.has(d.id);
+                const { primaryReturnLabel, primaryReturnValue, headlineMultiple } = getHeadlineReturnMetrics(d);
+                const returns = d.analysis?.returns;
+                const returnMetrics = [
+                  {
+                    label: primaryReturnLabel,
+                    value: primaryReturnValue,
+                    format: fmtPct,
+                    path: primaryReturnLabel === "Target IRR" ? returns?.target_irr_path : returns?.cash_on_cash_path,
+                  },
+                  {
+                    label: "Equity multiple",
+                    value: headlineMultiple,
+                    format: fmtMultiple,
+                    path: returns?.target_equity_multiple_path,
+                  },
+                ];
                 return (
                   <li key={d.id}>
                     <button
+                      aria-pressed={isSelected}
                       onClick={() => toggle(d.id)}
                       className={cn(
-                        "w-full flex items-center gap-3 px-5 py-3 hover:bg-muted/40 transition-colors text-left",
+                        "w-full flex items-start gap-3 px-5 py-3 hover:bg-muted/40 transition-colors text-left",
                         isSelected && "bg-primary/5",
                       )}
                     >
@@ -116,15 +134,20 @@ export function DealPicker({
                             </>
                           )}
                         </div>
+                        {returnMetrics.map(({ label, value, format, path }) => value !== null && (
+                          <div key={label} className="mt-1.5 text-xs">
+                            <span className="font-semibold tabular-nums">{format(value)} {label}</span>
+                            <p className="mt-0.5 break-words text-[11px] text-muted-foreground">
+                              {returnContext(path ? d.analysis?.facts[path] : undefined)}
+                            </p>
+                          </div>
+                        ))}
+                        {primaryReturnValue === null && headlineMultiple === null && (
+                          <div className="mt-1.5 text-xs text-muted-foreground">Return unavailable</div>
+                        )}
                       </div>
-                      <div className="text-right shrink-0 text-xs tabular-nums">
-                        <div className="font-semibold">
-                          {d.overall_score != null ? d.overall_score.toFixed(1) : "—"}
-                          <span className="text-muted-foreground font-normal"> · score</span>
-                        </div>
-                        <div className="text-muted-foreground mt-0.5">
-                          {fmtPct(d.target_irr)} · {fmtMultiple(d.target_equity_multiple)}
-                        </div>
+                      <div className="shrink-0 text-right text-xs tabular-nums text-muted-foreground">
+                        {d.overall_score != null ? `Score ${d.overall_score.toFixed(1)}` : "Not scored"}
                       </div>
                     </button>
                   </li>

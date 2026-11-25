@@ -11,6 +11,7 @@ import { Label } from "@/components/ui/label";
 import { Button } from "@/components/ui/button";
 import { api } from "@/lib/api";
 import { useCurrentUser } from "@/lib/auth-client";
+import { uploadDealDocuments } from "@/lib/deal-intake";
 import type { Developer, DealSummary } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
@@ -38,6 +39,7 @@ export function NewDealDrawer() {
   const [uploadError, setUploadError] = React.useState("");
   const [savedDealId, setSavedDealId] = React.useState<number | null>(null);
   const tokenRef = React.useRef<string | null>(null);
+  const uploadingRef = React.useRef(false);
   function addFiles(incoming: File[]) {
     if (files.length + incoming.length > 10) { setUploadError("Choose up to 10 documents per deal upload."); return; }
     if (incoming.some(file => !/\.(pdf|xlsx|xlsm|xls|csv)$/i.test(file.name) || file.size === 0 || file.size > 50 * 1024 * 1024)) {
@@ -119,36 +121,35 @@ export function NewDealDrawer() {
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
+    if (submitting || uploadingRef.current) return;
     if (!isAnalyst) {
       toast.error("Viewer accounts are read-only");
       return;
     }
     if (mode === "upload") {
       if (!files.length) { toast.error("Choose at least one document"); return; }
+      uploadingRef.current = true;
       setSubmitting(true);
       setUploadError("");
       try {
         tokenRef.current ??= crypto.randomUUID();
-        const body = new FormData();
-        body.append("intake_token", tokenRef.current);
-        body.append("project_name", form.project_name.trim());
-        files.forEach(file => body.append("files", file));
-        const response = await fetch("/document-upload/intake", { method: "POST", body });
-        const result = await response.json();
-        if (!response.ok) throw new Error(typeof result.detail === "string" ? result.detail : "Upload could not be completed");
-        setSavedDealId(result.deal_id);
-        if (result.errors?.length) {
-          const failedNames = new Set(result.errors.map((error: { filename: string }) => error.filename));
-          setFiles(current => current.filter(file => failedNames.has(file.name)));
-          throw new Error(result.errors.map((error: { filename: string; detail: string }) => `${error.filename}: ${error.detail}`).join(" · "));
+        const result = await uploadDealDocuments(files, tokenRef.current, form.project_name.trim(), savedDealId);
+        if (result.error || result.dealId === null) {
+          setSavedDealId(result.dealId);
+          setFiles(result.remainingFiles);
+          setUploadError(result.error ?? "Upload could not be confirmed. Retry the selected documents.");
+          return;
         }
         clearDraft();
         toast.success("Documents saved", { description: "Your deal is ready for document review." });
-        router.push(`/deals/${result.deal_id}?tab=documents`);
+        router.push(`/deals/${result.dealId}?tab=documents`);
         router.refresh();
-      } catch (err) {
-        setUploadError((err as Error).message || "Upload failed. Your selected files are ready to retry.");
-      } finally { setSubmitting(false); }
+      } catch {
+        setUploadError("Upload was interrupted. Retry the selected documents.");
+      } finally {
+        uploadingRef.current = false;
+        setSubmitting(false);
+      }
       return;
     }
     if (!form.project_name.trim()) {

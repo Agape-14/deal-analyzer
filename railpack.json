@@ -1,0 +1,29 @@
+{
+  "$schema": "https://schema.railpack.com",
+  "steps": {
+    "install": {
+      "commands": [
+        {
+          "src": ".",
+          "dest": "."
+        },
+        {
+          "cmd": "python -m venv /app/.venv",
+          "customName": "Create an isolated Python environment"
+        },
+        {
+          "cmd": "/app/.venv/bin/python -m pip install -r requirements.txt",
+          "customName": "Install Python dependencies from the locked requirements"
+        },
+        {
+          "cmd": "env -i PATH=/app/.venv/bin:/usr/local/bin:/usr/bin:/bin PYTHONDONTWRITEBYTECODE=1 AUTH_DISABLED=1 DEAL_REVIEW_AUTO_AFTER_UPLOAD=0 DB_DIR=/tmp/deal-analyzer-build-tests /app/.venv/bin/python -m pytest -o addopts= -q -ra",
+          "customName": "Run backend regression tests with a temporary database"
+        }
+      ]
+    }
+  },
+  "deploy": {
+    "aptPackages": ["...", "tesseract-ocr", "poppler-utils"],
+    "startCommand": "/app/.venv/bin/alembic upgrade head && exec /app/.venv/bin/python start.py"
+  }
+}

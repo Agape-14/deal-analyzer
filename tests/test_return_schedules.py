@@ -163,6 +163,7 @@ async def test_workbook_schedule_checks_the_value_cell_instead_of_neighboring_da
     sheet = openpyxl.load_workbook(io.BytesIO(comparison.content))["Return Projections"]
     rows = list(sheet.values)[1:]
     assert [(row[1], row[2]) for row in rows] == [(1, 12.5), (2, 15.8)]
+    assert sheet["C2"].number_format == sheet["C3"].number_format == '0.00"%"'
     assert rows[0][-1].endswith(" B2")
     assert rows[1][-1].endswith(" B3")
     report = await client.get(f"/api/reports/deal/{deal_id}/pdf")

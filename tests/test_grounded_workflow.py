@@ -83,16 +83,23 @@ async def test_intake_explicit_name_and_partial_failure_recover_on_same_deal(cli
     from app.routers import deal_uploads
     from fastapi import HTTPException
     original = deal_uploads.upload_document
+    saved = ("files", ("Terms.csv", b"Metric,Value\nA,1\n", "text/csv"))
+    failed = ("files", ("Terms.csv", b"Metric,Value\nB,25\n", "text/csv"))
+
     async def fail_once(deal_id, tasks, file, doc_type, db):
-        if file.filename == "Retry.csv":
+        if file.size == len(failed[1][1]):
             raise HTTPException(500, "Synthetic save failure")
         return await original(deal_id, tasks, file, doc_type, db)
+
     monkeypatch.setattr(deal_uploads, "upload_document", fail_once)
     token = str(uuid.uuid4())
-    response = await client.post("/api/deals/intake", data={"intake_token": token, "project_name": "Chosen name"}, files=[("files", ("Saved.csv", b"Metric,Value\nA,1\n", "text/csv")), ("files", ("Retry.csv", b"Metric,Value\nB,2\n", "text/csv"))])
-    assert len(response.json()["documents"]) == 1 and len(response.json()["errors"]) == 1
+    response = await client.post(
+        "/api/deals/intake", data={"intake_token": token, "project_name": "Chosen name"}, files=[saved, failed],
+    )
+    assert len(response.json()["documents"]) == 1
+    assert response.json()["errors"] == [{"file_index": 1, "filename": "Terms.csv", "detail": "Synthetic save failure"}]
     monkeypatch.setattr(deal_uploads, "upload_document", original)
-    retry = await client.post("/api/deals/intake", data={"intake_token": token}, files=[("files", ("Retry.csv", b"Metric,Value\nB,2\n", "text/csv"))])
+    retry = await client.post("/api/deals/intake", data={"intake_token": token}, files=[failed])
     assert retry.json()["deal_id"] == response.json()["deal_id"] and not retry.json()["errors"]
     assert (await client.get(f"/api/deals/{retry.json()['deal_id']}")).json()["project_name"] == "Chosen name"
 
