@@ -5,9 +5,9 @@ This repo is structured for a **two-service deploy** on Railway:
 1. **`api`** — FastAPI, built from the repo root.
 2. **`web`** — Next.js, built from the `web/` subdirectory.
 
-Both services auto-deploy from the same branch. The Next.js service proxies
-API calls server-side via Railway's private network, so only the web service
-needs a public domain.
+Both services build with Railpack. Next.js proxies API calls over Railway's
+private network. The Cloudflare Tunnel connects to the private web service,
+and Cloudflare Access protects the application hostname.
 
 ## One-time setup
 
@@ -15,8 +15,13 @@ needs a public domain.
 2. Add the **API service**:
    - New Service → Deploy from GitHub repo → pick this repo.
    - Root directory: **(leave blank — repo root)**.
-   - Railway auto-detects `railway.json` at the root, which references
-     `nixpacks.toml` for Python 3.11 + Tesseract + Poppler.
+   - Select the Railpack builder and clear any legacy Config File path.
+     The root `railpack.json` installs the locked Python 3.12 dependencies,
+     runs regression tests against a build-only database, and includes
+     Tesseract and Poppler in the runtime image.
+   - Set the health check to `/api/healthz/ready` with a 60-second timeout.
+     The start command in `railpack.json` applies Alembic migrations before
+     launching `start.py`. Set `PORT=8000` to match the private web target.
    - Variables to set:
      - `PAID_REVIEW_ENABLED=0` — keep the legacy Anthropic review paused.
      - `DEAL_REVIEW_PROVIDER=codex` — start with **Review with Codex** in Documents. Select **GPT-6 Astra** with **Extra High** reasoning in Codex when available. The user imports the cited result and approves the proposed values.
@@ -50,8 +55,10 @@ needs a public domain.
 3. Add the **Web service**:
    - New Service → Deploy from GitHub repo → same repo.
    - Root directory: **`web`** (this is the critical bit).
-   - Railway will use `web/railway.json` which runs `npm ci && npm run build`
-     then `npm start`.
+   - Select the Railpack builder and clear any legacy Config File path.
+     `web/railpack.json` selects Node 22 and starts the built Next.js app
+     on a dual-stack listener. Set `PORT=3000` to match the tunnel target.
+   - Set the health check to `/login` with a 60-second timeout.
    - Variables to set:
      - `FASTAPI_URL=http://${{api.RAILWAY_PRIVATE_DOMAIN}}:8000`
        (This uses Railway's reference-variable syntax — replace `api` with
@@ -60,11 +67,9 @@ needs a public domain.
 
 ## Domain
 
-- Add the custom domain (e.g. `deals.conpulseai.com` or `app.conpulseai.com`)
-  to the **web service only**.
-- Railway provisions SSL automatically once your CNAME resolves.
-- For the apex `conpulseai.com`, use Railway's ALIAS/ANAME support or a
-  redirect from a root provider (Cloudflare Origin Rules, Vercel, etc.).
+- Route the application hostname through Cloudflare Access and the
+  Cloudflare Tunnel to the web service's Railway private address on port
+  3000. Keep API and web free of public Railway domains and TCP proxies.
 
 ## Production DB recommendation
 
